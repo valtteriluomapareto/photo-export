@@ -103,8 +103,6 @@ struct AutoSyncDestinationStopIntegrationTests {
         dirtyStateStore: builder.dirtyStore,
         retryStateStore: builder.retryStore,
         runSummaryStore: builder.runSummaryStore,
-        perDestinationTokenStore: builder.perDestinationTokenStore,
-        currentRunStore: builder.currentRunStore,
         clock: builder.clock,
         photosAuthorization: builder.photosAuthorization,
         userDefaults: builder.userDefaults

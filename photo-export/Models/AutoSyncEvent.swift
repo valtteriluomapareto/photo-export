@@ -75,10 +75,8 @@ enum AutoSyncEvent: Sendable {
   /// Persisted dirty state for `destinationId` was loaded from disk. Dispatched
   /// by the manager on destination-change so accumulated targeted-asset work
   /// survives app restart. Carries no effects — the reducer just merges into
-  /// `dirtyStateByDestination`. Other per-destination persisted state
-  /// (`lastRunSummary`, `lastDurablyRecordedToken`) does not flow through this
-  /// event because the reducer doesn't read it; the manager loads and surfaces
-  /// it directly.
+  /// `dirtyStateByDestination`. The persisted `lastRunSummary` does not flow through this event because
+  /// the reducer does not read it; the manager loads and surfaces it directly.
   case destinationDirtyStateLoaded(destinationId: String, dirtyState: AutoSyncDirtyState)
 
   /// User clicked `Export Now`. Routed through the existing

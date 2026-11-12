@@ -9,7 +9,7 @@ struct AppComposition {
   /// Preferences for every manager and store, and each scene's default `@AppStorage` suite.
   var defaults: UserDefaults
   /// `<Application Support>/<bundle id>/` in the shipping app. The record stores, AutoSync's
-  /// stores, the current-run journal, destination-safety confirmations and the photo-change
+  /// stores, destination-safety confirmations and the photo-change
   /// token all live under it.
   var appStateRoot: URL
   /// Replaces PhotoKit behind `PhotoLibraryManager` when set; `nil` uses PhotoKit.
@@ -122,7 +122,7 @@ struct AppComposition {
     appStateRoot.appendingPathComponent("AutoSync", isDirectory: true)
   }
 
-  /// Parent of the per-destination AutoSync stores, the current-run journal and the
+  /// Parent of the per-destination AutoSync stores and the
   /// destination-safety confirmations.
   var autoSyncDestinationsRoot: URL {
     autoSyncRoot.appendingPathComponent("destinations", isDirectory: true)

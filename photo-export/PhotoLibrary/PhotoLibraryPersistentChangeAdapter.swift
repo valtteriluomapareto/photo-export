@@ -16,9 +16,8 @@ import os
 /// **Token persistence.** The adapter owns the *global* persistent-change
 /// cursor: the most recent token it has consumed. Persisted via
 /// `GlobalPhotoChangeTokenStore` (file-backed). On launch the persisted token
-/// becomes the `since:` argument for catch-up. The per-destination
-/// `lastDurablyRecordedToken` is a separate concept tracked by the reducer's
-/// `advancePersistentChangeToken` effect after dirty IDs are durably written.
+/// becomes the `since:` argument for catch-up. Startup also schedules a full
+/// reconciliation so unsaved work is recovered independently of the cursor.
 ///
 /// **Error mapping.** The three fetch failure modes (token-expired,
 /// token-invalid, details-unavailable) are surfaced individually so recovery
@@ -548,16 +547,12 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
         failureCount: detailsFailures, rebaseToken: library.currentChangeToken)
     }
 
-    let nextTokenData = try? NSKeyedArchiver.archivedData(
-      withRootObject: newestToken, requiringSecureCoding: true)
-
     let event = PhotoLibraryPersistentChangeEvent(
       insertedLocalIdentifiers: inserted,
       updatedLocalIdentifiers: updated,
       deletedLocalIdentifiers: deleted,
       collectionChangesPresent: collectionChangesPresent,
-      observedAt: Date(),
-      nextToken: nextTokenData)
+      observedAt: Date())
 
     return .success(event: event, newestToken: newestToken)
   }

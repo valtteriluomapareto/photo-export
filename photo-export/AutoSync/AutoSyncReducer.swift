@@ -373,13 +373,6 @@ enum AutoSyncReducer {
           triggerReason = .photosChanged
         }
 
-        // Emit advisory destination acknowledgement even for a no-work event.
-        // The manager gates it on successful dirty persistence across events.
-        // PhotoKit fetching uses the adapter's independent global cursor.
-        if let nextToken = event.nextToken {
-          effects.append(
-            .advancePersistentChangeToken(nextToken, destinationId: destinationId))
-        }
       }
 
     case .photosChangeFetchFailed(let failure):

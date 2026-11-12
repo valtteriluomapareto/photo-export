@@ -14,12 +14,6 @@ struct AutoSyncEnvironment {
   let dirtyStateStore: any AutoSyncDirtyStateStore
   let retryStateStore: any AutoSyncRetryStateStore
   let runSummaryStore: any AutoSyncRunSummaryStore
-  let perDestinationTokenStore: any AutoSyncPerDestinationTokenStore
-  /// Crash-survivable journal for the in-flight AutoSync fan-out. Written
-  /// at fan-out boundaries by `AutoSyncManager.startRun`; cleared on clean
-  /// finish. Surfaced in the user's diagnostic report so a previous
-  /// session's silent shutdown is observable from the saved `.txt`.
-  let currentRunStore: any AutoSyncCurrentRunStore
   let clock: any AutoSyncClock
   /// Photos access. Required, with no default: a missing provider would read as always
   /// authorized and let runs scan a library they cannot see.

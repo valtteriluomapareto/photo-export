@@ -7,7 +7,6 @@ import Testing
 /// Coverage for the file-backed stores that landed alongside Phase 2/0b
 /// but didn't get a round-trip test suite at the time:
 /// `FileBackedAutoSyncRunSummaryStore`,
-/// `FileBackedAutoSyncPerDestinationTokenStore`,
 /// `FileBackedDestinationSafetyConfirmationStore`, and
 /// `GlobalPhotoChangeTokenStore`. Mirrors the matrix the dirty / retry
 /// stores already have: empty-load, round-trip, delete, two-destinations-
@@ -95,67 +94,6 @@ struct FileBackedAutoSyncRunSummaryStoreTests {
 
     #expect(store.load(destinationId: "dest-A")?.context.scope == .timelineFullLibrary)
     #expect(store.load(destinationId: "dest-B")?.context.scope == .favoritesFull)
-  }
-}
-
-@MainActor
-struct FileBackedAutoSyncPerDestinationTokenStoreTests {
-  private func makeRoot() throws -> URL {
-    let url = TestScratch.directory("PerDestToken")
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
-  }
-
-  @Test func loadReturnsNilWhenNoFileExists() throws {
-    let root = try makeRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = FileBackedAutoSyncPerDestinationTokenStore(baseDirectoryURL: root)
-
-    #expect(store.load(destinationId: "dest-A") == nil)
-  }
-
-  @Test func saveAndLoadRoundTripPreservesData() throws {
-    let root = try makeRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = FileBackedAutoSyncPerDestinationTokenStore(baseDirectoryURL: root)
-    let token = Data([0xDE, 0xAD, 0xBE, 0xEF, 0x42])
-
-    try store.save(token, destinationId: "dest-A")
-    #expect(store.load(destinationId: "dest-A") == token)
-  }
-
-  @Test func deleteRemovesTheStoredToken() throws {
-    let root = try makeRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = FileBackedAutoSyncPerDestinationTokenStore(baseDirectoryURL: root)
-    try store.save(Data([0x01]), destinationId: "dest-A")
-
-    try store.deleteToken(destinationId: "dest-A")
-
-    #expect(store.load(destinationId: "dest-A") == nil)
-  }
-
-  @Test func twoDestinationsAreIsolated() throws {
-    let root = try makeRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = FileBackedAutoSyncPerDestinationTokenStore(baseDirectoryURL: root)
-
-    try store.save(Data([0xAA]), destinationId: "dest-A")
-    try store.save(Data([0xBB]), destinationId: "dest-B")
-
-    #expect(store.load(destinationId: "dest-A") == Data([0xAA]))
-    #expect(store.load(destinationId: "dest-B") == Data([0xBB]))
-  }
-
-  @Test func saveCreatesIntermediateDirectories() throws {
-    let root = try makeRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-    // Use a non-existent destinationsRoot child to verify creation.
-    let store = FileBackedAutoSyncPerDestinationTokenStore(
-      baseDirectoryURL: root.appendingPathComponent("nested/deep/path"))
-
-    try store.save(Data([0xFF]), destinationId: "dest-X")
-    #expect(store.load(destinationId: "dest-X") == Data([0xFF]))
   }
 }
 

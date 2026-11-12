@@ -167,19 +167,14 @@ struct DestinationSafetyMonitorTests {
     #expect(harness.confirmationStore.isConfirmed(destinationId: fp.id))
   }
 
-  @Test func staleScanDoesNotOverwriteNewerEvaluation() async {
-    // Simulate a slow scan whose result lands after the destination has
-    // changed. The generation guard inside `evaluate` should discard the
-    // stale result.
+  @Test(.timeLimit(.minutes(1)))
+  func staleScanDoesNotOverwriteNewerEvaluation() async throws {
     let storeRoot = TestScratch.directory("SafetyMonitor-stale")
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
     let identitySubject = CurrentValueSubject<DestinationIdentity, Never>(.unavailable)
-    defer { try? FileManager.default.removeItem(at: storeRoot) }
-
-    // Track which fingerprint evaluation each scan call corresponds to.
-    // First call: long-suspended; second call: immediate.
+    let oldScan = AsyncCheckpoint()
     let scanCallsRef = ScanCallsRef()
     let monitor = DestinationSafetyMonitor(
       identityPublisher: identitySubject.eraseToAnyPublisher(),
@@ -188,29 +183,35 @@ struct DestinationSafetyMonitorTests {
       confirmationStore: confirmationStore,
       scanDirectory: { @MainActor in
         scanCallsRef.callCount += 1
-        let myCall = scanCallsRef.callCount
-        if myCall == 1 {
-          // Suspend long enough for the second scan to land first.
-          await Task.yield()
-          await Task.yield()
-          await Task.yield()
-          return true  // would flag, but stale
-        } else {
-          return false  // wins
+        if scanCallsRef.callCount == 1 {
+          await oldScan.enter()
+          return true
         }
-      }
-    )
-
-    monitor.attach()
-    let fp1 = fingerprint(id: "old")
-    let fp2 = fingerprint(id: "new")
-    identitySubject.send(DestinationIdentity(stableId: fp1.id, fingerprint: fp1))
-    identitySubject.send(DestinationIdentity(stableId: fp2.id, fingerprint: fp2))
-    // Settle everything.
-    for _ in 0..<10 { await Task.yield() }
-
-    // Final state reflects fp2 (empty dir → no flag), not fp1.
-    #expect(monitor.verdict == .init(stableId: fp2.id, needsConfirmation: false))
+        return false
+      })
+    try await withCleanup {
+      monitor.attach()
+      let old = fingerprint(id: "old")
+      let new = fingerprint(id: "new")
+      identitySubject.send(DestinationIdentity(stableId: old.id, fingerprint: old))
+      try #require(await oldScan.waitForEnter(count: 1))
+      let baseline = monitor.completedEvaluationCount
+      identitySubject.send(DestinationIdentity(stableId: new.id, fingerprint: new))
+      try #require(
+        await eventually("the newer scan finishes") {
+          monitor.completedEvaluationCount == baseline + 1
+            && monitor.verdict == .init(stableId: new.id, needsConfirmation: false)
+        })
+      await oldScan.releaseAll()
+      try #require(
+        await eventually("the stale scan actually finishes") {
+          monitor.completedEvaluationCount == baseline + 2
+        })
+      #expect(monitor.verdict == .init(stableId: new.id, needsConfirmation: false))
+    } cleanup: {
+      await oldScan.releaseAll()
+      try? FileManager.default.removeItem(at: storeRoot)
+    }
   }
 
   // MARK: - Stable-id keying (#127)

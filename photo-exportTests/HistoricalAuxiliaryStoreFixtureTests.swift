@@ -223,10 +223,12 @@ struct HistoricalAuxiliaryStoreFixtureTests {
       #expect(other.cancelReason == .userCancelled && other.result == .cancelled)
       #expect(other.failures.isEmpty && other.stoppedBy == nil)
 
-      let tokens = FileBackedAutoSyncPerDestinationTokenStore(
-        baseDirectoryURL: fixture.destinations)
-      #expect(tokens.load(destinationId: "A") == Data([0, 1, 127, 128, 254, 255]))
-      #expect(tokens.load(destinationId: "B") == Data("synthetic-token-B".utf8))
+      let tokenA = try Data(
+        contentsOf: fixture.destinations.appendingPathComponent("A/lastDurablyRecordedToken.data"))
+      let tokenB = try Data(
+        contentsOf: fixture.destinations.appendingPathComponent("B/lastDurablyRecordedToken.data"))
+      #expect(tokenA == Data([0, 1, 127, 128, 254, 255]))
+      #expect(tokenB == Data("synthetic-token-B".utf8))
       let safety = FileBackedDestinationSafetyConfirmationStore(
         baseDirectoryURL: fixture.destinations)
       #expect(safety.isConfirmed(destinationId: "A"))
@@ -239,17 +241,28 @@ struct HistoricalAuxiliaryStoreFixtureTests {
     let fixture = try Fixture(tag: tag)
     defer { fixture.cleanup() }
     for _ in 0..<2 {
-      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: fixture.destinations)
+      let a = try #require(
+        JSONSerialization.jsonObject(
+          with: Data(
+            contentsOf:
+              fixture.destinations.appendingPathComponent("A/currentRun.json"))) as? [String: Any])
       #expect(
-        store.load(destinationId: "A")
-          == AutoSyncRunJournal(
-            startedAt: date, trigger: "photosChanged", scopes: ["timeline", "favorites", "albums"],
-            currentScope: "favorites", currentScopeStartedAt: date.addingTimeInterval(30)))
-      #expect(
-        store.load(destinationId: "B")
-          == AutoSyncRunJournal(
-            startedAt: date.addingTimeInterval(100), trigger: "appLaunch", scopes: ["albums"],
-            currentScope: nil, currentScopeStartedAt: nil))
+        Set(a.keys) == ["startedAt", "trigger", "scopes", "currentScope", "currentScopeStartedAt"])
+      #expect(a["startedAt"] as? Double == 700_000_000)
+      #expect(a["trigger"] as? String == "photosChanged")
+      #expect(a["scopes"] as? [String] == ["timeline", "favorites", "albums"])
+      #expect(a["currentScope"] as? String == "favorites")
+      #expect(a["currentScopeStartedAt"] as? Double == 700_000_030)
+      let b = try #require(
+        JSONSerialization.jsonObject(
+          with: Data(
+            contentsOf:
+              fixture.destinations.appendingPathComponent("B/currentRun.json"))) as? [String: Any])
+      #expect(Set(b.keys) == ["startedAt", "trigger", "scopes"])
+      #expect(b["startedAt"] as? Double == 700_000_100)
+      #expect(b["trigger"] as? String == "appLaunch")
+      #expect(b["scopes"] as? [String] == ["albums"])
+      #expect(b["currentScope"] == nil && b["currentScopeStartedAt"] == nil)
     }
   }
 

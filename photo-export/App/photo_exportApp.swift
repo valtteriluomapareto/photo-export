@@ -21,11 +21,15 @@ struct PhotoExportApp: App {
   @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
-  /// Set when the real app is composed; the test host never composes it.
-  @MainActor private(set) static var wasComposed = false
+  #if DEBUG
+    /// Set when the real app is composed; the test host never composes it.
+    @MainActor private(set) static var wasComposed = false
+  #endif
 
   init() {
-    Self.wasComposed = true
+    #if DEBUG
+      Self.wasComposed = true
+    #endif
     AppDiagnostics.beginLaunch()
     // `--screenshot-mode` swaps the real Photos backing for a curated synthetic library so
     // marketing screenshots don't leak the maintainer's personal Photos library. See
@@ -88,8 +92,7 @@ struct PhotoExportApp: App {
           timelineStore: core.exportRecordStore,
           collectionStore: core.collectionExportRecordStore,
           destinationManager: exportDestinationManager,
-          photoChangeAdapter: autoSyncPhotoChangeAdapter,
-          currentRunStore: core.autoSyncEnvironment.currentRunStore)
+          photoChangeAdapter: autoSyncPhotoChangeAdapter)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -196,7 +199,6 @@ private struct SaveDiagnosticReportCommand: View {
   let collectionStore: CollectionExportRecordStore
   let destinationManager: ExportDestinationManager
   let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
-  let currentRunStore: any AutoSyncCurrentRunStore
 
   var body: some View {
     Button("Save Diagnostic Report\u{2026}") {
@@ -204,8 +206,7 @@ private struct SaveDiagnosticReportCommand: View {
         timelineStore: timelineStore,
         collectionStore: collectionStore,
         destinationManager: destinationManager,
-        photoChangeAdapter: photoChangeAdapter,
-        currentRunStore: currentRunStore)
+        photoChangeAdapter: photoChangeAdapter)
     }
   }
 
@@ -217,26 +218,18 @@ private struct SaveDiagnosticReportCommand: View {
     timelineStore: ExportRecordStore,
     collectionStore: CollectionExportRecordStore,
     destinationManager: ExportDestinationManager,
-    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter,
-    currentRunStore: any AutoSyncCurrentRunStore
+    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   ) {
     let info = Bundle.main.infoDictionary
     let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
     let buildNumber = (info?["CFBundleVersion"] as? String) ?? "?"
-    // Load the current-run journal at panel-open time for the active
-    // destination. Absent destination → no journal (no per-destination
-    // store to consult); absent file → no journal section in the report.
-    let previousRunJournal = destinationManager.destinationId.flatMap {
-      currentRunStore.load(destinationId: $0)
-    }
     let reporter = DiagnosticReporter(
       timelineStore: timelineStore,
       collectionStore: collectionStore,
       destinationId: destinationManager.destinationId,
       appVersion: appVersion,
       buildNumber: buildNumber,
-      lastCatchUpSummary: photoChangeAdapter.lastCatchUpSummary,
-      previousRunJournal: previousRunJournal
+      lastCatchUpSummary: photoChangeAdapter.lastCatchUpSummary
     )
     let report = reporter.makeReport()
     let panel = NSSavePanel()

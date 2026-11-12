@@ -3,7 +3,7 @@
 # Structural guard for the destination-identity contract
 # (docs/reference/architecture-conventions.md §Destination identity).
 #
-# Per-destination state (record stores, AutoSync state, current-run journal, safety
+# Per-destination state (record stores, AutoSync state, safety
 # confirmation) MUST be keyed on the **stable logical id** (`identity.stableId` /
 # `snapshot.id` / `snapshot.stableId`), never on `fingerprint?.id`. The fingerprint id is
 # advisory (identity-confidence) and drifts when a network share remounts under a new path —

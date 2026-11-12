@@ -5,7 +5,7 @@ import Foundation
 /// Carries two fields that used to be two separate `@Published` properties:
 ///
 /// - `stableId` — the **stable logical destination id**. This is the keying id for every
-///   per-destination store (record stores, AutoSync state, current-run journal, safety
+///   per-destination store (record stores, AutoSync state, safety
 ///   confirmation). It is persisted beside the security-scoped bookmark and reused verbatim
 ///   for as long as that bookmark resolves to the same folder, so it does **not** drift when a
 ///   network share remounts under a different path. `nil` means "no destination selected, or

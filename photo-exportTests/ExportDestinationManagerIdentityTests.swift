@@ -49,13 +49,13 @@ struct ExportDestinationManagerIdentityTests {
   // MARK: - Stable derivation
 
   /// Re-deriving against the same folder yields the same id (no per-call randomness).
-  @Test func computeDestinationIdIsDeterministic() throws {
+  @Test func destinationFingerprintIdIsDeterministic() throws {
     let dir = TestScratch.directory("DestId-Stable")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let id1 = ExportDestinationManager.computeDestinationId(for: dir)
-    let id2 = ExportDestinationManager.computeDestinationId(for: dir)
+    let id1 = DestinationFingerprint.compute(for: dir)?.fingerprint.id
+    let id2 = DestinationFingerprint.compute(for: dir)?.fingerprint.id
     #expect(id1 != nil)
     #expect(id1 == id2)
   }
@@ -72,8 +72,8 @@ struct ExportDestinationManagerIdentityTests {
     try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
 
-    let idA = ExportDestinationManager.computeDestinationId(for: a)
-    let idB = ExportDestinationManager.computeDestinationId(for: b)
+    let idA = DestinationFingerprint.compute(for: a)?.fingerprint.id
+    let idB = DestinationFingerprint.compute(for: b)?.fingerprint.id
     #expect(idA != nil)
     #expect(idB != nil)
     #expect(idA != idB)
@@ -92,8 +92,8 @@ struct ExportDestinationManagerIdentityTests {
     let symlink = symlinkParent.appendingPathComponent("link")
     try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
 
-    let idDirect = ExportDestinationManager.computeDestinationId(for: target)
-    let idViaSymlink = ExportDestinationManager.computeDestinationId(for: symlink)
+    let idDirect = DestinationFingerprint.compute(for: target)?.fingerprint.id
+    let idViaSymlink = DestinationFingerprint.compute(for: symlink)?.fingerprint.id
     #expect(idDirect != nil)
     #expect(idDirect == idViaSymlink)
   }
@@ -242,7 +242,7 @@ struct ExportDestinationManagerIdentityTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let id = ExportDestinationManager.computeDestinationId(for: dir)
+    let id = DestinationFingerprint.compute(for: dir)?.fingerprint.id
     #expect(id != nil)
     #expect(id?.count == 64)
   }

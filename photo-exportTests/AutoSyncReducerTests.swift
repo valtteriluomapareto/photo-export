@@ -608,8 +608,7 @@ struct AutoSyncReducerTests {
 
     let fireAt = now.addingTimeInterval(30)
     #expect(next.current == .scheduled(reason: .photosChanged, fireAt: fireAt))
-    // persistDirtyState + scheduleDebounce expected. (No nextToken in event so no
-    // advancePersistentChangeToken effect.)
+    // persistDirtyState + scheduleDebounce expected.
     #expect(effects.contains(.scheduleDebounce(.photosChanged, fireAt: fireAt)))
     #expect(
       effects.contains(where: {
@@ -783,18 +782,6 @@ struct AutoSyncReducerTests {
     let nextDirty = next.dirtyStateByDestination[destId]
     #expect(nextDirty?.scope(.sharedAlbums).pendingFullReconciliation == false)
     #expect(nextDirty?.scope(.albums).pendingFullReconciliation == true)
-  }
-
-  @Test func photosChangedAdvancesTokenWhenEventCarriesOne() {
-    let state = enabledStateWithSafeDestinationAndScope()
-    let token = Data([0x01, 0x02, 0x03])
-    let event = PhotoLibraryPersistentChangeEvent(
-      insertedLocalIdentifiers: ["a"], observedAt: now, nextToken: token)
-
-    let (_, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
-
-    let destId = state.destination.id!
-    #expect(effects.contains(.advancePersistentChangeToken(token, destinationId: destId)))
   }
 
   // MARK: - Regression: review-round bug fixes
@@ -1089,20 +1076,6 @@ struct AutoSyncReducerTests {
       }))
   }
 
-  /// Token must still advance even when the event produces no export work — the
-  /// cursor needs to move so we don't refetch the same range.
-  @Test func tokenAdvancesEvenForNoOpEvents() {
-    let state = enabledStateWithSafeDestinationAndScope()
-    let token = Data([0xAA, 0xBB])
-    let event = PhotoLibraryPersistentChangeEvent(
-      deletedLocalIdentifiers: ["d"], observedAt: now, nextToken: token)
-
-    let (_, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
-
-    let destId = state.destination.id!
-    #expect(effects.contains(.advancePersistentChangeToken(token, destinationId: destId)))
-  }
-
   // MARK: - photosChangeFetchFailed → fallback
 
   @Test func tokenExpiredSchedulesFallbackReconciliation() {
@@ -1146,38 +1119,6 @@ struct AutoSyncReducerTests {
 
     #expect(next.current == .disabled)
     #expect(effects.isEmpty)
-  }
-
-  // MARK: - Effect ordering contract (plan: persist before token advance)
-
-  /// Plan §"Photo Library Changes": "Advance the token only after a dirty event has
-  /// been durably recorded." The reducer returns persistDirtyState BEFORE
-  /// advancePersistentChangeToken. Manager-level fault-injection tests additionally
-  /// pin successful persistence before advisory destination acknowledgement.
-  @Test func photosChangedEmitsPersistBeforeTokenAdvance() {
-    let state = enabledStateWithSafeDestinationAndScope()
-    let token = Data([0x01])
-    let event = PhotoLibraryPersistentChangeEvent(
-      insertedLocalIdentifiers: ["a"], observedAt: now, nextToken: token)
-
-    let (_, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
-
-    let destId = state.destination.id!
-    // Find the indices to assert order without depending on the schedule effect's position.
-    let persistIdx = effects.firstIndex(where: { effect in
-      if case .persistDirtyState(_, let did) = effect, did == destId { return true }
-      return false
-    })
-    let tokenIdx = effects.firstIndex(where: { effect in
-      if case .advancePersistentChangeToken(_, let did) = effect, did == destId { return true }
-      return false
-    })
-    #expect(persistIdx != nil)
-    #expect(tokenIdx != nil)
-    if let persistIdx, let tokenIdx {
-      #expect(
-        persistIdx < tokenIdx, "persistDirtyState must come before advancePersistentChangeToken")
-    }
   }
 
   // MARK: - Idempotence (plan §"State Reducer" dispatch contract)

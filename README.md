@@ -65,7 +65,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   recovery](https://valtteriluomapareto.github.io/photo-export/features/#tracking-and-resume).
 - Import an existing backup to rebuild history for Timeline, Favorites, albums and Shared Albums. Failures saving import history show an error. [Import and
   recovery](https://valtteriluomapareto.github.io/photo-export/export-icloud-photos/#rebuilding-state-from-an-existing-backup).
-- Save a diagnostic report from the **Help** menu when an export needs investigation.
+- Save a diagnostic report from the **Help** menu with failed or in-progress exports and the latest Photos library catch-up result.
   [Diagnostics](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
 - Keep an original backup when Photos cannot supply an edited version. [Fallback
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).

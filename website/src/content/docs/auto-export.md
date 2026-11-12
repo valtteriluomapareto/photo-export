@@ -56,7 +56,7 @@ The toolbar's **Cancel** button stops the current export and also **turns Auto E
 
 Turning Auto Export off in **Settings** or from the menu bar also stops an automatic run that is in progress. Files already exported stay where they are, and the rest is exported the next time Auto Export runs. A manual export you started yourself keeps going.
 
-Switching to another destination stops the old automatic run. Each destination keeps its own last-run summary, retry entries, and pending work. Late results from the abandoned run are discarded, including when you switch away and back before it finishes. They cannot overwrite the current destination’s status or clear a newer run’s diagnostic journal.
+Switching to another destination stops the old automatic run. Each destination keeps its own last-run summary, retry entries, and pending work. Late results from the abandoned run are discarded, including when you switch away and back before it finishes. They cannot overwrite the current destination’s status or stop a newer automatic run.
 
 ## Failed exports and retry
 
