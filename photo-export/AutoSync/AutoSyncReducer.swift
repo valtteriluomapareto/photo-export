@@ -166,6 +166,13 @@ enum AutoSyncReducer {
       if sameId && !availabilityOrSafetyChanged {
         break
       }
+      // The end of a safety check is not new work: the trigger that started the wait (launch,
+      // pick, Export Now) is still pending and is served below.
+      if sameId, destination.isAvailable == state.destination.isAvailable,
+        state.destination.safety == .checking
+      {
+        break
+      }
       let wasUnavailableOrMissing =
         !state.destination.isAvailable || state.destination.id == nil
       if destination.id != nil && destination.isAvailable {
@@ -785,6 +792,9 @@ enum AutoSyncReducer {
       return .waiting(.destinationUnavailable)
     }
     switch state.destination.safety {
+    case .checking:
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .waiting(.destinationChecking)
     case .unsafeNeedsConfirmation, .unsafeMigrationConflict:
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       return .blocked(.destinationUnsafe)

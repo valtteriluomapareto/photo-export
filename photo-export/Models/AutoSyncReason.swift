@@ -63,6 +63,7 @@ extension AutoSyncBlockedReason {
     case .limitedPhotosAccess: return "limited Photos access"
     case .destinationMissing: return "no destination"
     case .destinationUnavailable: return "drive disconnected"
+    case .destinationChecking: return "checking the destination"
     case .destinationUnsafe: return "destination needs review"
     case .noScopesSelected: return "pick what to export"
     case .manualExportActive: return "manual export running"

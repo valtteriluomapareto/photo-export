@@ -126,4 +126,51 @@ struct DestinationSnapshotAdapterTests {
     #expect(h.coordinator.migrationConflict != nil)
     #expect(snapshots.last?.safety == .unsafeMigrationConflict)  // conflict wins
   }
+
+  /// A selected destination reads `.checking` until the monitor has a verdict for it.
+  @Test(.timeLimit(.minutes(1))) func selectedDestinationReadsCheckingUntilItsVerdict()
+    async throws
+  {
+    let folder = TestScratch.directory("AdapterChecking")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let storeRoot = TestScratch.directory("AdapterCheckingStore")
+    let manager = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("AdapterChecking"),
+      bookmarkSaver: { _ in true }, volumeNotificationCenter: NotificationCenter(),
+      validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
+    await manager.persistSelectionAndWait(folder)
+    try #require(manager.destinationId != nil)
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {}, interruptForDestinationUnavailable: {},
+      configureRecordStores: { _ in .success })
+    let scan = AsyncCheckpoint()
+    let monitor = DestinationSafetyMonitor(
+      identityPublisher: manager.identityPublisher,
+      exportRecordStore: ExportRecordStore(baseDirectoryURL: storeRoot),
+      collectionExportRecordStore: CollectionExportRecordStore(baseDirectoryURL: storeRoot),
+      confirmationStore: InMemoryDestinationSafetyConfirmationStore(),
+      scanDirectory: { @MainActor in
+        await scan.enter()
+        return false
+      })
+    let adapter = DestinationSnapshotAdapter(
+      destinationManager: manager, lifecycleCoordinator: coordinator, safetyMonitor: monitor)
+    var snapshots: [DestinationSnapshot] = []
+    let cancellable = adapter.destinationSnapshotPublisher.sink { snapshots.append($0) }
+    try await withCleanup {
+      #expect(snapshots.last?.safety == .checking)
+      monitor.attach()
+      try #require(await scan.waitForEnter(count: 1))
+      #expect(snapshots.last?.safety == .checking)
+
+      await scan.releaseAll()
+      #expect(await eventually("checked") { snapshots.last?.safety == .safe })
+      #expect(snapshots.map(\.safety) == [.checking, .safe])
+    } cleanup: {
+      cancellable.cancel()
+      await scan.releaseAll()
+      try? FileManager.default.removeItem(at: folder)
+      try? FileManager.default.removeItem(at: storeRoot)
+    }
+  }
 }

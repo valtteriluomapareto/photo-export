@@ -131,8 +131,12 @@ cleanup remains separate from user-visible destination content.
 [DestinationSafetyMonitor](../../photo-export/Destination/DestinationSafetyMonitor.swift)
 uses the stable destination id. It requires confirmation when both record stores are empty,
 the destination root has a non-hidden entry, and there is no saved confirmation.
+Its verdict names the stable id it was reached for. Until that id matches the current
+destination, the destination is `.checking` and Auto Export waits
+(`.waiting(.destinationChecking)`); a trigger that arrives meanwhile (launch, pick, Export Now)
+runs as itself once the check passes.
 [DestinationSnapshotAdapter](../../photo-export/Destination/DestinationSnapshotAdapter.swift)
-gives migration conflicts precedence over confirmation. Neither confirmation nor a fingerprint
+gives migration conflicts precedence over the check and confirmation. Neither confirmation nor a fingerprint
 is a substitute for the [stable destination identity](architecture-conventions.md#destination-identity).
 
 ## Persistence and token authority
