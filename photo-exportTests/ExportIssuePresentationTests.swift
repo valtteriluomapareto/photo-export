@@ -223,6 +223,16 @@ struct ExportIssuePresentationTests {
         f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1
       })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
+    let before = try #require(pixels(in: f.window))
+    // Change only creation metadata: the mounted Form must install the new date too.
+    f.service.favoritesAssets = [TestAssetFactory.makeAsset(id: "asset", creationDate: created)]
+    f.library.invalidateCache()
+    try #require(
+      await observe(in: f.window) {
+        f.counter.count(for: "issue-metadata:\(f.destinationId):2") == 1
+      })
+    #expect(await observe(in: f.window) { pixels(in: f.window) != before })
+    #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
   }
 
   @Test func retrySelectionRequiresTheCurrentFailedAttempt() throws {
