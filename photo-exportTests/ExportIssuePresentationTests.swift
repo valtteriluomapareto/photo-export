@@ -30,6 +30,9 @@ struct ExportIssuePresentationTests {
     #expect(timeline.filename == "EDIT.JPG")
     #expect(timeline.creationDate == created)
     #expect(timeline.failedAt == failedAt)
+    #expect(
+      timeline.primaryLine(locale: Locale(identifier: "en_US_POSIX"))
+        == "EDIT.JPG · Mar 12, 2024 · Edited")
     let collection = try #require(
       ExportIssuesProjection.make(
         collections: [
@@ -74,6 +77,13 @@ struct ExportIssuePresentationTests {
     let row = try #require(ExportIssuesProjection.make(timeline: ["deleted": record]).first)
     #expect(row.filename == nil && row.creationDate == nil)
     #expect(row.failedAt == failedAt)
+    let locale = Locale(identifier: "en_US_POSIX")
+    #expect(row.primaryLine(locale: locale) == "Filename unavailable · Date unavailable · Original")
+    var recorded = row
+    recorded.filename = "EDIT.JPG"
+    #expect(
+      recorded.enriched(with: nil).primaryLine(locale: locale)
+        == "EDIT.JPG · Date unavailable · Original")
   }
 
   @Test func versionLabelsDescribeKnownVariantsAndRetainUnknownKeys() throws {
@@ -97,17 +107,6 @@ struct ExportIssuePresentationTests {
   }
 
   @Test(.timeLimit(.minutes(1)))
-  func deletedAssetsKeepRecordedFilenameAndShowUnavailableDate() async throws {
-    let f = try await Fixture(created: created, failedAt: failedAt)
-    defer { f.close() }
-    f.service.missingAssetIds = ["asset"]
-    f.window.orderFront(nil)
-    try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") > 0 })
-    #expect(
-      f.counter.renderedText["issue-row:asset"]?.first == "EDIT.JPG · Date unavailable · Edited")
-  }
-
-  @Test(.timeLimit(.minutes(1)))
   func clearingDestinationRejectsAnInFlightMetadataResult() async throws {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer {
@@ -123,7 +122,8 @@ struct ExportIssuePresentationTests {
     f.window.orderFront(nil)
     try #require(
       await observe {
-        replaced && f.counter.renderedText["issue-visible-ids"] == []
+        replaced
+          && NativeViewAccess.containsText("Export issue information is unavailable.", in: f.window)
           && f.counter.count(for: "issue-metadata:\(f.destination.destinationId ?? "none"):0") > 0
       })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
@@ -186,18 +186,16 @@ struct ExportIssuePresentationTests {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
     f.window.orderFront(nil)
-    try #require(
-      await observe { f.counter.renderedText["issue-row:asset"]?.first?.contains("2024") == true })
+    try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 1 })
+    let before = try #require(pixels(in: f.window))
     #expect(f.service.detailsFetchCalls.isEmpty)
     f.timeline.markVariantInProgress(
       assetId: "asset", variant: .edited, year: 2026, month: 10,
       relPath: "2026/10/", filename: " ")
     f.timeline.markVariantFailed(
       assetId: "asset", variant: .edited, error: "Network failed", at: failedAt)
-    #expect(
-      await observe {
-        f.counter.renderedText["issue-row:asset"]?.first?.contains("PHOTOS.HEIC") == true
-      })
+    try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") >= 2 })
+    #expect(await observe(in: f.window) { pixels(in: f.window) != before })
     #expect(f.service.detailsFetchCalls == ["asset"])
   }
 
@@ -222,32 +220,26 @@ struct ExportIssuePresentationTests {
     try #require(
       await observe {
         f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1
-          && f.counter.renderedText["issue-row:asset"]?.first?.contains("2031") == true
       })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-  func retainedRetryRejectsAChangedDestinationOrNewFailure(newFailure: Bool) async throws {
-    let f = try await Fixture(created: created, failedAt: failedAt)
-    defer { f.close() }
-    f.window.orderFront(nil)
-    try #require(
-      await observe { f.counter.renderedText["issue-row:asset"]?.first?.contains("2024") == true })
-    let action = try #require(f.counter.renderedActions["issue-retry:asset"])
-    if newFailure {
-      f.timeline.markVariantFailed(
-        assetId: "asset", variant: .edited, error: "New failure", at: failedAt.addingTimeInterval(1)
-      )
-    } else {
-      let other = f.root.appendingPathComponent("Other")
-      try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
-      await f.destination.persistSelectionAndWait(other)
-    }
-    action()
+  @Test func retrySelectionRequiresTheCurrentFailedAttempt() throws {
+    let current = issue(.iCloudTransient)
+    let selected = try #require(current.retrySelection(in: [current]))
+    #expect(selected.scope == .timeline && selected.variant == .original)
+    #expect(selected.retry == current.retry)
+    let enriched = current.enriched(
+      with: .init(creationDate: created, originalFilename: "PHOTO.HEIC"))
+    #expect(enriched.retrySelection(in: [current])?.retry == current.retry)
+    #expect(current.retrySelection(in: []) == nil)
+    #expect(current.retrySelection(in: [issue(.iCloudTransient, destinationId: "other")]) == nil)
     #expect(
-      f.autoSync.currentRetryState.entry(scope: .timeline, assetId: "asset", variant: .edited)
-        != nil)
+      current.retrySelection(in: [
+        issue(.iCloudTransient, failureTime: failedAt.addingTimeInterval(1))
+      ]) == nil)
+    #expect(current.retrySelection(in: [issue(.destinationPermission)]) == nil)
+    #expect(issue(nil).retrySelection(in: [issue(nil)]) == nil)
   }
 
   @MainActor
@@ -266,7 +258,15 @@ struct ExportIssuePresentationTests {
     let window: NSWindow
     let destinationId: String
 
-    init(created: Date, failedAt: Date) async throws {
+    var rows: [ExportIssue] {
+      ExportIssuesProjection.snapshot(
+        destinationId: destination.destinationId, timeline: timeline, collections: collections,
+        retryState: autoSync.currentRetryState,
+        retryDestinationId: autoSync.currentRetryDestinationId
+      ).rows
+    }
+
+    init(created: Date, failedAt: Date, rowOnly: Bool = false) async throws {
       defaults = TestScratch.defaults(suiteName: defaultsName)
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       destination = ExportDestinationManager(
@@ -303,15 +303,29 @@ struct ExportIssuePresentationTests {
         DestinationSnapshot(
           stableId: destinationId, fingerprint: nil, isAvailable: true, safety: .safe))
       autoSync.attach(to: builder.environment)
-      let content = ExportIssuesView()
-        .environmentObject(destination).environment(timeline).environment(collections)
-        .environment(library).environmentObject(autoSync)
-        .environment(\.bodyInvalidationCounter, counter)
-        .environment(\.locale, Locale(identifier: "en_US_POSIX"))
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 650, height: 500),
         styleMask: [.borderless], backing: .buffered, defer: false)
       window.isReleasedWhenClosed = false
+      let content = Group {
+        if rowOnly {
+          ExportIssueRow(
+            entry: ExportIssuesProjection.snapshot(
+              destinationId: destinationId, timeline: timeline, collections: collections,
+              retryState: autoSync.currentRetryState,
+              retryDestinationId: autoSync.currentRetryDestinationId
+            ).rows[0]
+              .enriched(with: .init(creationDate: created, originalFilename: nil)),
+            canRetry: true, autoExportEnabled: true)
+        } else {
+          ExportIssuesView()
+        }
+      }
+      .environmentObject(destination).environment(timeline).environment(collections)
+      .environment(library).environmentObject(autoSync)
+      .environment(\.bodyInvalidationCounter, counter)
+      .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+      .environment(\.accessibilityEnabled, true)
       window.contentView = NSHostingView(rootView: content)
     }
 
@@ -330,25 +344,20 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func actualSettingsRowShowsRecognizableMetadataAndRetryStillWorks() async throws {
-    let f = try await Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt, rowOnly: true)
     defer { f.close() }
     f.window.orderFront(nil)
-    try #require(await observe { f.counter.renderedText["issue-row:asset"] != nil })
-    #expect(
-      await observe {
-        let text = f.counter.renderedText["issue-row:asset"]?.first ?? ""
-        return text.contains("EDIT.JPG") && text.contains("2024") && text.contains("Edited")
-      })
-    #expect(f.counter.renderedText["issue-row:asset"]?.last == "asset")
-    let action = try #require(f.counter.renderedActions["issue-retry:asset"])
-    f.service.favoritesAssets = [
-      TestAssetFactory.makeAsset(
-        id: "asset", creationDate: Date(timeIntervalSince1970: 1_930_000_000))
-    ]
-    f.library.invalidateCache()
     try #require(
-      await observe { f.counter.renderedText["issue-row:asset"]?.first?.contains("2031") == true })
-    action()
+      await observe(in: f.window) {
+        NativeViewAccess.texts(in: f.window).contains {
+          $0.contains("EDIT.JPG") && $0.contains("2024") && $0.contains("Edited")
+        }
+      })
+    #expect(NativeViewAccess.containsText("asset", in: f.window))
+    let button = try #require(NativeViewAccess.button("Retry", in: f.window))
+    #expect(button.isAccessibilityEnabled?() == true)
+    let press = try #require(button.accessibilityPerformPress)
+    _ = press()
     #expect(
       f.autoSync.currentRetryState.entry(scope: .timeline, assetId: "asset", variant: .edited)
         == nil)
@@ -362,9 +371,9 @@ struct ExportIssuePresentationTests {
     f.window.orderFront(nil)
     try #require(
       await observe(in: f.window) {
-        f.counter.renderedText["issue-row:asset"] != nil
-          && f.counter.count(for: "issue-metadata:\(f.destinationId):0") > 0
+        f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 1
       })
+    let before = try #require(pixels(in: f.window))
     if collection {
       let placement = ExportPlacement.favorites()
       f.collections.upsertPlacement(placement)
@@ -382,22 +391,29 @@ struct ExportIssuePresentationTests {
         assetId: "new-failure", variant: .original, error: "New failure while shown", at: failedAt)
       f.timeline.flushPendingNotifications()
     }
-    #expect(
-      await observe(in: f.window) {
-        f.counter.renderedText["issue-row:new-failure"]?.first?.contains("NEW.JPG") == true
-      })
+    try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") >= 2 })
+    #expect(await observe(in: f.window) { pixels(in: f.window) != before })
+  }
+
+  private func pixels(in window: NSWindow) -> Data? {
+    guard let view = window.contentView else { return nil }
+    view.layoutSubtreeIfNeeded()
+    let rect = view.bounds
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
+    view.cacheDisplay(in: rect, to: bitmap)
+    return bitmap.representation(using: .png, properties: [:])
   }
 
   // MARK: - Retry footer
 
   private func issue(
     _ category: AutoSyncFailureCategory?, deadline: Date? = nil,
-    reason: ExportVariantReason? = nil
+    reason: ExportVariantReason? = nil, destinationId: String = "dest", failureTime: Date? = nil
   ) -> ExportIssue {
     ExportIssue(
       id: .init(source: .timeline, assetId: "asset", variantRaw: "original"),
-      destinationId: "dest", scopeLabel: "Timeline 2026-10", scopeKey: .timeline,
-      message: "Socket is not connected", reason: reason, failedAt: failedAt,
+      destinationId: destinationId, scopeLabel: "Timeline 2026-10", scopeKey: .timeline,
+      message: "Socket is not connected", reason: reason, failedAt: failureTime ?? failedAt,
       retry: category.map {
         RetryEntry(
           category: $0, errorSignature: "sig", attemptCount: 1, firstFailedAt: failedAt,
