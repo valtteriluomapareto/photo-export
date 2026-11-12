@@ -250,6 +250,10 @@ FULL_MATRIX_PATHS = [
     "photo-export/**/Info.plist",
     "photo-export.xcodeproj/xcshareddata/**",
     "scripts/ci/archive-appstore.sh",
+    "scripts/ci/archive-direct.sh",
+    "scripts/ci/setup-keychain-direct.sh",
+    "scripts/ci/release-context-direct.sh",
+    "scripts/ci/release-context-appstore.sh",
     "scripts/ci/export-appstore.sh",
     "scripts/ci/prepare-pkg.sh",
     "scripts/ci/install-provisioning-profile.sh",
@@ -260,7 +264,7 @@ FULL_MATRIX_PATHS = [
 
 PROJECT = "photo-export.xcodeproj/project.pbxproj"
 # Project settings that both release pipelines override on the xcodebuild command line
-# (release-direct.yml and scripts/ci/archive-appstore.sh), so the project's own values
+# (scripts/ci/archive-direct.sh and scripts/ci/archive-appstore.sh), so the project's own values
 # never reach a shipped build. A test keeps this list in sync with the pipelines.
 PIPELINE_OVERRIDDEN_KEYS = (
     "CODE_SIGN_IDENTITY", "CODE_SIGN_STYLE", "DEVELOPMENT_TEAM", "OTHER_CODE_SIGN_FLAGS",

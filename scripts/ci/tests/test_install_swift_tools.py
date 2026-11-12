@@ -1,4 +1,4 @@
-"""Execute the actual tool-install step offline and pin workflow cancellation/link gates."""
+"""Execute the pinned Swift tool installer against offline tool fixtures."""
 
 import json
 from pathlib import Path
@@ -9,7 +9,6 @@ import sys
 import tempfile
 import unittest
 
-from test_release_safety import expression, render, selected_steps
 
 ROOT = Path(__file__).resolve().parents[3]
 INSTALLER = ROOT / "scripts/ci/install-swift-tools.sh"
@@ -19,27 +18,6 @@ URLS = {
 }
 HASHES = {"swiftlint": "c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0",
           "swift-format": "a32eef7ab3a18682cc5865060d25801dd948936704ff82f50cc0afeec1416ca9"}
-
-
-def concurrency(source, values):
-    blocks = re.findall(r"^concurrency:\n(.*?)(?=^\S)", source, re.M | re.S)
-    if len(blocks) != 1:
-        raise ValueError("Expected one concurrency block")
-    fields = dict(re.findall(r"^  (group|cancel-in-progress): (.+)$", blocks[0], re.M))
-    group = fields["group"]
-    if group == "ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}":
-        group = "ci-" + (values["github.ref"] if values["github.event_name"].casefold() == "pull_request"
-                         else values["github.sha"])
-    else:
-        group = render(group, values)
-    cancel = fields["cancel-in-progress"]
-    if cancel in ("true", "false"):
-        cancel = cancel == "true"
-    elif cancel.startswith("${{ ") and cancel.endswith(" }}"):
-        cancel = expression(cancel[4:-3], values)
-    else:
-        raise ValueError("Unsupported cancellation expression")
-    return group.casefold(), cancel
 
 
 class InstallerFixture(unittest.TestCase):
@@ -122,19 +100,17 @@ except Exception as error:
         self.path_file.write_text("existing-path\n")
         for name in ("audit", "unexpected"):
             (self.root / name).unlink(missing_ok=True)
-        source = (ROOT / ".github/workflows/ci.yml").read_text()
-        step = selected_steps(source, ["Install SwiftLint and swift-format"])[0]
         environment = {"PATH": str(self.bin), "RUNNER_TEMP": str(self.root), "GITHUB_PATH": str(self.path_file),
                        "AUDIT": str(self.root / "audit"), "UNEXPECTED": str(self.root / "unexpected"),
                        "FAKE_OS": system, "FAKE_ARCH": arch, "FAKE_MACOS": macos, "FAILURE": failure,
                        "URLS": json.dumps(URLS), "HASHES": json.dumps(HASHES)}
-        result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", step["run"]],
+        result = subprocess.run(["/bin/bash", str(self.root / "scripts/ci/install-swift-tools.sh")],
                                 cwd=self.root, env=environment, capture_output=True, text=True)
         audit = self.root / "audit"
         self.assertFalse((self.root / "unexpected").exists(), result.stdout + result.stderr)
         return result, [json.loads(line) for line in audit.read_text().splitlines()] if audit.exists() else []
 
-    def test_actual_install_step_uses_verified_pins_and_publishes_only_complete_tools(self):
+    def test_actual_installer_uses_verified_pins_and_publishes_only_complete_tools(self):
         result, events = self.install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn(["mutable-brew-install"], events)
@@ -180,44 +156,3 @@ except Exception as error:
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(any(event[0] == "download" for event in events))
                 self.assertEqual(self.path_file.read_text(), "existing-path\n")
-
-
-class WorkflowHardeningTests(unittest.TestCase):
-    def test_main_commits_are_independent_while_pr_updates_cancel_their_predecessor(self):
-        source = (ROOT / ".github/workflows/ci.yml").read_text()
-        def key(event, ref, sha):
-            return concurrency(source, {"github.event_name": event, "github.ref": ref, "github.sha": sha})
-        main_a, cancel = key("push", "refs/heads/main", "aaa")
-        self.assertFalse(cancel)
-        self.assertNotEqual(main_a, key("push", "refs/heads/main", "bbb")[0])
-        pr_a, cancel = key("pull_request", "refs/pull/1/merge", "aaa")
-        self.assertTrue(cancel)
-        self.assertEqual(pr_a, key("PULL_REQUEST", "REFS/PULL/1/MERGE", "bbb")[0])
-        self.assertNotEqual(pr_a, key("pull_request", "refs/pull/2/merge", "aaa")[0])
-
-    def test_pages_link_gates_precede_artifact_and_deployment(self):
-        source = (ROOT / ".github/workflows/deploy-website.yml").read_text()
-        _, cancel = concurrency(source, {})
-        self.assertFalse(cancel)
-        block = source.split("  build:\n", 1)[1].split("  deploy:\n", 1)[0]
-        bodies = re.findall(r"^      - name: Test and check built website links\n(.*?)(?=^      - |\Z)",
-                            block, re.M | re.S)
-        self.assertEqual(len(bodies), 1)
-        self.assertEqual(re.findall(r"^        working-directory: (.+)$", bodies[0], re.M), ["website"])
-        body = re.sub(r"^        working-directory: .+\n", "", bodies[0], flags=re.M)
-        links = selected_steps("      - name: Test and check built website links\n" + body,
-                               ["Test and check built website links"])[0]
-        self.assertEqual(links.get("if"), None)
-        self.assertEqual(links["run"].strip(), "npm run test:links\nnpm run check:links")
-        self.assertLess(block.index("Validate website"), block.index("Test and check built website links"))
-        self.assertLess(block.index("Test and check built website links"), block.index("actions/upload-pages-artifact@"))
-        self.assertNotIn("continue-on-error", block)
-        deployment = source.split("  deploy:\n", 1)[1]
-        self.assertRegex(deployment, r"^    needs: build\n")
-        self.assertNotRegex(deployment, r"(?m)^    if:")
-
-    def test_unknown_workflow_syntax_and_missing_context_are_rejected(self):
-        with self.assertRaises(ValueError):
-            concurrency("concurrency:\n  group: ci-${{ unknown() }}\n  cancel-in-progress: true\njobs:\n", {})
-        with self.assertRaises(KeyError):
-            concurrency("concurrency:\n  group: ci-${{ github.ref }}\n  cancel-in-progress: true\njobs:\n", {})

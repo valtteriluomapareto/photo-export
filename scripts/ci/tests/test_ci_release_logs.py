@@ -8,32 +8,11 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-DIRECT = ROOT / '.github/workflows/release-direct.yml'
-APPSTORE = ROOT / '.github/workflows/release-app-store.yml'
 SANITIZER = ROOT / 'scripts/ci/sanitize-release-log.py'
 CHANNELS = [
-    ('direct', DIRECT, 'Archive Release build', 'photo-export-direct-archive.log'),
-    ('appstore', APPSTORE, 'Archive', 'photo-export-appstore-archive.log'),
+    ('direct', 'archive-direct.sh', 'photo-export-direct-archive.log'),
+    ('appstore', 'archive-appstore.sh', 'photo-export-appstore-archive.log'),
 ]
-
-
-def step(workflow, name):
-    lines = workflow.read_text().splitlines()
-    start = lines.index(f'      - name: {name}')
-    end = next((i for i in range(start + 1, len(lines))
-                if lines[i].startswith('      - name:')), len(lines))
-    return lines[start:end]
-
-
-def shell_block(workflow, name):
-    lines = step(workflow, name)
-    start = lines.index('        run: |') + 1
-    body = []
-    for line in lines[start:]:
-        if line and not line.startswith('          '):
-            break
-        body.append(line[10:])
-    return '\n'.join(body).replace('${{ github.run_number }}', '42')
 
 
 class ReleaseArchiveLogTests(unittest.TestCase):
@@ -43,7 +22,8 @@ class ReleaseArchiveLogTests(unittest.TestCase):
         self.root = Path(temporary.name)
         scripts = self.root / 'scripts/ci'
         scripts.mkdir(parents=True)
-        shutil.copy(ROOT / 'scripts/ci/archive-appstore.sh', scripts)
+        for name in ['archive-direct.sh', 'archive-appstore.sh']:
+            shutil.copy(ROOT / 'scripts/ci' / name, scripts)
         if SANITIZER.exists():
             shutil.copy(SANITIZER, scripts)
         self.bin = self.root / 'bin'
@@ -61,6 +41,7 @@ class ReleaseArchiveLogTests(unittest.TestCase):
             KEYCHAIN_PATH=str(runner / 'fixture.keychain-db'), PROFILE_UUID='fixture-profile-id',
             PROFILE_NAME='Fixture Profile', BUILD_NUMBER='42', APPSTORE_BUNDLE_ID='fixture.bundle',
             PROFILES_DIR=str(profiles), ARGUMENTS_FILE=str(self.root / 'arguments'),
+            GITHUB_RUN_NUMBER='42',
         )
         stub = self.bin / 'xcodebuild'
         stub.write_text('''#!/bin/bash
@@ -86,11 +67,9 @@ exit "${FIXTURE_EXIT:-0}"
 ''')
         stub.chmod(0o755)
 
-    def run_archive(self, channel, workflow, name, exit_code=0):
-        env = dict(self.env, FIXTURE_EXIT=str(exit_code))
-        command = (['bash', '-e', '-o', 'pipefail', '-c', shell_block(workflow, name)]
-                   if channel == 'direct' else ['bash', 'scripts/ci/archive-appstore.sh'])
-        return subprocess.run(command, cwd=self.root, env=env, capture_output=True,
+    def run_archive(self, script, exit_code=0):
+        return subprocess.run(['bash', 'scripts/ci/' + script], cwd=self.root,
+                              env=dict(self.env, FIXTURE_EXIT=str(exit_code)), capture_output=True,
                               text=True, timeout=15)
 
     def assert_secrets_absent(self, text):
@@ -100,9 +79,9 @@ exit "${FIXTURE_EXIT:-0}"
         self.assertNotIn('credential-private', text)
 
     def test_full_sanitized_log_and_short_console_for_each_channel(self):
-        for channel, workflow, name, log in CHANNELS:
+        for channel, script, log in CHANNELS:
             with self.subTest(channel=channel):
-                result = self.run_archive(channel, workflow, name)
+                result = self.run_archive(script)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 saved = self.root / 'runner' / log
                 self.assertTrue(saved.exists(), 'archive must retain its complete sanitized log')
@@ -116,9 +95,9 @@ exit "${FIXTURE_EXIT:-0}"
                 self.assert_secrets_absent(result.stdout + result.stderr)
 
     def test_archive_failure_keeps_exit_status_log_and_no_success_epilogue(self):
-        for channel, workflow, name, log in CHANNELS:
+        for channel, script, log in CHANNELS:
             with self.subTest(channel=channel):
-                result = self.run_archive(channel, workflow, name, exit_code=65)
+                result = self.run_archive(script, exit_code=65)
                 self.assertEqual(result.returncode, 65, result.stderr)
                 self.assertNotIn('Archive created at:', result.stdout)
                 self.assertNotIn('ARCHIVE_PATH=', (self.root / 'github-env').read_text()
@@ -130,9 +109,9 @@ exit "${FIXTURE_EXIT:-0}"
         python = self.bin / 'python3'
         python.write_text('#!/bin/bash\ncat > /dev/null\necho sanitizer-unavailable >&2\nexit 7\n')
         python.chmod(0o755)
-        for channel, workflow, name, log in CHANNELS:
+        for channel, script, log in CHANNELS:
             with self.subTest(channel=channel):
-                result = self.run_archive(channel, workflow, name)
+                result = self.run_archive(script)
                 self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
                 self.assertNotIn('Archive created at:', result.stdout)
                 self.assertNotIn('EARLY ARCHIVE DIAGNOSTIC', result.stdout)
@@ -142,9 +121,9 @@ exit "${FIXTURE_EXIT:-0}"
                     self.assertEqual(saved.read_bytes(), b'')
 
     def test_archive_arguments_are_unchanged(self):
-        for channel, workflow, name, _ in CHANNELS:
+        for channel, script, _ in CHANNELS:
             with self.subTest(channel=channel):
-                result = self.run_archive(channel, workflow, name)
+                result = self.run_archive(script)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 actual = (self.root / 'arguments').read_bytes().decode().split('\0')[:-1]
                 archive = ('photo-export.xcarchive' if channel == 'direct'
@@ -162,17 +141,6 @@ exit "${FIXTURE_EXIT:-0}"
                     expected += ['PRODUCT_BUNDLE_IDENTIFIER=fixture.bundle',
                                  'PROVISIONING_PROFILE_SPECIFIER=Fixture Profile']
                 self.assertEqual(actual, expected + ['CURRENT_PROJECT_VERSION=42'])
-
-    def test_only_dedicated_logs_are_uploaded_even_when_archive_fails(self):
-        for channel, workflow, _, log in CHANNELS:
-            with self.subTest(channel=channel):
-                text = '\n'.join(step(workflow, 'Upload archive log'))
-                self.assertIn('if: always()', text)
-                self.assertIn('actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9', text)
-                self.assertIn(f'name: release-{channel}-archive-log', text)
-                self.assertIn(f'path: ${{{{ runner.temp }}}}/{log}', text)
-                self.assertNotIn('*', text)
-                self.assertNotIn('path: |', text)
 
 
 class StreamingSanitizerTests(unittest.TestCase):

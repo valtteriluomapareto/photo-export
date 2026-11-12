@@ -40,7 +40,15 @@ echo "Unlocking keychain..."
 security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
 
 echo "Adding keychain to search list and setting as default..."
-security list-keychains -d user -s "${KEYCHAIN_PATH}" $(security list-keychains -d user | tr -d '"')
+existing_keychain_list="$(security list-keychains -d user)"
+keychain_search_paths=("${KEYCHAIN_PATH}")
+while IFS= read -r keychain_entry; do
+  keychain_entry="${keychain_entry#"${keychain_entry%%[![:space:]]*}"}"
+  keychain_entry="${keychain_entry#\"}"
+  keychain_entry="${keychain_entry%\"}"
+  if [[ -n "$keychain_entry" ]]; then keychain_search_paths+=("$keychain_entry"); fi
+done <<< "$existing_keychain_list"
+security list-keychains -d user -s "${keychain_search_paths[@]}"
 security default-keychain -s "${KEYCHAIN_PATH}"
 
 # ── Apple Distribution certificate ──────────────────────────────────
@@ -106,9 +114,11 @@ echo ""
 echo "Selected installer signing certificate: ${INSTALLER_SIGNING_CERTIFICATE}"
 
 # Export for later steps
-echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
-echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}" >> "$GITHUB_ENV"
-echo "INSTALLER_SIGNING_CERTIFICATE=${INSTALLER_SIGNING_CERTIFICATE}" >> "$GITHUB_ENV"
+{
+  echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}"
+  echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}"
+  echo "INSTALLER_SIGNING_CERTIFICATE=${INSTALLER_SIGNING_CERTIFICATE}"
+} >> "$GITHUB_ENV"
 
 echo ""
 echo "=== Keychain setup complete ==="
