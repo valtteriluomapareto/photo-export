@@ -40,6 +40,15 @@ struct LibraryWindowSizeTests {
     let timeline = export.store
     let collections = export.collectionStore
     let manager = export.manager
+    manager.progressState.manualSummary = ManualExportSummary(
+      completedCount: 3, failedCount: 1,
+      failureMessage:
+        "The export could not finish writing its history for /Volumes/Family Photo Backup/"
+        + "Collections/Albums/Summer trips with family and friends/Coastal walks and mountain "
+        + "holidays/Original photos and edited copies/2026/09/IMG_20260914_123456_original.HEIC. "
+        + "The backup drive disconnected before the history could be saved. Reconnect the drive, "
+        + "keep Photo Export open to preserve unsaved progress, and retry saving export history "
+        + "before starting another export.")
     let autoSync = AutoSyncManager()
     let whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
     whatsNew.markAsSeen()

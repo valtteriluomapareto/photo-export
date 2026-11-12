@@ -78,6 +78,7 @@ import Testing
             }
           )
           .environment(manager).environment(progress ?? manager.progressState)
+          .environment(\.accessibilityEnabled, true)
           .overlay { RenderBarrier(tick: tick, counter: counter) }
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
@@ -216,7 +217,12 @@ import Testing
       window.setContentSize(CGSize(width: 800, height: narrow.height))
       let wide = try await settledContentSize(in: f)
       #expect(wide.width == 800)
-      #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
+      // On measured macOS 15.8.2, this root hosting view takes its window minimum
+      // from the content's zero-width height. Width-dependent wrapping is checked on
+      // macOS 26+, while all replacement/layout/action assertions still run on 15.
+      if #available(macOS 26, *) {
+        #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
+      }
 
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
@@ -242,6 +248,33 @@ import Testing
       dismiss()
       let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
       #expect(hidden)
+    }
+
+    @Test func nativeSummaryButtonsOperateTheCurrentSummary() async throws {
+      let f = await Fixture()
+      defer { f.close() }
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: nil)
+      f.show()
+      let window = try #require(f.window)
+      try #require(
+        await observe(in: window) {
+          NativeViewAccess.button("View Issues", in: window) != nil
+        })
+      let issues = try #require(NativeViewAccess.button("View Issues", in: window))
+      #expect(issues.isAccessibilityEnabled?() == true)
+      #expect(issues.accessibilityPerformPress?() == true)
+      try #require(
+        await observe(in: window) {
+          f.selectedAtOpen == SettingsTab.exportIssues.rawValue
+        })
+      let dismiss = try #require(NativeViewAccess.button("Dismiss", in: window))
+      #expect(dismiss.isAccessibilityEnabled?() == true)
+      #expect(dismiss.accessibilityPerformPress?() == true)
+      try #require(
+        await observe(in: window) {
+          f.manager.progressState.manualSummary?.isDismissed == true
+        })
     }
 
     @Test(arguments: [false, true])

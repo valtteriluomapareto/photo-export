@@ -50,6 +50,7 @@ import Testing
         library.observeAppActivation(notificationCenter: notifications)
         let capture = opened
         let content = Host(library: library, counter: counter)
+          .environment(\.accessibilityEnabled, true)
           .environment(\.bodyInvalidationCounter, counter)
           .environment(
             \.openURL,
@@ -165,9 +166,13 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.renderedActions["authorization-open-settings"] != nil })
-      let action = try #require(f.counter.renderedActions["authorization-open-settings"])
-      action()
+        await observe(in: f.window) {
+          NativeViewAccess.containsText("Photo Library Access Required", in: f.window)
+        })
+      let button = try #require(NativeViewAccess.button("Open System Settings", in: f.window))
+      #expect(button.isAccessibilityEnabled?() == true)
+      #expect(button.accessibilityPerformPress?() == true)
+      try #require(await observe(in: f.window) { f.opened.urls.count == 1 })
       #expect(
         f.opened.urls.map(\.absoluteString) == [
           "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
