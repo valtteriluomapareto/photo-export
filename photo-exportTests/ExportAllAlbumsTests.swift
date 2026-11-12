@@ -291,7 +291,7 @@ struct ExportAllAlbumsTests {
     // suspended on album B's fetch gate.
     await fetchGate.waitForEnter(count: 1)
     #expect(h.manager.queueCount > 0)
-    #expect(h.manager.isEnqueueingAll)
+    #expect(h.manager.isPreparingExport)
     #expect(!h.manager.isRunning)
 
     // The pre-fix bug: pause() guarded on `isRunning`, so this no-op'd.
@@ -301,7 +301,7 @@ struct ExportAllAlbumsTests {
     // Release the fetch gate so the enqueue loop can complete and call
     // processQueueIfNeeded(). With pause held, the run loop must NOT start.
     await fetchGate.release(1)
-    await waitUntil(!h.manager.isEnqueueingAll)
+    await waitUntil(!h.manager.isPreparingExport)
     #expect(h.manager.isPaused)
     #expect(!h.manager.isRunning)
     #expect(h.manager.queueCount > 0)
@@ -344,7 +344,7 @@ struct ExportAllAlbumsTests {
     // and the queue empties.
     #expect(h.manager.totalJobsCompleted == 2)
     #expect(h.manager.queueCount == 0)
-    #expect(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isPreparingExport)
     // The partial-failure message lands in the queue-warning slot (rendered alongside
     // active progress). emptyRunMessage stays nil because the queue isn't empty.
     #expect(
@@ -387,7 +387,7 @@ struct ExportAllAlbumsTests {
     #expect(h.manager.totalJobsCompleted == 0)
     #expect(h.writer.writeCalls.isEmpty)
     #expect(h.fileSystem.moveCalls.isEmpty)
-    #expect(!h.manager.isRunning && !h.manager.isEnqueueingAll && h.manager.queueCount == 0)
+    #expect(!h.manager.isRunning && !h.manager.isPreparingExport && h.manager.queueCount == 0)
   }
 
   /// AutoSync passes `selectionOverride` so a scheduled run honours the AutoSync

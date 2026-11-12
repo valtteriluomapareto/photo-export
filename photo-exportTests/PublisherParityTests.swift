@@ -285,11 +285,11 @@ struct PublisherParityTests {
     }
   }
 
-  @Test func managerIsEnqueueingAll() async {
+  @Test func managerIsPreparingExport() async {
     let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
-        f.manager, \.isEnqueueingAll, { $0.isEnqueueingAllPublisher },
+        f.manager, \.isPreparingExport, { $0.isPreparingExportPublisher },
         change: { await f.manager.startExportAll()?.value },
         // Tearing down active work stores `false` unconditionally.
         unchangedWrite: .before { f.manager.cancelAndClear() })
@@ -310,7 +310,7 @@ struct PublisherParityTests {
           let context = manager.activeRunContext
           let manualFireAndForget =
             context == nil
-            && (manager.isRunning || manager.queueCount > 0 || manager.isEnqueueingAll)
+            && (manager.isRunning || manager.queueCount > 0 || manager.isPreparingExport)
           return ExportRunState(
             activeContext: context,
             isManualActive: context?.source == .manual || manualFireAndForget,

@@ -46,7 +46,7 @@ struct ExportManagerObservationTests {
         ObservationProbe { _ = self.manager.isRunning },
         ObservationProbe { _ = self.manager.queueCount },
         ObservationProbe { _ = self.manager.activeRunContext },
-        ObservationProbe { _ = self.manager.isEnqueueingAll },
+        ObservationProbe { _ = self.manager.isPreparingExport },
         ObservationProbe { _ = self.manager.versionSelection },
         ObservationProbe { _ = self.manager.convertHEICToJPEG },
         ObservationProbe { _ = self.manager.livePhotosPairedExport },
@@ -211,7 +211,7 @@ struct ExportManagerObservationTests {
       let isRunning = ObservationProbe { _ = f.manager.isRunning }
       let queueCount = ObservationProbe { _ = f.manager.queueCount }
       let context = ObservationProbe { _ = f.manager.activeRunContext }
-      let enqueueing = ObservationProbe { _ = f.manager.isEnqueueingAll }
+      let enqueueing = ObservationProbe { _ = f.manager.isPreparingExport }
       f.enqueueOne()
       #expect(queueCount.changeCount == 1)
       #expect(isRunning.changeCount == 0)
@@ -272,7 +272,7 @@ struct ExportManagerObservationTests {
     let f = await Fixture()
     await withCleanup {
       let context = ObservationProbe { _ = f.manager.activeRunContext }
-      let enqueueing = ObservationProbe { _ = f.manager.isEnqueueingAll }
+      let enqueueing = ObservationProbe { _ = f.manager.isPreparingExport }
       let run = ExportRunContext(
         source: .manual, visibility: .userVisible, scope: .timelineFullLibrary,
         selection: .edited)
@@ -323,7 +323,7 @@ struct ExportManagerObservationTests {
     await withCleanup {
       let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
       let canPause = ObservationProbe { _ = f.manager.canTogglePause }
-      // Sets `isEnqueueingAll` before its first await; nothing else it reads changes yet.
+      // Sets `isPreparingExport` before its first await; nothing else it reads changes yet.
       let enqueue = f.manager.startExportAll()
       #expect(activeWork.changeCount == 1)
       #expect(canPause.changeCount == 0)
@@ -358,13 +358,13 @@ struct ExportManagerObservationTests {
         _ = f.manager.activeRunContext
         _ = f.manager.isRunning
         _ = f.manager.queueCount
-        _ = f.manager.isEnqueueingAll
+        _ = f.manager.isPreparingExport
       }
       let paused = ObservationProbe { _ = f.manager.isPaused }
       let missing = ObservationProbe { _ = f.manager.previousBackupMissing }
       let stage = ObservationProbe { _ = f.manager.importStage }
       var events: [String] = []
-      let subscription = f.manager.isEnqueueingAllPublisher.sink {
+      let subscription = f.manager.isPreparingExportPublisher.sink {
         events.append("enqueueing \($0)")
       }
       defer { subscription.cancel() }

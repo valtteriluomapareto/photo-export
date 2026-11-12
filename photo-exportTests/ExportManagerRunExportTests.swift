@@ -253,7 +253,7 @@ struct ExportManagerRunExportTests {
       return true
     }
     let finished = AsyncStream<Void>.makeStream()
-    let observation = harness.manager.isEnqueueingAllPublisher.dropFirst().filter { !$0 }
+    let observation = harness.manager.isPreparingExportPublisher.dropFirst().filter { !$0 }
       .sink { _ in finished.continuation.yield(()) }
     harness.manager.livePhotosPairedExport = true
     harness.manager.videoLayout = .subfolder
@@ -443,14 +443,14 @@ struct ExportManagerRunExportTests {
       let pendingJobs = manager.pendingJobs
       let generation = manager.generation
       #expect(pendingJobs.count == (hasQueuedJobs ? 1 : 0))
-      #expect(manager.isEnqueueingAll)
+      #expect(manager.isPreparingExport)
       #expect(manager.activeRunContext == context)
       await oldFetch.releaseAll()
       await oldTask.value
 
       #expect(manager.generation == generation)
       #expect(manager.currentPreparationTasks.count == 1, "A must leave B preparation registered")
-      #expect(manager.isEnqueueingAll)
+      #expect(manager.isPreparingExport)
       #expect(manager.activeRunContext == context)
       #expect(manager.pendingJobs == pendingJobs)
       #expect(manager.queueCount == pendingJobs.count)
@@ -499,13 +499,13 @@ struct ExportManagerRunExportTests {
       }
       let replacementTask = try #require(harness.manager.startExportAll())
       await oldTask.value
-      #expect(harness.manager.isEnqueueingAll)
+      #expect(harness.manager.isPreparingExport)
       await gate.waitForEnter(count: 1)
       #expect(harness.photoLib.fetchAssetsCalls.count == 1, "Only B should fetch")
-      #expect(harness.manager.isEnqueueingAll)
+      #expect(harness.manager.isPreparingExport)
       await gate.releaseAll()
       await replacementTask.value
-      #expect(!harness.manager.isEnqueueingAll)
+      #expect(!harness.manager.isPreparingExport)
       #expect(!harness.manager.hasActiveExportWork)
     } cleanup: {
       await gate.releaseAll()
@@ -712,8 +712,12 @@ struct ExportManagerRunExportTests {
     try await withCleanup {
       harness.photoLib.fetchAssetsError = CocoaError(.fileReadUnknown)
       var completions: [ExportRunSummary] = []
-      let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
-      defer { subscription.cancel() }
+      var runStates: [ExportRunState] = []
+      let subscriptions = [
+        harness.manager.completedRunsPublisher.sink { completions.append($0) },
+        harness.manager.exportRunStatePublisher.sink { runStates.append($0) },
+      ]
+      defer { subscriptions.forEach { $0.cancel() } }
       let context = ExportRunContext(
         source: source, visibility: source == .manual ? .userVisible : .background,
         scope: .favoritesFull, selection: .edited)
@@ -732,6 +736,11 @@ struct ExportManagerRunExportTests {
       #expect(completions.map(\.context) == [context])
       #expect(completions.map(\.result) == [.failed])
       #expect(harness.manager.activeRunContext == nil)
+      // The failed scan has ended before its run resolves, so an AutoSync run never reads
+      // as a manual one on its way to idle.
+      #expect(runStates.last == .idle)
+      let readAsManual = runStates.contains { $0.isManualActive }
+      #expect(readAsManual == (source == .manual))
       #expect(
         harness.manager.progressState.manualSummary?.failureMessage
           == (source == .manual ? "Could not scan Favorites. Try exporting again." : nil))
@@ -743,17 +752,21 @@ struct ExportManagerRunExportTests {
   // MARK: - Full-scope run characterization (issue #153)
 
   /// Every supported full scope must resolve an empty scan once. This also pins
-  /// the zero-count baseline captured after synchronous start* dispatch.
+  /// the zero-count baseline captured after synchronous start* dispatch. Awaits the run
+  /// through `finished(_:)`, so a run that never resolves fails at the time limit.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
-  func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async {
+  func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async throws {
     let harness = await makeHarness()
-    await withCleanup {
+    try await withCleanup {
       let context = makeContext(scope: scope.runScope)
       var completions: [ExportRunSummary] = []
       let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
       defer { subscription.cancel() }
 
-      let summary = await harness.manager.runExport(context: context)
+      let run = Task { await harness.manager.runExport(context: context) }
+      let resolved = await finished(run)
+      try #require(resolved)
+      let summary = await run.value
 
       #expect(summary.context == context)
       #expect(summary.result == .completed)
@@ -877,8 +890,12 @@ struct ExportManagerRunExportTests {
       harness.photoLib.availableYearsError = denied
       harness.photoLib.collectionTreeError = denied
       var completions: [ExportRunSummary] = []
-      let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
-      defer { subscription.cancel() }
+      var runStates: [ExportRunState] = []
+      let subscriptions = [
+        harness.manager.completedRunsPublisher.sink { completions.append($0) },
+        harness.manager.exportRunStatePublisher.sink { runStates.append($0) },
+      ]
+      defer { subscriptions.forEach { $0.cancel() } }
       let context = ExportRunContext(
         source: source, visibility: source == .manual ? .userVisible : .background,
         scope: scope.runScope, selection: .edited)
@@ -898,6 +915,8 @@ struct ExportManagerRunExportTests {
       #expect(harness.writer.writeCalls.isEmpty)
       #expect(completions == [summary])
       #expect(harness.manager.activeRunContext == nil)
+      let readAsManual = runStates.contains { $0.isManualActive }
+      #expect(readAsManual == (source == .manual))
       // Favorites stops at the access guard. The other scopes stop earlier, when listing
       // their years or albums throws, and keep the bulk scan message.
       let manualMessage =
@@ -2065,7 +2084,7 @@ struct ExportManagerRunExportTests {
 
   @MainActor
   private final class PriorityQueueHost: ExportQueueCoordinator.Host {
-    var isEnqueueingAll = false
+    var isPreparingExport = false
     let observed = AsyncStream<TaskPriority>.makeStream()
     let gate = AsyncCheckpoint()
     func performExport(job: ExportManager.ExportJob, generation: Int) async {

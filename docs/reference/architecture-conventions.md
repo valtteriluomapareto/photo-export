@@ -632,11 +632,11 @@ Rules:
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
   Publishers.CombineLatest4(
     activeRunContextBridge.publisher, isRunningBridge.publisher,
-    queueCountBridge.publisher, isEnqueueingAllBridge.publisher
+    queueCountBridge.publisher, isPreparingExportBridge.publisher
   )
-  .map { context, isRunning, queueCount, isEnqueueingAll in
+  .map { context, isRunning, queueCount, isPreparingExport in
     let manualFireAndForget =
-      context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
+      context == nil && (isRunning || queueCount > 0 || isPreparingExport)
     return ExportRunState(
       activeContext: context,
       isManualActive: context?.source == .manual || manualFireAndForget,
@@ -648,7 +648,7 @@ var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
 }
 ```
 
-The `CombineLatest4` over `(activeRunContext, isRunning, queueCount, isEnqueueingAll)` is the AutoSync contract. Each is held in an `ObservableCombineBridge`, which delivers exactly as `@Published` does while views track the properties through Observation ([`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
+The `CombineLatest4` over `(activeRunContext, isRunning, queueCount, isPreparingExport)` is the AutoSync contract. Each is held in an `ObservableCombineBridge`, which delivers exactly as `@Published` does while views track the properties through Observation ([`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isPreparingExport` is true while any export scan, single-scope or bulk, has not finished queueing, so a start reads as busy from the click, before its first job lands in `pendingJobs` (issues #67 and #507). The same flag is part of `hasActiveExportWork`, which Import Existing Backup and `dispatchFullScopeRun` check. Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
 **Mirror pattern** (contextual excerpts when a coordinator owns state that AutoSync observes through the manager):
 
@@ -847,7 +847,7 @@ Contextual excerpt from [`ExportQueueCoordinator.swift`](../../photo-export/Expo
 final class ExportQueueCoordinator: ObservableObject {
   @MainActor
   protocol Host: AnyObject {
-    var isEnqueueingAll: Bool { get }
+    var isPreparingExport: Bool { get }
     func performExport(job: ExportManager.ExportJob, generation: Int) async
     func didDrainQueue()
     func setCurrentJob(_ job: ExportManager.ExportJob)
@@ -913,20 +913,21 @@ Rules:
 
 ## Canonical `start*` entry-point shape
 
-Every fire-and-forget export entry point on `ExportManager` uses `canStartExport(in:logTag:)` for import/store admission and `prepareExport(selectionOverride:bulk:)` for shared synchronous preparation. Keep entry-specific exclusive-bulk and empty-input checks between them; rejected starts must preserve their existing message and counter behavior.
+Every fire-and-forget export entry point on `ExportManager` uses `canStartExport(in:logTag:)` for import/store admission and `prepareExport(selectionOverride:)` for shared synchronous preparation. Keep entry-specific exclusive-bulk and empty-input checks between them; rejected starts must preserve their existing message and counter behavior.
 
 ```text
 func startExportX(...) {
   // 1. canStartExport: import conflict, then the correct timeline/collection store.
   // 2. Entry-specific exclusive-bulk and empty-input checks, in their existing order.
-  // 3. prepareExport: capture settings, clear messages, publish the optional bulk flag,
-  //    reset counters only when truly idle, then capture generation synchronously.
+  // 3. prepareExport: capture settings, clear messages, reset counters only when truly
+  //    idle, then capture generation synchronously.
   let (settings, gen) = prepareExport(...)
-  // 4. Track the preparation task; pass settings intact to enqueueX(... generation:).
-  //    Re-check isCurrent(gen) after every await. Process the queue on success.
+  // 4. trackPreparation sets isPreparingExport; pass settings intact to
+  //    enqueueX(... generation:). Re-check isCurrent(gen) after every await.
   //    An .unauthorized scan marks the active run incomplete, so its drain resolves .failed.
-  //    On throw, single-scope starts call handleScanFailure: record the preparation
-  //    failure, log, and resolve an active run as .failed when nothing is queued.
+  //    On throw, single-scope starts call handleScanFailure (record and log) and return
+  //    .failed. When the scan ends, trackPreparation drops the flag first, then starts the
+  //    queue, or resolves an active run as .failed when a failed scan queued nothing.
 }
 ```
 
@@ -934,9 +935,9 @@ Favorites is the only single-scope start AutoSync runs through `runExport`; the 
 
 `ExportSettingsSnapshot` owns the capture policy for selection, Live Photo paired-video export, and video layout. Add future click-time settings to that value and its capture initializer, then consume them where needed; start methods, enqueue helpers and planners transport the same value. `ExportJob` stores it once, with computed compatibility accessors. Only the manager-reading initializer is `@MainActor`; scalar construction and the value itself remain pure. A run-context selection override must never mutate the toolbar selection. HEIC-to-JPEG conversion deliberately remains live at planning/write time and is excluded from this snapshot.
 
-Preparation has no awaits. Capture settings before publishing messages or the bulk flag, and capture generation before dispatching any asynchronous work. The idle check is `!isRunning && !isProcessing && pendingJobs.isEmpty`: paused pending work accumulates counters. Never move preparation ahead of entry-specific rejection checks or combine timeline and collection readiness.
+Preparation has no awaits. Capture settings before publishing messages, and capture generation before dispatching any asynchronous work. The idle check is `!isRunning && !isProcessing && pendingJobs.isEmpty`: paused pending work accumulates counters. Never move preparation ahead of entry-specific rejection checks or combine timeline and collection readiness.
 
-Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the `Task { [weak self] in }` wrapping, the `isEnqueueingAll = false` teardown only for the owning generation, the success finalize, and the partial-failure recovery on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`. An item whose scan returns `.unauthorized`, including one reached after Photos access is lost mid-loop, marks the active run incomplete, so the bulk drain resolves `.failed` even though the jobs already queued still export.
+Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls, and refuse to start while another scan is preparing. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the empty/done message and the partial-failure warning on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`. An item whose scan returns `.unauthorized`, including one reached after Photos access is lost mid-loop, marks the active run incomplete, so the bulk drain resolves `.failed` even though the jobs already queued still export.
 
 ## Manual export feedback
 

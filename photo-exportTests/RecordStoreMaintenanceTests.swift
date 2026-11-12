@@ -471,7 +471,7 @@ struct RecordStoreMaintenanceTests {
       await f.replacement.entered.waitForEnter(count: 1)
       manager.cancelAndClear()
       try #require(f.closed)
-      #expect(manager.queueCount == 0 && !manager.isRunning && !manager.isEnqueueingAll)
+      #expect(manager.queueCount == 0 && !manager.isRunning && !manager.isPreparingExport)
       writer.checkpoint = nil
       start()
       try #require(

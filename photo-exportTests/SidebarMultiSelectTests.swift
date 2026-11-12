@@ -198,7 +198,7 @@ struct SidebarMultiSelectTests {
   }
 
   /// Empty buckets must not enqueue any work, must surface the "no items" message,
-  /// and must not leave the manager in `isEnqueueingAll`.
+  /// and must not leave the manager in `isPreparingExport`.
   @Test func timelineSelectionEmptyBucketsSurfacesMessage() async throws {
     let h = await makeHarness()
     defer { cleanupHarness(h) }
@@ -210,7 +210,7 @@ struct SidebarMultiSelectTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
-  /// Cancellation mid-loop must reset `isEnqueueingAll` and leave the queue empty.
+  /// Cancellation mid-loop must reset `isPreparingExport` and leave the queue empty.
   /// Mirrors `ExportAllAlbumsTests`'s checkpoint pattern: gate year B's fetch, let
   /// year A's jobs land, cancel, release the gate, assert the manager is idle.
   @Test func cancelMidTimelineSelectionLoopResetsState() async throws {
@@ -231,15 +231,15 @@ struct SidebarMultiSelectTests {
 
     // Wait until the loop is suspended on year 2024's fetch.
     await fetchGate.waitForEnter(count: 1)
-    #expect(h.manager.isEnqueueingAll)
+    #expect(h.manager.isPreparingExport)
 
     // Cancel mid-loop. After this, the loop's next `isCurrent(gen)` check
     // returns false and bails out.
     h.manager.cancelAndClear()
     await fetchGate.releaseAll()
 
-    await waitUntil(!h.manager.isEnqueueingAll)
-    #expect(!h.manager.isEnqueueingAll)
+    await waitUntil(!h.manager.isPreparingExport)
+    #expect(!h.manager.isPreparingExport)
     #expect(h.manager.pendingJobs.isEmpty)
     #expect(h.manager.generation > genBefore)
   }
@@ -280,7 +280,7 @@ struct SidebarMultiSelectTests {
 
     #expect(h.manager.totalJobsCompleted == 2)
     #expect(h.manager.queueCount == 0)
-    #expect(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isPreparingExport)
     #expect(
       h.manager.queueWarningMessage
         == "Couldn't scan every item in the selection. Continuing with the photos already queued."
@@ -427,7 +427,7 @@ struct SidebarMultiSelectTests {
   /// Item 4b: cancellation parity with the timeline path
   /// (`cancelMidTimelineSelectionLoopResetsState`). The collections dispatcher
   /// has three buckets (favorites → albums → shared); cancelling between any
-  /// two buckets must reset `isEnqueueingAll`, leave the queue idle, and bump
+  /// two buckets must reset `isPreparingExport`, leave the queue idle, and bump
   /// the generation so a re-dispatch can run cleanly.
   @Test func cancelMidCollectionsSelectionBetweenBucketsResetsState() async throws {
     let h = await makeHarness()
@@ -455,13 +455,13 @@ struct SidebarMultiSelectTests {
     // already enqueued. After this point the next `isCurrent(gen)` check
     // would return false if we cancel.
     await fetchGate.waitForEnter(count: 1)
-    #expect(h.manager.isEnqueueingAll)
+    #expect(h.manager.isPreparingExport)
 
     h.manager.cancelAndClear()
     await fetchGate.releaseAll()
 
-    await waitUntil(!h.manager.isEnqueueingAll)
-    #expect(!h.manager.isEnqueueingAll)
+    await waitUntil(!h.manager.isPreparingExport)
+    #expect(!h.manager.isPreparingExport)
     #expect(h.manager.pendingJobs.isEmpty)
     #expect(h.manager.generation > genBefore)
   }

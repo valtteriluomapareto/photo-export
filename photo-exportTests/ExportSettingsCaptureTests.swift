@@ -240,7 +240,7 @@ struct ExportSettingsCaptureTests {
     mode.start(f.manager)
     #expect(f.manager.currentPreparationTasks.isEmpty)
     #expect(f.manager.pendingJobs.isEmpty)
-    #expect(!f.manager.isEnqueueingAll)
+    #expect(!f.manager.isPreparingExport)
     #expect(f.manager.emptyRunMessage == "Existing empty message")
     #expect(f.manager.queueWarningMessage == "Existing warning")
     #expect(f.manager.totalJobsEnqueued == 9)
@@ -256,7 +256,7 @@ struct ExportSettingsCaptureTests {
     f.manager.startExportAll()
     let tasks = f.manager.currentPreparationTasks
     #expect(tasks.count == 1)
-    #expect(f.manager.isEnqueueingAll)
+    #expect(f.manager.isPreparingExport)
     f.manager.progressState.emptyRunMessage = "Existing empty message"
     f.manager.progressState.queueWarningMessage = "Existing warning"
     f.manager.progressState.totalJobsEnqueued = 9

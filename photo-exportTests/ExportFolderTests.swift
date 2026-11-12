@@ -517,7 +517,7 @@ struct ExportFolderTests {
     // `ExportManagerRunExportTests.allAlbumsFullEmptyResolvesCompleted`.
     await waitUntil(!h.manager.hasActiveExportWork)
     #expect(!h.manager.hasActiveExportWork)
-    #expect(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isPreparingExport)
   }
 
   /// All albums under a folder already fully exported → the user-visible message

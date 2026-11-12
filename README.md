@@ -34,7 +34,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   details](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
 - Photos edits refresh the grid and previews in place while keeping surviving selections. Timeline progress badges retain their last counts when an outdated count request is canceled. [Refresh
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
-- Export a month, year or queued batch while skipping completed files and protecting existing copies. [File naming and
+- Export a month, year or queued batch while skipping completed files and protecting existing copies. Scanning counts as active export work immediately, so Import and Auto Export wait. [File naming and
   reuse](https://valtteriluomapareto.github.io/photo-export/features/#files-already-at-the-destination).
 - Cmd/Shift-click sidebar rows or album tiles to export a mix of months, years, Favorites, albums and folders. [Batch
   actions](https://valtteriluomapareto.github.io/photo-export/features/#export).

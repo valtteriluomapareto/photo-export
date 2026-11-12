@@ -47,6 +47,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
   - Collections: any combination of Favorites, albums, folders, and shared albums. Selected folders expand to their nested albums; duplicates dedupe.
   - **Edit → Select All Years** / **Select All Collections** (⌘A) picks every top-level row in the active sidebar. Right-clicking a folder that's part of a multi-selection acts on the whole selection, matching the toolbar's primary action.
 - **iCloud Shared Albums** appear in their own Collections sidebar section and export when explicitly selected to `Collections/Shared Albums/<Album>/`. See the [reduced-fidelity note](#shared-albums-reduced-fidelity) below — Apple only serves shared photos as downscaled JPEGs
+- Export scans count as active work immediately. Import Existing Backup and Auto Export wait while a manual export scans and processes its queue.
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)

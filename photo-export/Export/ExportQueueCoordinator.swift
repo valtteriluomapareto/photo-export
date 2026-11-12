@@ -23,9 +23,9 @@ final class ExportQueueCoordinator: ObservableObject {
   /// helpers instead of extending this Host protocol.
   @MainActor
   protocol Host: AnyObject {
-    /// True while a bulk-album enqueue Task is still building the queue. The coordinator
-    /// uses this to avoid prematurely finalizing an empty queue.
-    var isEnqueueingAll: Bool { get }
+    /// True while any export scan is still building the queue. The coordinator uses this
+    /// to avoid prematurely finalizing an empty queue.
+    var isPreparingExport: Bool { get }
 
     /// Drives the per-job export pipeline (resource fetch, variant write, record write).
     /// The coordinator's drain loop awaits this on a child Task.
@@ -353,11 +353,10 @@ final class ExportQueueCoordinator: ObservableObject {
       // already-complete library), the queue-drain hook in `processNext` won't fire
       // because `processNext` won't run. Finalize here so the awaiter resolves.
       //
-      // Guard on `!isEnqueueingAll` so a `resume()` during the brief window between an
-      // enqueueing Task starting and adding the first job (queue is empty,
-      // `processQueueIfNeeded` triggered from `resume()`) doesn't prematurely resolve a
-      // run that's still in its enqueue phase.
-      if host?.isEnqueueingAll == false {
+      // Guard on `!isPreparingExport` so an empty queue (for example after `resume()`)
+      // doesn't resolve a run whose scan is still queueing. The scan's own end calls
+      // this again once the flag has dropped.
+      if host?.isPreparingExport == false {
         host?.didDrainQueue()
       }
       return
