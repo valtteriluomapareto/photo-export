@@ -13,7 +13,7 @@ EXISTING = ['/Users/offline/Library/Keychains/login with spaces.keychain-db',
 
 
 class KeychainSetupTests(unittest.TestCase):
-    def run_setup(self, channel, existing=EXISTING):
+    def run_setup(self, channel, existing=EXISTING, list_exit=0):
         with tempfile.TemporaryDirectory(prefix='keychain fixture ') as temporary:
             root = Path(temporary)
             runner = root / 'runner space'
@@ -41,6 +41,7 @@ elif os.environ["FAKE_PASSWORD"] in args:
     exported = pathlib.Path(os.environ["GITHUB_ENV"])
     if exported.exists() and "KEYCHAIN_PASSWORD=" in exported.read_text(): print("EXPORTED_EARLY")
 elif name == "security" and args == ["list-keychains", "-d", "user"]:
+    if os.environ["LIST_EXIT"] != "0": sys.exit(int(os.environ["LIST_EXIT"]))
     for path in json.loads(os.environ["EXISTING"]): print('    "' + path + '"')
 elif name == "security" and args[0] == "find-identity":
     print('  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Mac Installer Distribution: Offline"')
@@ -52,7 +53,7 @@ elif name == "security" and args[0] == "find-identity":
             environment = dict(PATH=str(binaries), RUNNER_TEMP=str(runner),
                                GITHUB_ENV=str(root / 'environment'), CALLS=str(root / 'calls'),
                                FAKE_PASSWORD=PASSWORD, EXISTING=json.dumps(existing),
-                               UNEXPECTED=str(root / 'unexpected'))
+                               UNEXPECTED=str(root / 'unexpected'), LIST_EXIT=str(list_exit))
             environment.update({name: 'b2ZmbGluZQ==' for name in [
                 'CERTIFICATE_P12_BASE64', 'CERTIFICATE_PASSWORD', 'APPLE_ID',
                 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID',
@@ -63,9 +64,15 @@ elif name == "security" and args[0] == "find-identity":
             script = ROOT / f'scripts/ci/setup-keychain-{channel}.sh'
             result = subprocess.run(['/bin/bash', str(script)], cwd=root, env=environment,
                                     capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.returncode, list_exit, result.stdout + result.stderr)
             self.assertFalse((root / 'unexpected').exists(), 'A non-fixture command was attempted')
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+            if list_exit:
+                self.assertFalse((root / 'environment').exists())
+                self.assertFalse(any(call[:5] == ['security', 'list-keychains', '-d', 'user', '-s']
+                                     for call in calls))
+                self.assertNotIn('setup complete', result.stdout.lower())
+                return
             exported = dict(line.split('=', 1) for line in (root / 'environment').read_text().splitlines())
             search = [call for call in calls if call[:5] == ['security', 'list-keychains', '-d', 'user', '-s']]
             self.assertEqual(search, [['security', 'list-keychains', '-d', 'user', '-s',
@@ -88,3 +95,8 @@ elif name == "security" and args[0] == "find-identity":
         for channel in ['appstore', 'direct']:
             with self.subTest(channel=channel):
                 self.run_setup(channel, existing=[])
+
+    def test_failed_search_list_command_stops_before_mutation_or_export(self):
+        for channel in ['appstore', 'direct']:
+            with self.subTest(channel=channel):
+                self.run_setup(channel, list_exit=23)

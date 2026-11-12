@@ -156,5 +156,3 @@ except Exception as error:
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(any(event[0] == "download" for event in events))
                 self.assertEqual(self.path_file.read_text(), "existing-path\n")
-
-
