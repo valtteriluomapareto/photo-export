@@ -246,6 +246,50 @@ struct RecordStoreAsyncLoadTests {
     #expect(f.finishedLoads == restart + 3)
   }
 
+  /// Unlike a read held before decoding, admission holds this load after its history and
+  /// filename claims are prepared. A newer configure must reject that completed result.
+  @Test(arguments: [false, true])
+  func alreadyPreparedLoadCannotReplaceNewerConfiguration(collection: Bool) async throws {
+    let f = Fixture(collection: collection)
+    let gate = AsyncCheckpoint()
+    let admission = collection ? f.collections.mutationAdmission : f.timeline.mutationAdmission
+    var maintenance: Task<Void, Never>?
+    try await withCleanup {
+      try await f.seed("A", ["a1": "A1.JPG"])
+      await f.configure(nil)
+      let snapshot = f.url("A", snapshot: true)
+      f.io.hold(snapshot, fromRead: f.io.readCount(of: snapshot) + 1)
+      let start = f.finishedLoads
+      f.begin("A")
+      try #require(await eventually("the snapshot read is held") { f.io.heldCount == 1 })
+      maintenance = admission.requestCheckpoint {
+        await gate.enter()
+        admission.installAfterMaintenance { f.begin(nil) }
+      }
+      try #require(await gate.waitForEnter(count: 1))
+      f.io.release(snapshot)
+      try #require(
+        await eventually("the prepared load waits for mutation admission") {
+          admission.pendingWaiterCount == 1
+        })
+      await gate.releaseAll()
+      await maintenance?.value
+      try #require(
+        await eventually("the obsolete prepared load finishes") {
+          f.finishedLoads == start + 1
+        })
+      #expect(f.state == .unconfigured)
+      #expect(f.destinationId == nil)
+      #expect(f.filename("a1") == nil)
+      #expect(!f.isClaimed("A1.JPG"))
+    } cleanup: {
+      f.io.releaseAll()
+      await gate.releaseAll()
+      await maintenance?.value
+      f.cleanup()
+    }
+  }
+
   enum SupersedingConfigure: CaseIterable, Sendable {
     case clearedAsync, clearedBlocking, otherDestinationBlocking, otherDestinationAsync,
       waiterCancelled

@@ -110,14 +110,19 @@ struct PreparedFilenameClaimsTests {
     try? FileManager.default.removeItem(at: root)
   }
 
-  @Test(arguments: [false, true], [false, true])
-  func preparedIndexLoadsOffMainAndCannotOutliveNewHistory(collection: Bool, supersede: Bool)
-    async throws
-  {
-    let root = TestScratch.directory("PreparedClaimsOwnership")
-    let io = HeldReadIO()
-    let timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
-    let collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
+  /// The synchronous observer executes in the production decode/prepare task itself, so
+  /// an async observer's executor hop cannot hide main-thread preparation.
+  @Test(arguments: [false, true])
+  func productionHistoryPreparationRunsOffMain(collection: Bool) async throws {
+    let root = TestScratch.directory("PreparedClaimsOffMain")
+    let threads = LockedBox<[Bool]>([])
+    let timeline = ExportRecordStore(baseDirectoryURL: root)
+    let collections = CollectionExportRecordStore(baseDirectoryURL: root)
+    defer {
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
+      try? FileManager.default.removeItem(at: root)
+    }
     let placement = ExportPlacement.favorites()
     if collection {
       await collections.configureAndWait(for: "A")
@@ -126,6 +131,8 @@ struct PreparedFilenameClaimsTests {
         assetId: "seed", placement: placement, variant: .original, filename: "seed.JPG")
       try await collections.flush()
       await collections.configureAndWait(for: nil)
+      collections.preparationObserver = { threads.mutate { $0.append(Thread.isMainThread) } }
+      await collections.configureAndWait(for: "A")
     } else {
       await timeline.configureAndWait(for: "A")
       timeline.markVariantInProgress(
@@ -133,48 +140,16 @@ struct PreparedFilenameClaimsTests {
         relPath: "2026/10/", filename: "seed.JPG")
       try await timeline.flush()
       await timeline.configureAndWait(for: nil)
+      timeline.preparationObserver = { threads.mutate { $0.append(Thread.isMainThread) } }
+      await timeline.configureAndWait(for: "A")
     }
-    let finished = collection ? collections.finishedLoadCount : timeline.finishedLoadCount
-    let snapshot = root.appendingPathComponent("A").appendingPathComponent(
-      collection
-        ? CollectionExportRecordStore.Constants.snapshotFileName
-        : ExportRecordStore.Constants.snapshotFileName)
-    io.hold(snapshot, fromRead: io.readCount(of: snapshot) + 1)
-    if collection {
-      collections.beginConfigure(for: "A")
-    } else {
-      timeline.beginConfigure(for: "A")
-    }
-    try #require(await eventually("the load reads the held snapshot") { io.heldCount == 1 })
-    #expect((collection ? collections.state : timeline.state) == .loading)
-    #expect(
-      collection
-        ? !collections.isFilenameClaimed(
-          "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe")
-        : !timeline.isFilenameClaimed(
-          "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
-    if supersede {
-      if collection {
-        await collections.configureAndWait(for: nil)
-      } else {
-        await timeline.configureAndWait(for: nil)
-      }
-    }
-    io.releaseAll()
-    try #require(
-      await eventually("obsolete preparation discarded") {
-        collection
-          ? collections.finishedLoadCount > finished : timeline.finishedLoadCount > finished
-      })
-    #expect(io.mainThreadReads.isEmpty)
-    #expect(
-      (collection ? collections.state : timeline.state) == (supersede ? .unconfigured : .ready))
+    #expect(threads.value == [false])
+    #expect((collection ? collections.state : timeline.state) == .ready)
     #expect(
       collection
         ? collections.isFilenameClaimed(
-          "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe") == !supersede
+          "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe")
         : timeline.isFilenameClaimed(
-          "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe") == !supersede)
-    try? FileManager.default.removeItem(at: root)
+          "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
   }
 }

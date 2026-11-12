@@ -134,6 +134,10 @@ final class ExportRecordStore {
   /// The installed history's claims, maintained with every accepted record mutation.
   @ObservationIgnored private var filenameClaims = FilenameClaims<ClaimFolder>()
   @ObservationIgnored private(set) var recordsEpoch: UInt64 = 0
+  #if DEBUG
+    /// Observes the production load task before decoding, for off-main preparation tests.
+    @ObservationIgnored var preparationObserver: (@Sendable () -> Void)?
+  #endif
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
   private var configurationPending = false
@@ -332,12 +336,18 @@ final class ExportRecordStore {
     let ticket = LoadTicket(generation: loadGeneration, file: file, signpost: signpost)
     let inputs = file.readInputs
     let latestLoad = latestLoad
+    #if DEBUG
+      let preparationObserver = preparationObserver
+    #endif
     ioQueue.async(qos: .userInitiated, flags: .enforceQoS) { [weak self] in
       let raw = inputs.read()
       Task.detached(priority: .userInitiated) { [weak self] in
         var separator: Bool?
         var outcome: LoadOutcome?
         if latestLoad.isCurrent(ticket.generation) {
+          #if DEBUG
+            preparationObserver?()
+          #endif
           let decoded = inputs.decode(raw)
           separator = decoded.needsLogSeparator
           outcome = Self.prepare(decoded)
