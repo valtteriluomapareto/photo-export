@@ -69,10 +69,10 @@ import Testing
           rootView: Host(navigation: navigation, library: library, collections: collections)
             .environment(library).environment(timeline).environment(collections)
             .environment(\.accessibilityEnabled, true))
-        window = NSWindow(
+        window = HostedViewHarness.makeWindow(
           contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: paneSize),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         window.contentView = hosting
       }
 

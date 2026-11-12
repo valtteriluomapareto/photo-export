@@ -52,10 +52,10 @@ import Testing
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
         userDefaults: defaults)
-      let window = NSWindow(
+      let window = HostedViewHarness.makeWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 700, height: 500),
-        styleMask: [.borderless], backing: .buffered, defer: false)
-      window.isReleasedWhenClosed = false
+        styleMask: [.borderless])
+
       defer {
         window.orderOut(nil)
         window.contentView = nil

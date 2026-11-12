@@ -101,10 +101,10 @@ import Testing
           .environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter)
           .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults)
-        window = NSWindow(
+        window = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 300, height: 500),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         window.contentView = NSHostingView(rootView: content)
         window.orderFront(nil)
       }

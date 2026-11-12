@@ -82,10 +82,10 @@ import Testing
           .environment(\.accessibilityEnabled, true)
           .overlay { RenderBarrier(tick: tick, counter: counter) }
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
-        let owned = NSWindow(
+        let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(origin: CGPoint(x: -10000, y: -10000), size: initialSize),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        owned.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         owned.contentView = hosted
         self.hosted = hosted
         window = owned
@@ -103,13 +103,11 @@ import Testing
         let hosted = NSHostingView(
           rootView: SettingsRootView()
             .photoExportEnvironment(core)
-            .environment(\.accessibilityEnabled, true)
-            .environment(\.bodyInvalidationCounter, counter)
-            .onAppear { [counter] in counter.record("settings-root-visible") })
-        let owned = NSWindow(
+            .environment(\.accessibilityEnabled, true))
+        let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 620),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        owned.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         owned.contentView = hosted
         settingsWindow = owned
         owned.orderFront(nil)
@@ -242,41 +240,17 @@ import Testing
       #expect(replaced.width == 800)
       #expect(replaced.height == wide.height)
       let issues = try #require(f.window.flatMap { NativeViewAccess.button("View Issues", in: $0) })
+      #expect(issues.isAccessibilityEnabled?() == true)
       #expect(issues.accessibilityPerformPress?() == true)
       #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
       let dismiss = try #require(f.window.flatMap { NativeViewAccess.button("Dismiss", in: $0) })
+      #expect(dismiss.isAccessibilityEnabled?() == true)
       #expect(dismiss.accessibilityPerformPress?() == true)
+      #expect(f.manager.progressState.manualSummary?.isDismissed == true)
       let hidden = await observe {
         f.window.map { NativeViewAccess.button("Dismiss", in: $0) == nil } == true
       }
       #expect(hidden)
-    }
-
-    @Test func nativeSummaryButtonsOperateTheCurrentSummary() async throws {
-      let f = await Fixture()
-      defer { f.close() }
-      f.manager.progressState.manualSummary = ManualExportSummary(
-        completedCount: 3, failedCount: 1, failureMessage: nil)
-      f.show()
-      let window = try #require(f.window)
-      try #require(
-        await observe(in: window) {
-          NativeViewAccess.button("View Issues", in: window) != nil
-        })
-      let issues = try #require(NativeViewAccess.button("View Issues", in: window))
-      #expect(issues.isAccessibilityEnabled?() == true)
-      #expect(issues.accessibilityPerformPress?() == true)
-      try #require(
-        await observe(in: window) {
-          f.selectedAtOpen == SettingsTab.exportIssues.rawValue
-        })
-      let dismiss = try #require(NativeViewAccess.button("Dismiss", in: window))
-      #expect(dismiss.isAccessibilityEnabled?() == true)
-      #expect(dismiss.accessibilityPerformPress?() == true)
-      try #require(
-        await observe(in: window) {
-          f.manager.progressState.manualSummary?.isDismissed == true
-        })
     }
 
     @Test(arguments: [false, true])
@@ -295,7 +269,9 @@ import Testing
       if settingsAlreadyOpen {
         f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
         f.showSettings()
-        let mounted = await observe { f.counter.count(for: "settings-root-visible") > 0 }
+        let mounted = await observe {
+          f.settingsWindow.map { NativeViewAccess.selectedTab("Auto Export", in: $0) } == true
+        }
         try #require(mounted)
       }
       #expect(issues.accessibilityPerformPress?() == true)
