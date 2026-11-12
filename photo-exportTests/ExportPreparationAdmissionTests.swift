@@ -40,8 +40,8 @@ struct ExportPreparationAdmissionTests {
       await harness.manager.waitForQueueDrained()
       #expect(harness.writer.writeCalls.map(\.assetId) == ["a1"])
     } cleanup: {
-      await scanGate.releaseAll()
       harness.manager.cancelAndClear()
+      await scanGate.releaseAll()
       await harness.manager.waitForImportCompletion()
       await harness.store.waitUntilSettled()
       await harness.collectionStore.waitUntilSettled()

@@ -890,8 +890,12 @@ struct ExportManagerRunExportTests {
       harness.photoLib.availableYearsError = denied
       harness.photoLib.collectionTreeError = denied
       var completions: [ExportRunSummary] = []
-      let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
-      defer { subscription.cancel() }
+      var runStates: [ExportRunState] = []
+      let subscriptions = [
+        harness.manager.completedRunsPublisher.sink { completions.append($0) },
+        harness.manager.exportRunStatePublisher.sink { runStates.append($0) },
+      ]
+      defer { subscriptions.forEach { $0.cancel() } }
       let context = ExportRunContext(
         source: source, visibility: source == .manual ? .userVisible : .background,
         scope: scope.runScope, selection: .edited)
@@ -911,6 +915,8 @@ struct ExportManagerRunExportTests {
       #expect(harness.writer.writeCalls.isEmpty)
       #expect(completions == [summary])
       #expect(harness.manager.activeRunContext == nil)
+      let readAsManual = runStates.contains { $0.isManualActive }
+      #expect(readAsManual == (source == .manual))
       // Favorites stops at the access guard. The other scopes stop earlier, when listing
       // their years or albums throws, and keep the bulk scan message.
       let manualMessage =
