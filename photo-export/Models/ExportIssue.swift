@@ -68,6 +68,10 @@ struct ExportIssue: Identifiable, Equatable {
     return "\(filename ?? "Filename unavailable") · \(date) · \(variantLabel)"
   }
 
+  var showsRetry: Bool {
+    retry != nil && scopeKey != nil && variant != nil && !isCovered
+  }
+
   /// A displayed retry must still refer to the authoritative failed attempt.
   func retrySelection(in currentRows: [Self]) -> (
     scope: AutoSyncRetryScopeKey, variant: ExportVariant, retry: RetryEntry

@@ -36,10 +36,6 @@ struct ExportIssuesView: View {
     let current = ExportIssuesProjection.Snapshot(
       rows: raw.rows.map { $0.enriched(with: metadata[$0.assetId]) },
       unavailableStores: raw.unavailableStores)
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(current.rows.map(\.assetId), for: "issue-visible-ids")
-    #endif
     VStack(spacing: 0) {
       if !current.unavailableStores.isEmpty {
         Text(
@@ -164,9 +160,6 @@ struct ExportIssueRow: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
   @Environment(\.locale) private var locale
   let entry: ExportIssue
   let canRetry: Bool
@@ -174,11 +167,6 @@ struct ExportIssueRow: View {
 
   var body: some View {
     let primaryLine = entry.primaryLine(locale: locale)
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(
-        [primaryLine, entry.assetId], for: "issue-row:\(entry.assetId)")
-    #endif
     VStack(alignment: .leading, spacing: 4) {
       HStack {
         Text(primaryLine).font(.callout).foregroundStyle(.secondary)
@@ -202,11 +190,7 @@ struct ExportIssueRow: View {
       HStack {
         Text(timeFooter).font(.caption).foregroundStyle(.tertiary)
         Spacer()
-        if entry.retry != nil, entry.scopeKey != nil, entry.variant != nil, !entry.isCovered {
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordAction("issue-retry:\(entry.assetId)", action: retry)
-          #endif
+        if entry.showsRetry {
           Button("Retry", action: retry).controlSize(.small).disabled(!canRetry)
             .help(
               "Retries using your configured Auto Export scopes. You can also export this item manually."

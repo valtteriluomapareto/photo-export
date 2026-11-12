@@ -104,6 +104,7 @@ struct ExportIssuePresentationTests {
     )
     #expect(unknown.variantLabel == "Unknown version" && unknown.id.variantRaw == "futureVersion")
     #expect(unknown.variant == nil)
+    #expect(!unknown.showsRetry && unknown.retrySelection(in: [unknown]) == nil)
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -226,6 +227,9 @@ struct ExportIssuePresentationTests {
 
   @Test func retrySelectionRequiresTheCurrentFailedAttempt() throws {
     let current = issue(.iCloudTransient)
+    #expect(current.showsRetry)
+    #expect(!issue(nil).showsRetry)
+    #expect(!issue(.iCloudTransient, reason: .pairedVideoUnavailable).showsRetry)
     let selected = try #require(current.retrySelection(in: [current]))
     #expect(selected.scope == .timeline && selected.variant == .original)
     #expect(selected.retry == current.retry)
