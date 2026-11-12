@@ -13,7 +13,7 @@ EXISTING = ['/Users/offline/Library/Keychains/login with spaces.keychain-db',
 
 
 class KeychainSetupTests(unittest.TestCase):
-    def run_setup(self, channel):
+    def run_setup(self, channel, existing=EXISTING):
         with tempfile.TemporaryDirectory(prefix='keychain fixture ') as temporary:
             root = Path(temporary)
             runner = root / 'runner space'
@@ -51,7 +51,7 @@ elif name == "security" and args[0] == "find-identity":
                 executable.chmod(0o755)
             environment = dict(PATH=str(binaries), RUNNER_TEMP=str(runner),
                                GITHUB_ENV=str(root / 'environment'), CALLS=str(root / 'calls'),
-                               FAKE_PASSWORD=PASSWORD, EXISTING=json.dumps(EXISTING),
+                               FAKE_PASSWORD=PASSWORD, EXISTING=json.dumps(existing),
                                UNEXPECTED=str(root / 'unexpected'))
             environment.update({name: 'b2ZmbGluZQ==' for name in [
                 'CERTIFICATE_P12_BASE64', 'CERTIFICATE_PASSWORD', 'APPLE_ID',
@@ -69,7 +69,7 @@ elif name == "security" and args[0] == "find-identity":
             exported = dict(line.split('=', 1) for line in (root / 'environment').read_text().splitlines())
             search = [call for call in calls if call[:5] == ['security', 'list-keychains', '-d', 'user', '-s']]
             self.assertEqual(search, [['security', 'list-keychains', '-d', 'user', '-s',
-                                       exported['KEYCHAIN_PATH'], *EXISTING]])
+                                       exported['KEYCHAIN_PATH'], *existing]])
             self.assertTrue(exported['KEYCHAIN_PATH'].startswith(str(runner) + '/'))
             lines = result.stdout.splitlines()
             mask = f'::add-mask::{PASSWORD}'
@@ -79,5 +79,12 @@ elif name == "security" and args[0] == "find-identity":
             self.assertNotIn(PASSWORD, result.stderr)
             self.assertEqual(exported['KEYCHAIN_PASSWORD'], PASSWORD)
 
-    def test_appstore_preserves_complete_search_paths_and_masks_password(self):
-        self.run_setup('appstore')
+    def test_setup_preserves_complete_search_paths_and_masks_password(self):
+        for channel in ['appstore', 'direct']:
+            with self.subTest(channel=channel):
+                self.run_setup(channel)
+
+    def test_empty_search_list_keeps_the_new_keychain(self):
+        for channel in ['appstore', 'direct']:
+            with self.subTest(channel=channel):
+                self.run_setup(channel, existing=[])

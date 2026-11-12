@@ -13,7 +13,7 @@ fi
 
 FILES=$(xcrun xccov view --archive --file-list "$XCRESULT")
 
-> "$OUTPUT"
+: > "$OUTPUT"
 
 while IFS= read -r filepath; do
   # Skip test files

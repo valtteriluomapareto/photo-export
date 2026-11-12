@@ -76,6 +76,8 @@ matches="$(scan photo-export)"
 if [[ -n "$matches" ]]; then
   echo
   echo "  FORBIDDEN: per-destination keying must use the stable id, not fingerprint?.id."
+  # Indent each result line; scalar prefix replacement would only indent the first.
+  # shellcheck disable=SC2001
   echo "$matches" | sed 's/^/    /'
   echo
   echo "  Key on the stable logical id instead (identity.stableId / snapshot.id /"

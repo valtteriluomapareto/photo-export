@@ -95,14 +95,7 @@ jobs:
 
       - name: Print build and test failure diagnostics
         if: failure()
-        run: |
-          for log in debug-build.log debug-werror-build.log test.log release-build.log; do
-            if [[ -f "$log" ]]; then
-              echo "::group::Failure diagnostics: $log"
-              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
-              echo "::endgroup::"
-            fi
-          done
+        run: bash scripts/ci/print-failure-diagnostics.sh
 
       - name: Collect test process diagnostics
         if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}

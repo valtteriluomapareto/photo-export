@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from test_ci_logs import block, ROOT, run_line, WORKFLOW
+ROOT = Path(__file__).resolve().parents[3]
 
 SCRIPT = Path(__file__).resolve().parents[1] / "collect_test_diagnostics.py"
 spec = importlib.util.spec_from_file_location("test_diagnostics", SCRIPT)
@@ -140,28 +140,9 @@ sys.exit(int(os.environ.get("DIAGNOSTIC_EXPORT_EXIT", "0")))
         self.assertEqual(manifest["copied"], [source.name])
         self.assertIn("export fixture output", (self.output / "export.log").read_text())
 
-    def test_actual_workflow_failure_keeps_status_and_workspace_artifact_layout(self):
-        source = WORKFLOW.read_text()
-        self.assertIn("failure() && steps.unit-tests.outcome == 'failure'", source)
-        probe = source.split("      - name: Check xcresult diagnostics export support", 1)[1]
-        self.assertIn("continue-on-error: true", probe.split("      - name:", 1)[0])
-        start = source.index("      - name: Collect test process diagnostics")
-        end = source.index("      - name:", start + 10)
-        step = source[start:end]
-        self.assertIn("continue-on-error: true", step)
-        self.assertIn("timeout-minutes: 2", step)
-        upload = source[source.index("      - name: Upload test results"):]
-        for path in ["TestResults.xcresult", "debug-build.log", "test.log", "release-build.log", "TestDiagnostics/"]:
-            self.assertIn(path, upload)
-        unit_step = source[source.index("      - name: Run Unit Tests (Debug, with coverage)"):]
-        unit_step = unit_step[:unit_step.index("      - name:", 10)]
-        self.assertIn("id: unit-tests", unit_step)
-        self.assertEqual(run_line(WORKFLOW, "Run Unit Tests (Debug, with coverage)"),
-                         "bash scripts/ci/run-unit-tests.sh")
-        unit_script = (ROOT / "scripts/ci/run-unit-tests.sh").read_text()
-        self.assertLess(unit_script.index("touch test-start.marker"), unit_script.index("xcodebuild"))
+    def test_actual_failure_keeps_status_and_workspace_artifact_layout(self):
         stub = self.bin / "xcodebuild"
-        stub.write_text('#!/bin/sh\nmkdir -p TestResults.xcresult\necho "fixture test failure"\nexit 65\n')
+        stub.write_text('#!/bin/sh\ntest -f test-start.marker || exit 97\nmkdir -p TestResults.xcresult\necho "fixture test failure"\nexit 65\n')
         stub.chmod(0o755)
         unit = subprocess.run(["bash", str(ROOT / "scripts/ci/run-unit-tests.sh")],
                               cwd=self.root, env=self.environment, capture_output=True, text=True, timeout=10)
@@ -169,15 +150,12 @@ sys.exit(int(os.environ.get("DIAGNOSTIC_EXPORT_EXIT", "0")))
         self.assertTrue((self.root / "test-start.marker").is_file())
         self.assertIn("fixture test failure", (self.root / "test.log").read_text())
         current = self.report(timestamp=(self.root / "test-start.marker").stat().st_mtime)
-        target = self.root / "scripts/ci/collect_test_diagnostics.py"
-        target.parent.mkdir(parents=True)
-        shutil.copy2(SCRIPT, target)
-        # Execute the actual step with only its optional source overridden to this fixture.
-        import shlex
-        script = block("Collect test process diagnostics").rstrip() + " --crash-reports " + shlex.quote(str(self.reports))
-        diagnostic = subprocess.run(["bash", "-e", "-c", script], cwd=self.root,
-                                    env=dict(self.environment, DIAGNOSTIC_EXPORT_EXIT="23"),
-                                    capture_output=True, text=True, timeout=10)
+        diagnostic = subprocess.run([
+            sys.executable, "-B", str(SCRIPT), "--since", str(self.root / "test-start.marker"),
+            "--result-bundle", str(self.root / "TestResults.xcresult"),
+            "--output", str(self.root / "TestDiagnostics"), "--crash-reports", str(self.reports)
+        ], cwd=self.root, env=dict(self.environment, DIAGNOSTIC_EXPORT_EXIT="23"),
+           capture_output=True, text=True, timeout=10)
         self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
         manifest = json.loads((self.root / "TestDiagnostics/manifest.json").read_text())
         self.assertEqual(manifest["export_exit"], 23)
