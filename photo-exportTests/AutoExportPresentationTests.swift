@@ -87,7 +87,8 @@ struct AutoExportPresentationTests {
     func summary(result: ExportRunResult, failures: Int) -> ExportRunSummary {
       .init(
         context: .init(
-          source: .autoSync, visibility: .background, scope: .timelineFullLibrary, selection: .edited),
+          source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+          selection: .edited),
         endedAt: .distantPast, enqueuedCount: 5, completedCount: 3, failedCount: failures,
         skippedCount: 2, cancelReason: nil, result: result)
     }
