@@ -246,6 +246,50 @@ struct RecordStoreAsyncLoadTests {
     #expect(f.finishedLoads == restart + 3)
   }
 
+  /// Unlike a read held before decoding, admission holds this load after its history and
+  /// filename claims are prepared. A newer configure must reject that completed result.
+  @Test(arguments: [false, true])
+  func alreadyPreparedLoadCannotReplaceNewerConfiguration(collection: Bool) async throws {
+    let f = Fixture(collection: collection)
+    let gate = AsyncCheckpoint()
+    let admission = collection ? f.collections.mutationAdmission : f.timeline.mutationAdmission
+    var maintenance: Task<Void, Never>?
+    try await withCleanup {
+      try await f.seed("A", ["a1": "A1.JPG"])
+      await f.configure(nil)
+      let snapshot = f.url("A", snapshot: true)
+      f.io.hold(snapshot, fromRead: f.io.readCount(of: snapshot) + 1)
+      let start = f.finishedLoads
+      f.begin("A")
+      try #require(await eventually("the snapshot read is held") { f.io.heldCount == 1 })
+      maintenance = admission.requestCheckpoint {
+        await gate.enter()
+        admission.installAfterMaintenance { f.begin(nil) }
+      }
+      try #require(await gate.waitForEnter(count: 1))
+      f.io.release(snapshot)
+      try #require(
+        await eventually("the prepared load waits for mutation admission") {
+          admission.pendingWaiterCount == 1
+        })
+      await gate.releaseAll()
+      await maintenance?.value
+      try #require(
+        await eventually("the obsolete prepared load finishes") {
+          f.finishedLoads == start + 1
+        })
+      #expect(f.state == .unconfigured)
+      #expect(f.destinationId == nil)
+      #expect(f.filename("a1") == nil)
+      #expect(!f.isClaimed("A1.JPG"))
+    } cleanup: {
+      f.io.releaseAll()
+      await gate.releaseAll()
+      await maintenance?.value
+      f.cleanup()
+    }
+  }
+
   enum SupersedingConfigure: CaseIterable, Sendable {
     case clearedAsync, clearedBlocking, otherDestinationBlocking, otherDestinationAsync,
       waiterCancelled
@@ -558,8 +602,19 @@ struct RecordStoreAsyncLoadTests {
     try await f.seed("A", ["a1": "A1.JPG"])
     await f.configure(nil)
     let log = f.url("A", snapshot: false)
+    let queue = DispatchQueue(label: "RecordStoreAsyncLoad.reload")
+    let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
+    let timelineFile = {
+      ExportRecordStore.RecordFile(
+        snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger)
+    }
+    let collectionFile = {
+      CollectionExportRecordStore.RecordFile(
+        snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger)
+    }
+    let timelineOps = collection ? [] : await timelineFile().load().ops
+    let collectionOps = collection ? await collectionFile().load().ops : []
     var bytes = try Data(contentsOf: log)
-    let completeLines = bytes.split(separator: 0x0A).count
     switch tail {
     case .completeLineWithoutLF:
       #expect(bytes.last == 0x0A)
@@ -578,29 +633,22 @@ struct RecordStoreAsyncLoadTests {
     let written = try Data(contentsOf: log)
     #expect(written.starts(with: bytes + Data([0x0A])))
     #expect(written.last == 0x0A)
-    let malformed: Int
-    let ops: Int
-    let queue = DispatchQueue(label: "RecordStoreAsyncLoad.reload")
-    let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
-    if collection {
-      let reload =
-        (await CollectionExportRecordStore.RecordFile(
-          snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
-        ).load())
-      (malformed, ops) = (reload.malformedLineCount, reload.ops.count)
-    } else {
-      let reload =
-        (await ExportRecordStore.RecordFile(
-          snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
-        ).load())
-      (malformed, ops) = (reload.malformedLineCount, reload.ops.count)
-    }
-    #expect(ops == completeLines + 1)
-    #expect(malformed == (tail == .partialLine ? 1 : 0))
     await f.configure("B")
     await f.configure("A")
     #expect(f.filename("a1") == "A1.JPG")
     #expect(f.filename("a2") == "A2.JPG")
+    // The damaged tail is skipped and the new line replays after every earlier one. The
+    // expected record is the reloaded one, since the log stores whole-second dates.
+    if collection {
+      let body = try #require(f.collections.recordBodies[f.placement.id]?["a2"])
+      #expect(
+        await collectionFile().load().ops
+          == collectionOps + [.upsertRecord(placementId: f.placement.id, assetId: "a2", body: body)]
+      )
+    } else {
+      let record = try #require(f.timeline.exportInfo(assetId: "a2"))
+      #expect(await timelineFile().load().ops == timelineOps + [.upsert(record)])
+    }
   }
 
   // MARK: - Notifications

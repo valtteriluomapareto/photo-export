@@ -47,7 +47,6 @@ struct JSONLRecordFileTests {
     let result = (await file.load())
     #expect(result.snapshot == nil)
     #expect(result.ops.isEmpty)
-    #expect(result.malformedLineCount == 0)
   }
 
   // MARK: - Append + load roundtrip
@@ -65,12 +64,11 @@ struct JSONLRecordFileTests {
     let result = (await file.load())
     #expect(result.snapshot == nil)  // neither append crossed the threshold
     #expect(result.ops == [op1, op2])
-    #expect(result.malformedLineCount == 0)
   }
 
   // MARK: - Malformed lines
 
-  @Test func loadSkipsMalformedLinesAndCountsThem() async throws {
+  @Test func loadSkipsMalformedLines() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -90,7 +88,6 @@ struct JSONLRecordFileTests {
 
     let result = (await file.load())
     #expect(result.ops == [op, op2])
-    #expect(result.malformedLineCount == 1)
   }
 
   // MARK: - writeSnapshot
@@ -161,7 +158,6 @@ struct JSONLRecordFileTests {
         Operation(kind: .upsert, key: "a", value: "1"),
         Operation(kind: .upsert, key: "b", value: "2"),
       ])
-    #expect(result.malformedLineCount == 0)
   }
 
   @Test func loadSkipsConsecutiveBlankLines() async throws {
@@ -188,7 +184,6 @@ struct JSONLRecordFileTests {
         Operation(kind: .upsert, key: "a", value: "1"),
         Operation(kind: .upsert, key: "b", value: "2"),
       ])
-    #expect(result.malformedLineCount == 0)
   }
 
   @Test func loadHandlesZeroByteLogFile() async throws {
@@ -205,7 +200,6 @@ struct JSONLRecordFileTests {
 
     let result = (await file.load())
     #expect(result.ops.isEmpty)
-    #expect(result.malformedLineCount == 0)
   }
 
   // MARK: - Compaction trigger

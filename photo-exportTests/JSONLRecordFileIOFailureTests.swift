@@ -169,7 +169,6 @@ struct JSONLRecordFileIOFailureTests {
 
     let loaded = (await makeFile(at: directory).load())
     #expect(loaded.ops == [op])
-    #expect(loaded.malformedLineCount == 1)
     #expect(loaded.ioFailure == nil)
   }
 

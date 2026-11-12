@@ -3,7 +3,8 @@ import Foundation
 @testable import Photo_Export
 
 /// A `JSONLRecordLogIO` that holds chosen file reads until the test releases them, so a test can
-/// look at a record store while its load is still running. Reads go to the real files.
+/// look at a record store while its load is still running. Reads go to `inner`, the real files by
+/// default.
 ///
 /// The hold has no deadline; the enclosing test's `.timeLimit` is the backstop. A read on the main
 /// thread is recorded in `mainThreadReads` and never held, since holding it would block the test
@@ -12,7 +13,7 @@ import Foundation
 /// A held read blocks the store's IO queue, and so does anything that waits for that queue, such as
 /// `drainSynchronously()` or a destination switch. Teardown must call `releaseAll()` before flushing.
 final class HeldReadIO: JSONLRecordLogIO, @unchecked Sendable {
-  private let production = ProductionJSONLRecordLogIO()
+  private let inner: any JSONLRecordLogIO
   private let condition = NSCondition()
   /// The first read of each URL that is held, counting from 1.
   private var holds: [URL: Int] = [:]
@@ -20,6 +21,10 @@ final class HeldReadIO: JSONLRecordLogIO, @unchecked Sendable {
   private var heldNow: [URL] = []
   private var isShutdown = false
   private var mainReads: [URL] = []
+
+  init(inner: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) {
+    self.inner = inner
+  }
 
   /// Holds reads of `url` from its `occurrence`-th read on (counting every read so far), until
   /// `release(_:)`.
@@ -67,18 +72,18 @@ final class HeldReadIO: JSONLRecordLogIO, @unchecked Sendable {
       if let index = heldNow.firstIndex(of: url) { heldNow.remove(at: index) }
     }
     condition.unlock()
-    return try production.readIfPresent(at: url)
+    return try inner.readIfPresent(at: url)
   }
 
   func openForAppending(at url: URL) throws -> FileHandle {
-    try production.openForAppending(at: url)
+    try inner.openForAppending(at: url)
   }
 
   func write(_ data: Data, to handle: FileHandle) throws {
-    try production.write(data, to: handle)
+    try inner.write(data, to: handle)
   }
 
   func synchronize(_ handle: FileHandle) throws {
-    try production.synchronize(handle)
+    try inner.synchronize(handle)
   }
 }
