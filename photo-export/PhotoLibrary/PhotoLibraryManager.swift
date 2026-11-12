@@ -95,12 +95,11 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// Errors that can occur in the Photo Library Manager
   enum PhotoLibraryError: Error {
     case authorizationDenied
-    case fetchFailed
     case assetUnavailable
   }
 
   /// Long-lived cache of PHAsset objects keyed by `localIdentifier`. Populated
-  /// additively by `cacheAssets(_:)` from `fetchAssets(in:)`. Cleared by
+  /// additively by `cacheAssets(_:)` from `fetchAssetsProgressive`. Cleared by
   /// `invalidateCache()` (library change) or `forgetPHAssetCache()`
   /// (per-iteration drops in `ExportManager.runBulkEnqueueLoop`).
   @ObservationIgnored
@@ -505,48 +504,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
 
   // MARK: - Asset Fetching (PhotoLibraryService)
 
-  func fetchAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil) async throws
-    -> [AssetDescriptor]
-  {
-    // Forward through the scope-aware overload below — that's where the override
-    // dispatch happens. (Going through the override directly here would still work
-    // but would double-dispatch when the override is nil; the scope path is the
-    // canonical entry.)
-    try await fetchAssets(in: .timeline(year: year, month: month), mediaType: mediaType)
-  }
-
-  /// Generic scope-based asset fetch. The timeline path goes through the existing
-  /// `fetchPHAssets(year:month:mediaType:)`; collection scopes (`.favorites`, `.album`)
-  /// build a fetch with the appropriate predicate or use the album's
-  /// `PHAssetCollection`. Hidden assets stay excluded by default; sort is by
-  /// `creationDate` ascending for deterministic output (matches existing timeline
-  /// behavior).
-  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
-  {
-    if let s = overrideService {
-      return try await s.fetchAssets(in: scope, mediaType: mediaType)
-    }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
-    let useResourceFallback = livePhotoDetectionFallbackEnabled
-    switch scope {
-    case .timeline(let year, let month):
-      let phAssets = try await fetchPHAssets(year: year, month: month, mediaType: mediaType)
-      cacheAssets(phAssets)
-      return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
-    case .favorites:
-      let phAssets = fetchFavoritesPHAssets(mediaType: mediaType)
-      cacheAssets(phAssets)
-      return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
-    case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
-      // Shared albums enumerate identically to user albums; the only difference is the
-      // `PHAssetCollection.assetCollectionSubtype` we surfaced in the tree.
-      let phAssets = fetchAlbumPHAssets(collectionLocalId: collectionLocalId, mediaType: mediaType)
-      cacheAssets(phAssets)
-      return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
-    }
-  }
-
   /// Streams the asset list for `scope` in `batchSize`-sized chunks. Runs the
   /// `PHFetchResult` enumeration off-main; PHAsset caching and descriptor
   /// mapping fold into a single main-actor hop per batch. PhotoKit allows
@@ -579,23 +536,11 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
         let ticket = await MainActor.run {
           self.queryObservations.ticket(for: query, revision: self.libraryRevision)
         }
-        let result: PHFetchResult<PHAsset>
-        switch scope {
-        case .timeline, .favorites:
-          let opts = Self.fetchOptions(for: scope)
-          Self.applyMediaTypeFilter(mediaType, to: opts)
-          result = PHAsset.fetchAssets(with: opts)
-        case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
-          guard
-            let collection = Self.fetchAssetCollection(
-              localIdentifier: collectionLocalId)
-          else {
-            continuation.finish()
-            return
-          }
-          let opts = Self.fetchOptions(for: scope)
-          Self.applyMediaTypeFilter(mediaType, to: opts)
-          result = PHAsset.fetchAssets(in: collection, options: opts)
+        let opts = Self.fetchOptions(for: scope)
+        Self.applyMediaTypeFilter(mediaType, to: opts)
+        guard let result = Self.fetchResult(for: scope, options: opts) else {
+          continuation.finish()
+          return
         }
 
         if let ticket {
@@ -663,17 +608,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     try await requireLiveAuthorizationAsync()
     return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let opts = Self.fetchOptions(for: scope)
-      switch scope {
-      case .timeline, .favorites:
-        try Task.checkCancellation()
-        return PHAsset.fetchAssets(with: opts).count
-      case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
-        try Task.checkCancellation()
-        guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
-        else { return 0 }
-        return PHAsset.fetchAssets(in: collection, options: opts).count
-      }
+      return Self.fetchResult(for: scope, options: Self.fetchOptions(for: scope))?.count ?? 0
     }
   }
 
@@ -734,18 +669,8 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     try await requireLiveAuthorizationAsync()
     return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let opts = Self.fetchOptions(for: scope)
-      let result: PHFetchResult<PHAsset>
-      switch scope {
-      case .timeline, .favorites:
-        try Task.checkCancellation()
-        result = PHAsset.fetchAssets(with: opts)
-      case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
-        try Task.checkCancellation()
-        guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
-        else { return 0 }
-        result = PHAsset.fetchAssets(in: collection, options: opts)
-      }
+      guard let result = Self.fetchResult(for: scope, options: Self.fetchOptions(for: scope))
+      else { return 0 }
       var count = 0
       // Stop iteration when the task is cancelled. PHFetchResult.enumerateObjects' stop
       // pointer is the documented way to abort early.
@@ -1054,61 +979,21 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     return opts
   }
 
-  nonisolated static func fetchAssetCollection(localIdentifier: String)
-    -> PHAssetCollection?
+  /// The assets of `scope`, or nil when its album no longer exists.
+  nonisolated static func fetchResult(for scope: PhotoFetchScope, options: PHFetchOptions)
+    -> PHFetchResult<PHAsset>?
   {
-    let result = PHAssetCollection.fetchAssetCollections(
-      withLocalIdentifiers: [localIdentifier], options: nil)
-    return result.firstObject
-  }
-
-  /// Fetches Favorites contents on the main actor (used by `fetchAssets(in:)` to populate
-  /// the asset cache). Counts go through the detached `countAssets(in:)` path instead.
-  private func fetchFavoritesPHAssets(mediaType: PHAssetMediaType?) -> [PHAsset] {
-    let opts = Self.fetchOptions(for: .favorites)
-    if let mediaType = mediaType {
-      let mediaPredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
-      opts.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-        opts.predicate ?? NSPredicate(value: true), mediaPredicate,
-      ])
+    switch scope {
+    case .timeline, .favorites:
+      return PHAsset.fetchAssets(with: options)
+    case .album(let id), .sharedAlbum(let id):
+      guard
+        let collection = PHAssetCollection.fetchAssetCollections(
+          withLocalIdentifiers: [id], options: nil
+        ).firstObject
+      else { return nil }
+      return PHAsset.fetchAssets(in: collection, options: options)
     }
-    let result = PHAsset.fetchAssets(with: opts)
-    var assets: [PHAsset] = []
-    // Index-based form (not `enumerateObjects`) so `autoreleasepool` wraps
-    // `result.object(at:)` — that's where the autoreleased Obj-C temporaries
-    // are minted. A pool inside `enumerateObjects`'s closure drains only the
-    // user-side body, not PhotoKit's allocation.
-    for index in 0..<result.count {
-      autoreleasepool {
-        assets.append(result.object(at: index))
-      }
-    }
-    return assets
-  }
-
-  /// Fetches one user album's contents.
-  private func fetchAlbumPHAssets(collectionLocalId: String, mediaType: PHAssetMediaType?)
-    -> [PHAsset]
-  {
-    guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId) else {
-      return []
-    }
-    let opts = Self.fetchOptions(for: .album(collectionId: collectionLocalId))
-    if let mediaType = mediaType {
-      let mediaPredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
-      opts.predicate = mediaPredicate
-    }
-    let result = PHAsset.fetchAssets(in: collection, options: opts)
-    var assets: [PHAsset] = []
-    // See `fetchFavoritesPHAssets` above for why this uses the index-based
-    // form with `autoreleasepool` wrapping `result.object(at:)` rather than
-    // `enumerateObjects { ... }`.
-    for index in 0..<result.count {
-      autoreleasepool {
-        assets.append(result.object(at: index))
-      }
-    }
-    return assets
   }
 
   // MARK: - Collection tree
@@ -1269,79 +1154,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
       )
     }
     return nil
-  }
-
-  /// Fetch raw PHAssets for a specific year and month
-  private func fetchPHAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil)
-    async throws -> [PHAsset]
-  {
-    guard isAuthorized else {
-      throw PhotoLibraryError.authorizationDenied
-    }
-
-    // Create date predicates for filtering
-    let calendar = Calendar.current
-    var startDateComponents = DateComponents()
-    startDateComponents.year = year
-    startDateComponents.month = month ?? 1
-    startDateComponents.day = 1
-
-    var endDateComponents = DateComponents()
-    endDateComponents.year = month == nil ? year + 1 : year
-    endDateComponents.month = month == nil ? 1 : (month! + 1)
-    endDateComponents.day = 1
-
-    guard let startDate = calendar.date(from: startDateComponents),
-      let endDate = calendar.date(from: endDateComponents)
-    else {
-      throw PhotoLibraryError.fetchFailed
-    }
-
-    // Create fetch options
-    let fetchOptions = PHFetchOptions()
-
-    // Create date predicate
-    fetchOptions.predicate = NSPredicate(
-      format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate,
-      endDate as NSDate)
-
-    // Add media type filter if specified
-    if let mediaType = mediaType {
-      let mediaTypePredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
-
-      if let existingPredicate = fetchOptions.predicate {
-        fetchOptions.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-          existingPredicate, mediaTypePredicate,
-        ])
-      } else {
-        fetchOptions.predicate = mediaTypePredicate
-      }
-    }
-
-    fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-
-    // Fetch assets
-    let fetchResult = PHAsset.fetchAssets(with: fetchOptions)
-    var assets: [PHAsset] = []
-
-    // batchSize 100 (down from 500) for 5× more frequent main-thread yields
-    // during the AutoSync startup sweep. Memory is bounded by
-    // the autoreleasepool below; this only controls yield frequency.
-    let totalAssets = fetchResult.count
-    let batchSize = 100
-
-    for index in 0..<totalAssets {
-      autoreleasepool {
-        assets.append(fetchResult.object(at: index))
-      }
-
-      // Yield to main thread periodically
-      if index % batchSize == 0 && index > 0 {
-        try? await Task.sleep(nanoseconds: 1_000_000)  // 1ms
-      }
-    }
-
-    return assets
   }
 
   /// Defaults `useResourceFallback: false` so the cheap path (subtype-flag only) runs

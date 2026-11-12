@@ -33,12 +33,6 @@ final class RecordingPhotoLibraryService: PhotoLibraryService, ThumbnailReading 
     record("requestAuthorization")
     return true
   }
-  func fetchAssets(year: Int, month: Int?, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
-  {
-    record("fetchAssets(year:month:mediaType:)")
-    return []
-  }
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
     record("fetchAssetDescriptor(for:)")
     return nil
@@ -59,12 +53,6 @@ final class RecordingPhotoLibraryService: PhotoLibraryService, ThumbnailReading 
   }
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     record("availableYearsWithCounts()")
-    return []
-  }
-  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
-  {
-    record("fetchAssets(in:mediaType:)")
     return []
   }
   nonisolated func fetchAssetsProgressive(

@@ -9,8 +9,6 @@ protocol PhotoLibraryService: AnyObject, Sendable {
   var authorizationStatus: PHAuthorizationStatus { get }
 
   func requestAuthorization() async -> Bool
-  func fetchAssets(year: Int, month: Int?, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor?
 
   func availableYears() throws -> [Int]
@@ -24,18 +22,11 @@ protocol PhotoLibraryService: AnyObject, Sendable {
 
   // MARK: - Collections
 
-  /// Fetches assets in a `PhotoFetchScope`. Used by both the timeline grid and the
-  /// collection grids; the existing `fetchAssets(year:month:mediaType:)` becomes a
-  /// wrapper around the `.timeline` case.
-  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
-
-  /// Streams assets in batches for the given scope. Implementations may emit a
-  /// single batch for small fetches and multiple batches for large ones; the
-  /// union of all yielded batches equals what `fetchAssets(in:mediaType:)`
-  /// would return. The stream finishes when enumeration is complete (or the
-  /// caller's Task is cancelled). Throws the same errors `fetchAssets`
-  /// would throw — typically `authorizationDenied` or a fetch failure.
+  /// Streams a scope's assets in batches of at most `batchSize`; a small scope may arrive as
+  /// one batch. `PhotoLibraryManager` yields them by creation date, oldest first. The stream
+  /// finishes when enumeration completes, and also, silently, when the caller's task is
+  /// cancelled, so a caller collecting a whole scope checks cancellation afterwards. Throws
+  /// `authorizationDenied` without Photos access.
   nonisolated func fetchAssetsProgressive(
     in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int
   ) -> AsyncThrowingStream<[AssetDescriptor], any Error>
@@ -103,9 +94,5 @@ extension PhotoLibraryService {
 
   func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor] {
     try await thumbnailReader.coverThumbnails(in: scope, limit: limit).map(\.descriptor)
-  }
-
-  func fetchAssets(year: Int, month: Int?) async throws -> [AssetDescriptor] {
-    try await fetchAssets(year: year, month: month, mediaType: nil)
   }
 }

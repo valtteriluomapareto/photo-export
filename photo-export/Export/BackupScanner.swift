@@ -412,7 +412,9 @@ struct BackupScanner {
         if assetsByYearMonth[k] == nil {
           try Task.checkCancellation()
           await progress(.readingPhotosLibrary)
-          let assets = (try? await photoLibraryService.fetchAssets(year: y, month: m)) ?? []
+          let assets =
+            (try? await collectAssets(in: .timeline(year: y, month: m), from: photoLibraryService))
+            ?? []
           assetsByYearMonth[k] = assets
           // Build fingerprints once — this is the only resource call site
           fingerprintsByYearMonth[k] = await cache.fingerprints(
@@ -456,6 +458,22 @@ struct BackupScanner {
       "Match complete: \(result.matched.count) matched, \(result.ambiguous.count) ambiguous, \(result.unmatched.count) unmatched"
     )
     return result
+  }
+
+  /// Every asset in `scope`, collected from the progressive fetch. The stream finishes
+  /// silently when the task is cancelled, so the final check keeps a cancelled read from
+  /// passing for the whole scope.
+  static func collectAssets(
+    in scope: PhotoFetchScope, from photoLibraryService: any PhotoLibraryService
+  ) async throws -> [AssetDescriptor] {
+    var assets: [AssetDescriptor] = []
+    for try await batch in photoLibraryService.fetchAssetsProgressive(
+      in: scope, mediaType: nil, batchSize: 200)
+    {
+      assets.append(contentsOf: batch)
+    }
+    try Task.checkCancellation()
+    return assets
   }
 
   /// Returns (year, month) tuples for a month and its two neighbors.

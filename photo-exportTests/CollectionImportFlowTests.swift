@@ -46,6 +46,11 @@ struct CollectionImportFlowTests {
     return h
   }
 
+  /// The scopes read other than timeline months, which Import reads the same way.
+  private func collectionReads(_ h: CollectionImportHarness) -> [PhotoFetchScope] {
+    h.library.scopeFetchCalls.filter { if case .timeline = $0 { false } else { true } }
+  }
+
   @Test func importAdoptsAnAssetIntoBothTheTimelineAndItsAlbum() async throws {
     let h = try await makeScenario("CollectionImportBoth")
     await h.importBackup()
@@ -129,7 +134,7 @@ struct CollectionImportFlowTests {
     let report = try #require(h.manager.importResult)
     #expect(report.collectionsSkipped)
     #expect(report.collectionMatchedCount == 0)
-    #expect(h.library.scopeFetchCalls.isEmpty, "albums are not read when they can't be recorded")
+    #expect(collectionReads(h).isEmpty, "albums are not read when they can't be recorded")
     await h.cleanup()
   }
 
@@ -422,7 +427,7 @@ struct CollectionImportFlowTests {
     await gate.releaseAll()
     _ = await finished(task)
 
-    #expect(h.library.scopeFetchCalls == [.album(collectionId: "paris")])
+    #expect(collectionReads(h) == [.album(collectionId: "paris")])
     #expect(h.library.resourcesCallCounts["paris-only"] == nil)
     #expect(h.manager.importResult == nil)
     #expect(h.historyBytes() == before)

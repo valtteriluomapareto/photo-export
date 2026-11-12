@@ -36,10 +36,15 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
       !years.isEmpty,
       "screenshot mode must surface curated years; an empty list means the override didn't take")
     let firstYear = try #require(years.first)
-    let yearAssets = try await svc.fetchAssets(year: firstYear, month: nil, mediaType: nil)
+    var yearAssets: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .timeline(year: firstYear, month: nil), mediaType: nil, batchSize: 200)
+    {
+      yearAssets += batch
+    }
     #expect(
       !yearAssets.isEmpty,
-      "fetchAssets(year:month:) must return curated synthetic assets, not an empty production result"
+      "the timeline scope must return curated synthetic assets, not an empty production result"
     )
   }
 
@@ -91,7 +96,12 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func fetchAssetsInFavoritesScopeReturnsCuratedFavorites() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let favs = try await svc.fetchAssets(in: .favorites, mediaType: nil)
+    var favs: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .favorites, mediaType: nil, batchSize: 200)
+    {
+      favs += batch
+    }
     #expect(
       !favs.isEmpty,
       "favorites scope must surface curated synthetic favorites, not empty production result")
@@ -103,7 +113,12 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let firstAlbum = tree.first { $0.kind == .album }
     let albumId = try #require(
       firstAlbum?.localIdentifier, "Curated tree must contain at least one album")
-    let assets = try await svc.fetchAssets(in: .album(collectionId: albumId), mediaType: nil)
+    var assets: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .album(collectionId: albumId), mediaType: nil, batchSize: 200)
+    {
+      assets += batch
+    }
     #expect(!assets.isEmpty)
   }
 

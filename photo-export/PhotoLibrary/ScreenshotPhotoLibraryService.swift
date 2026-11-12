@@ -185,12 +185,6 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
 
   // MARK: - PhotoLibraryService overrides — timeline reads
 
-  func fetchAssets(
-    year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil
-  ) async throws -> [AssetDescriptor] {
-    Self.timelineIds(year: year, month: month).map(Self.makeDescriptor(id:))
-  }
-
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
     Self.makeDescriptor(id: assetId)
   }
@@ -222,13 +216,13 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
 
   // MARK: - PhotoLibraryService overrides — collections
 
-  func fetchAssets(
+  private func fetchAssets(
     in scope: PhotoFetchScope, mediaType: PHAssetMediaType?
   ) async throws -> [AssetDescriptor] {
     let ids: [String]
     switch scope {
     case .timeline(let year, let month):
-      return try await fetchAssets(year: year, month: month, mediaType: mediaType)
+      ids = Self.timelineIds(year: year, month: month)
     case .favorites:
       ids = Self.favoriteAssetIds
     case .album(let collectionId), .sharedAlbum(let collectionId):

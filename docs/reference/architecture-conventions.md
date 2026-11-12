@@ -758,10 +758,9 @@ Without access PhotoKit returns empty results, not an error. So `PhotoLibraryMan
 one rule for live versus cached reads: scan entry points that could otherwise report an
 empty library as complete read the live status (`fetchAssetsProgressive`,
 `availableYearsWithCounts`, and `loadCollectionTree` on a cache miss), as do the scope
-counts `countAssets(in:)` and `countAdjustedAssets(in:)`; Import's whole-scope
-`fetchAssets(in:)` reads the cached `isAuthorized`. A revoke inside a scope fails it at its
-next fetch, and a live denial while the cached flag is still set refreshes that flag, so the
-main window switches and Auto Export blocks at once.
+counts `countAssets(in:)` and `countAdjustedAssets(in:)`. A revoke inside a scope fails it
+at its next fetch, and a live denial while the cached flag is still set refreshes that flag,
+so the main window switches and Auto Export blocks at once.
 `ExportManager`'s enqueue guards read the service's cached `isAuthorized`; the fetch that
 follows each guard is the live check. A cached collection tree is returned without the live
 check, which keeps the album sidebar during the stale window; every collection scan still

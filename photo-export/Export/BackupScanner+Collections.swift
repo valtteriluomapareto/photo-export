@@ -176,8 +176,8 @@ extension BackupScanner {
         library = cached
       } else {
         await progress(.readingPhotosLibrary)
-        let assets = try await photoLibraryService.fetchAssets(
-          in: candidate.target.scope, mediaType: nil)
+        let assets = try await collectAssets(
+          in: candidate.target.scope, from: photoLibraryService)
         try Task.checkCancellation()
         guard await isCurrent() else { throw CancellationError() }
         var fingerprints = await fingerprintCache.fingerprints(

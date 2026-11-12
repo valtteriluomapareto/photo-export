@@ -420,9 +420,7 @@ struct PhotoKitReaderTests {
 
   @Test func screenshotThumbnailReaderStaysSyntheticForUnknownIdentifiers() async throws {
     let service = ScreenshotPhotoLibraryService()
-    let year = try #require(try service.availableYears().first)
-    let asset = try #require(
-      try await service.fetchAssets(year: year, month: nil, mediaType: nil).first)
+    let asset = try #require(service.fetchAssetDescriptor(for: "family-1"))
     let reader = service.thumbnailReader
     let handle = try #require(await reader.resolveAssets(ids: [asset.id]).first)
     #expect(handle.photoKitAsset == nil)
