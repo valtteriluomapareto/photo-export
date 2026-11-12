@@ -10,6 +10,19 @@ import Testing
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct AutoExportSettingsSheetTests {
+    private final class RenderTick: ObservableObject {
+      @Published var value = 0
+    }
+
+    private struct RenderWitness: View {
+      @ObservedObject var tick: RenderTick
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("settings-render:\(tick.value)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
     private func expectHeader(_ title: String, in window: NSWindow) async throws {
       try #require(await observe(in: window) { window.attachedSheet != nil })
       let sheet = try #require(window.attachedSheet)
@@ -20,7 +33,12 @@ import Testing
     }
 
     private func press(_ title: String, in window: NSWindow) async throws {
-      try #require(await observe(in: window) { NativeViewAccess.button(title, in: window) != nil })
+      if title == "Review…" || title == "Resolve…" {
+        let heading =
+          title == "Review…" ? "Confirm This Destination" : "Destination Has Unresolved Issues"
+        try #require(
+          await observe(in: window) { NativeViewAccess.containsText(heading, in: window) })
+      }
       let button = try #require(NativeViewAccess.button(title, in: window))
       #expect(button.isAccessibilityEnabled?() == true)
       let press: (() -> Bool)? = button.accessibilityPerformPress
@@ -67,6 +85,12 @@ import Testing
         #expect(window.attachedSheet == nil)
         try await press("Review…", in: window)
         try await expectHeader("Confirm This Destination", in: window)
+        let sheet = try #require(window.attachedSheet)
+        try await press("Use This Destination", in: sheet)
+        try #require(
+          await observe(in: window) {
+            !safety.needsSafetyConfirmation && window.attachedSheet == nil
+          })
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
@@ -75,6 +99,16 @@ import Testing
     @Test func migrationRecoverySheetRendersWithTheManager() async throws {
       let core = AppCoreTestHarness.makeCore(
         AppCoreTestHarness.makeTestComposition(label: "settings-migration-sheet"))
+      await core.exportRecordStore.configureAndWait(for: "A")
+      await core.collectionExportRecordStore.configureAndWait(for: "A")
+      core.exportDestinationManager.configureForScreenshotMode()
+      let identity = CurrentValueSubject<DestinationIdentity, Never>(
+        DestinationIdentity(stableId: "A", fingerprint: nil))
+      let safety = DestinationSafetyMonitor(
+        identityPublisher: identity.eraseToAnyPublisher(),
+        exportRecordStore: core.exportRecordStore,
+        collectionExportRecordStore: core.collectionExportRecordStore,
+        confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
       var result = ConfigureRecordStoresResult.success
       let lifecycle = AppLifecycleCoordinator(
         cancelActiveWork: {}, interruptForDestinationUnavailable: {},
@@ -88,17 +122,99 @@ import Testing
           identity: DestinationIdentity(stableId: "C", fingerprint: nil)))
       let counter = BodyInvalidationCounter()
       let window = AppCoreTestHarness.settingsWindow(
-        core: core, counter: counter, lifecycle: lifecycle, recoveryPromptOnly: true)
+        core: core, counter: counter, lifecycle: lifecycle, safety: safety, recoveryPromptOnly: true
+      )
       try await withCleanup {
+        safety.attach()
+        try #require(
+          await eventually("safety confirmation also pending") {
+            safety.needsSafetyConfirmation
+          })
         try #require(
           lifecycle.migrationConflict == MigrationConflictState(newId: "new", legacyId: "legacy"))
         window.orderFront(nil)
         #expect(window.attachedSheet == nil)
         try await press("Resolve…", in: window)
         try await expectHeader("Destination Has Unresolved Issues", in: window)
+        let sheet = try #require(window.attachedSheet)
+        try #require(
+          await observe(in: sheet) {
+            NativeViewAccess.containsText("Show diagnostic details", in: sheet)
+          })
+        let rebuildTitle = "Rebuild Records from Destination"
+        try #require(
+          await observe(in: sheet) {
+            NativeViewAccess.button(rebuildTitle, in: sheet)?.isAccessibilityEnabled?() == true
+          })
+        core.exportManager.queueCoordinator.enqueue([
+          .init(
+            assetLocalIdentifier: "held", placement: .timeline(year: 2026, month: 1),
+            selection: .edited)
+        ])
+        try #require(core.exportManager.hasActiveExportWork)
+        try #require(
+          await observe(in: sheet) {
+            NativeViewAccess.button(rebuildTitle, in: sheet)?.isAccessibilityEnabled?() == false
+          })
+        core.exportManager.cancelAndClear()
+        try #require(
+          await observe(in: sheet) {
+            NativeViewAccess.button(rebuildTitle, in: sheet)?.isAccessibilityEnabled?() == true
+          })
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
+    }
+
+    @Test func actualSettingsRendersAndRemovesTheRecoveryPrompt() async throws {
+      let core = AppCoreTestHarness.makeCore(
+        AppCoreTestHarness.makeTestComposition(label: "settings-prompt-mounted"))
+      var result = ConfigureRecordStoresResult.success
+      let lifecycle = AppLifecycleCoordinator(
+        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
+        configureRecordStores: { _ in result })
+      lifecycle.apply(destination: .init(identity: .init(stableId: "A", fingerprint: nil)))
+      result = .migrationConflict(newId: "new", legacyId: "legacy")
+      lifecycle.apply(destination: .init(identity: .init(stableId: "B", fingerprint: nil)))
+      let counter = BodyInvalidationCounter()
+      let tick = RenderTick()
+      let window = HostedViewHarness.makeWindow(
+        contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 900),
+        styleMask: [.titled, .closable])
+      window.contentView = NSHostingView(
+        rootView: AutoExportSettingsView()
+          .environmentObject(lifecycle).photoExportEnvironment(core)
+          .overlay { RenderWitness(tick: tick, counter: counter) })
+      try await withCleanup {
+        window.orderFront(nil)
+        try #require(
+          await observe(in: window) {
+            counter.count(for: "settings-render:0") > 0
+              && (promptPixels(in: window)?.count ?? 0) > 3000
+          })
+        let shown = try #require(promptPixels(in: window))
+        lifecycle.clearMigrationConflictAfterReconcile()
+        tick.value += 1
+        try #require(await observe(in: window) { counter.count(for: "settings-render:1") > 0 })
+        let cleared = try #require(promptPixels(in: window))
+        #expect(cleared != shown)
+      } cleanup: {
+        await close(window, core: core, counter: counter)
+      }
+    }
+
+    /// Compare the actual first Form row after an acknowledged render, without OS-specific
+    /// HDR color thresholds or snapshots recorded for one macOS version.
+    private func promptPixels(in window: NSWindow) -> Data? {
+      guard let view = window.contentView,
+        view.bounds.height >= 180
+      else { return nil }
+      let rect = NSRect(
+        x: view.bounds.minX, y: view.isFlipped ? view.bounds.minY : view.bounds.maxY - 180,
+        width: view.bounds.width, height: 180)
+      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
+      view.cacheDisplay(in: rect, to: bitmap)
+      return bitmap.representation(using: .png, properties: [:])
     }
   }
 #endif

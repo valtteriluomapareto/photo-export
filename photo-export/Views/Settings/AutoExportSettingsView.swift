@@ -7,13 +7,8 @@ import SwiftUI
 struct AutoExportSettingsView: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
-  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(LoginItemController.self) private var loginItemController
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
-
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
 
   var body: some View {
     Form {
@@ -93,10 +88,6 @@ struct AutoExportSettingsView: View {
         }
       } footer: {
         let message = AutoExportPresentation.exportNowFooter(autoSyncManager.state)
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordText([message], for: "auto-export-now-footer")
-        #endif
         Text(message)
           .font(.caption)
           .foregroundStyle(.secondary)

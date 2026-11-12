@@ -8,18 +8,11 @@ struct AutoExportRecoveryPrompt: View {
   @Environment(ExportManager.self) private var exportManagerFromEnvironment
   @State private var isShowingMigrationRecoverySheet = false
   @State private var isShowingSafetyConfirm = false
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
 
   var body: some View {
     Group {
       if lifecycleCoordinator.migrationConflict != nil {
         let showRecovery = { isShowingMigrationRecoverySheet = true }
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction("auto-export-migration-recovery", action: showRecovery)
-        #endif
         Section {
           MigrationConflictBanner(onTap: showRecovery)
             .accessibilityIdentifier("auto-export-destination-prompt")
@@ -27,11 +20,6 @@ struct AutoExportRecoveryPrompt: View {
         }
       } else if safetyMonitor.needsSafetyConfirmation {
         let showConfirmation = { isShowingSafetyConfirm = true }
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction(
-            "auto-export-safety-confirmation", action: showConfirmation)
-        #endif
         Section {
           SafetyConfirmationBanner(onTap: showConfirmation)
             .accessibilityIdentifier("auto-export-destination-prompt")

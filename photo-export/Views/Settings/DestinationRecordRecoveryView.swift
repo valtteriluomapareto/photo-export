@@ -112,9 +112,6 @@ struct DestinationRecordRecoveryView: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
           .font(.headline)
-          #if DEBUG
-            .background { RecoveryHeaderRecord(title: title) }
-          #endif
         Text(headerSubtitle)
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -368,17 +365,3 @@ struct DestinationRecordRecoveryView: View {
       && !exportManager.hasActiveExportWork
   }
 }
-
-#if DEBUG
-  /// Records the title from the mounted header's text background.
-  private struct RecoveryHeaderRecord: View {
-    let title: String
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-
-    var body: some View {
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([title], for: "destination-recovery-header")
-      Color.clear
-    }
-  }
-#endif
