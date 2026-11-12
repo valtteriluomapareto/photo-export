@@ -282,13 +282,16 @@ import Testing
           destinationManager: core.exportDestinationManager, recordStore: core.exportRecordStore,
           timelineHistoryState: .ready
         ).equatable().photoExportEnvironment(core)
-          .environment(\.bodyInvalidationCounter, counter))
+          .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true))
       window.orderFront(nil)
-      let expectedYears = try curated.availableYearsWithCounts().map { "\($0.year):\($0.count)" }
+      let expectedYears = try curated.availableYearsWithCounts().map(\.year)
       #expect(
         await observe(in: window) {
           counter.count(for: "library-root") > 0
-            && counter.renderedText["timeline-sidebar-years"] == expectedYears
+            && expectedYears.allSatisfy {
+              NativeViewAccess.element("timeline-year:\($0)", in: window) != nil
+            }
         })
     }
   #endif
@@ -422,14 +425,11 @@ import Testing
         try? FileManager.default.removeItem(at: composition.appStateRoot)
       }
       window.orderFront(nil)
-      try #require(
-        await eventually("Auto Export access footer rendered") {
-          counter.renderedText["auto-export-now-footer"] != nil
-        })
+      #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
       #expect(
-        counter.renderedText["auto-export-now-footer"] == [
-          "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
-        ])
+        AutoExportPresentation.exportNowFooter(core.autoSyncManager.state)
+          == "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+      )
       #expect(AutoSyncBlockedReason.photosAccessMissing.userFacingLabel == "Photos access needed")
     }
   }

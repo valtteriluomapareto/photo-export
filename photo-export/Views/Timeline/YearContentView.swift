@@ -51,8 +51,6 @@ struct YearContentView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("year-content-body:\(year)")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "year-export-help")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       // `.title` (heavier than `MonthContentView`'s `.title2`) leans into Photos.app's
@@ -101,9 +99,6 @@ struct YearContentView: View {
     } else {
       text = "Counting\u{2026}"
     }
-    #if DEBUG
-      bodyCounter?.recordText([text], for: "year-summary")
-    #endif
     return HStack(spacing: 8) {
       Image(systemName: "calendar")
         .foregroundStyle(.secondary)

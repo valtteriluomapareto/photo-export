@@ -147,9 +147,6 @@ struct CollectionsSidebarView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("collections-sidebar")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordAction(
-        "sidebar-export-selection", action: runCurrentCollectionsMultiSelectExport)
     #endif
     List(selection: collectionSelection) {
       Section("Favorites") {
@@ -417,6 +414,7 @@ private struct CollectionRow: View {
       countBadge
     }
     .help(tooltip)
+    .accessibilityIdentifier("collection-row:\(descriptor.id)")
   }
 
   @ViewBuilder
@@ -430,11 +428,6 @@ private struct CollectionRow: View {
       // tracked as a separate follow-up.
       let state = CollectionSidebarBadge.state(
         liveCount: count, exportedRecords: snapshot.exportedCount)
-      #if DEBUG
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = bodyCounter?.recordText(
-          [String(describing: state)], for: "collection-sidebar:\(descriptor.id)")
-      #endif
       switch state {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
@@ -445,11 +438,6 @@ private struct CollectionRow: View {
         Text("\(total)").foregroundColor(.secondary).font(.caption)
       }
     } else if let count {
-      #if DEBUG
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = bodyCounter?.recordText(
-          ["count:\(count)"], for: "collection-sidebar:\(descriptor.id)")
-      #endif
       Text("\(count)").foregroundColor(.secondary).font(.caption)
     }
   }
@@ -505,6 +493,7 @@ private struct FolderRow: View {
       countBadge
     }
     .help(tooltip)
+    .accessibilityIdentifier("collection-row:\(descriptor.id)")
     .contextMenu {
       if isInMultiSelection {
         // Finder-style: right-click on a row in the multi-selection acts on the
@@ -540,11 +529,6 @@ private struct FolderRow: View {
         liveCount: photoCount,
         exportedRecords: collectionExportRecordStore.sidebarStatus(for: descriptor).value
           .exportedCount)
-      #if DEBUG
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = bodyCounter?.recordText(
-          [String(describing: state)], for: "folder-sidebar:\(descriptor.id)")
-      #endif
       switch state {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)

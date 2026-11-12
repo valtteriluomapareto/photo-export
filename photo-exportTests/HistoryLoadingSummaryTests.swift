@@ -35,7 +35,7 @@ import Testing
       }
     }
 
-    private static let loading = ["Loading export history\u{2026}"]
+    private static let loading = "Loading export history\u{2026}"
 
     @Test(arguments: Pane.allCases)
     func summaryReadsLoadingWhileHistoryLoads(pane: Pane) async throws {
@@ -85,7 +85,6 @@ import Testing
       io.hold(snapshot)
       timeline.beginConfigure(for: "A")
 
-      let key = pane == .month ? "month-summary" : "year-summary"
       window.contentView = NSHostingView(
         rootView: Host(pane: pane, service: service)
           .environment(PhotoLibraryManager(overrideService: service))
@@ -93,21 +92,18 @@ import Testing
           .environment(collections)
           .environment(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
-          .environment(\.bodyInvalidationCounter, counter))
+          .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true))
       window.orderFront(nil)
 
-      try #require(await eventually("the summary renders") { counter.renderedText[key] != nil })
-      #expect(counter.renderedText[key] == Self.loading)
-
+      try #require(
+        await observe(in: window) { NativeViewAccess.containsText(Self.loading, in: window) })
+      #expect(NativeViewAccess.containsText(Self.loading, in: window))
       io.release(snapshot)
       await timeline.waitUntilSettled()
-      #expect(
-        await eventually("the summary leaves the loading text") {
-          counter.renderedText[key].map { $0 != Self.loading } ?? false
-        })
-      let expected = pane == .month ? ["1/1 exported"] : ["1 photo"]
-      #expect(
-        await eventually("the summary shows \(expected)") { counter.renderedText[key] == expected })
+      let expected = pane == .month ? "1/1 exported" : "1 photo"
+      #expect(await observe(in: window) { NativeViewAccess.containsText(expected, in: window) })
+      #expect(!NativeViewAccess.containsText(Self.loading, in: window))
     }
   }
 #endif

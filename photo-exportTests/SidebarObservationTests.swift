@@ -138,7 +138,8 @@ import Testing
         .environment(library).environment(timeline)
         .environment(collections).environment(manager)
         .environment(manager.progressState)
-        .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+        .environment(\.bodyInvalidationCounter, counter)
+        .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults)
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 560, height: 500),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -186,8 +187,8 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["collection-sidebar:favorites"]
-              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+            NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window).contains(
+              "2")
           })
         await f.quiesce()
         let bodies = f.counter.count(for: "collections-sidebar")
@@ -221,20 +222,22 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+            NativeViewAccess.element("timeline-year:2026", in: f.window) != nil
           })
         await f.quiesce()
         f.service.authorizationStatus = .denied
         f.service.isAuthorized = false
         f.library.refreshAuthorizationStatus()
         try #require(
-          await observe(in: f.window) { f.counter.renderedText["timeline-sidebar-years"] == [] })
+          await observe(in: f.window) {
+            NativeViewAccess.element("timeline-year:2026", in: f.window) == nil
+          })
         f.service.authorizationStatus = .authorized
         f.service.isAuthorized = true
         f.library.refreshAuthorizationStatus()
         #expect(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+            NativeViewAccess.element("timeline-year:2026", in: f.window) != nil
           })
       } cleanup: {
         await f.close()
@@ -248,8 +251,9 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
-              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
+            NativeViewAccess.element("timeline-year:2026", in: f.window) != nil
+              && NativeViewAccess.texts(identifiedBy: "collection-row:album:family", in: f.window)
+                .contains("2")
           })
         await f.quiesce()
         for key in ["years", "tree"] {
@@ -268,9 +272,10 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["collection-sidebar:favorites"]
-              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
-              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
+            NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window).contains(
+              "2")
+              && NativeViewAccess.texts(identifiedBy: "collection-row:album:family", in: f.window)
+                .contains("2")
           })
         await f.quiesce()
         let extra = TestAssetFactory.makeAsset(id: "extra")
@@ -280,9 +285,10 @@ import Testing
         f.library.libraryRefresh.flush()
         #expect(
           await observe(in: f.window) {
-            f.counter.renderedText["collection-sidebar:favorites"]
-              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 3))]
-              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:3"]
+            NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window).contains(
+              "3")
+              && NativeViewAccess.texts(identifiedBy: "collection-row:album:family", in: f.window)
+                .contains("3")
           })
       } cleanup: {
         await f.close()
@@ -296,9 +302,9 @@ import Testing
       do {
         try #require(
           await observe {
-            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
-              && f.counter.renderedText["collection-sidebar:favorites"]
-                == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+            NativeViewAccess.element("timeline-year:2026", in: f.window) != nil
+              && NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window)
+                .contains("2")
           })
         await f.quiesce()
         let timelineBodies = f.counter.count(for: "timeline-sidebar-body")
@@ -325,15 +331,16 @@ import Testing
         f.collections.flushPendingNotifications()
         #expect(
           await observe {
-            f.counter.renderedText["collection-sidebar:favorites"]
-              == [String(describing: CollectionSidebarBadge.State.partial(exported: 1, total: 2))]
+            NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window).contains(
+              "1/2")
           })
         f.service.yearCounts = [(2027, 3), (2026, 2)]
         f.library.invalidateCache()
         f.library.libraryRefresh.flush()
         #expect(
           await observe {
-            f.counter.renderedText["timeline-sidebar-years"] == ["2027:3", "2026:2"]
+            NativeViewAccess.element("timeline-year:2027", in: f.window) != nil
+              && NativeViewAccess.element("timeline-year:2026", in: f.window) != nil
           })
       } catch { failure = error }
       await f.close()
@@ -346,8 +353,8 @@ import Testing
       try await withCleanup {
         try #require(
           await observe {
-            f.counter.renderedText["collection-sidebar:favorites"]
-              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+            NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window).contains(
+              "2")
           })
         let album = ExportPlacement(
           kind: .album, id: "unrelated-album", displayName: "Unrelated",

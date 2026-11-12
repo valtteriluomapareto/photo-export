@@ -20,6 +20,13 @@ enum NativeViewAccess {
       if let children = object.accessibilityVisibleChildren?() {
         for child in children { visit(child as AnyObject) }
       }
+      if let scroll = object as? NSScrollView, let document = scroll.documentView {
+        visit(document)
+      }
+      if let clip = object as? NSClipView, let document = clip.documentView { visit(document) }
+      if let collection = object as? NSCollectionView {
+        for item in collection.visibleItems() { visit(item.view) }
+      }
       if let view = object as? NSView {
         for child in view.subviews { visit(child) }
       }

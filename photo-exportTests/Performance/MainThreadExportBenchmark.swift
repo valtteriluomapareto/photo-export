@@ -285,7 +285,8 @@ import Testing
         .environment(library).environment(timeline).environment(collections)
         .environment(manager).environment(manager.progressState).environment(whatsNew)
         .environmentObject(destinationManager).environmentObject(autoSync)
-        .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+        .environment(\.bodyInvalidationCounter, counter)
+        .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults)
         hostedWindow.contentView = NSHostingView(rootView: content)
         hostedWindow.orderFront(nil)
         window = hostedWindow
@@ -298,8 +299,8 @@ import Testing
         } else if layout == .grid || layout == .fullWindow {
           try #require(
             await observe(in: window) {
-              counter.renderedText["grid-assets"] == ["60"]
-                && counter.renderedText["month-summary"] == ["0/60 exported"]
+              NativeViewAccess.containsText("0/60 exported", in: hostedWindow)
+                && !service.startCachingCalls.isEmpty
             })
         }
         var awaited = 0

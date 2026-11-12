@@ -49,7 +49,8 @@ import Testing
             userDefaults: export.defaults, currentVersion: "test", catalog: []))
         window.contentView = NSHostingView(
           rootView: harness.environment(content)
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(export.defaults))
+            .environment(\.bodyInvalidationCounter, counter)
+            .environment(\.accessibilityEnabled, true).defaultAppStorage(export.defaults))
         window.orderFront(nil)
       }
 
@@ -104,15 +105,15 @@ import Testing
       try await withCleanup {
         f.show(YearHost(input: input, service: f.service))
         try #require(
-          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["1 photo"] })
+          await observe(in: f.window) { NativeViewAccess.containsText("1 photo", in: f.window) })
         input.year = 2027
         await gate.waitForEnter(count: 1)
         try #require(
           await observe(in: f.window) { f.counter.count(for: "year-content-body:2027") > 0 })
-        #expect(f.counter.renderedText["year-summary"] == ["Counting…"])
+        #expect(NativeViewAccess.containsText("Counting…", in: f.window))
         await gate.releaseAll()
         #expect(
-          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["2 photos"] })
+          await observe(in: f.window) { NativeViewAccess.containsText("2 photos", in: f.window) })
         f.service.countOverride = { _ in
           await refreshGate.enter()
           return 3
@@ -125,10 +126,10 @@ import Testing
           await observe(in: f.window) {
             f.counter.count(for: "year-content-body:2027") > rendered
           })
-        #expect(f.counter.renderedText["year-summary"] == ["2 photos"])
+        #expect(NativeViewAccess.containsText("2 photos", in: f.window))
         await refreshGate.releaseAll()
         #expect(
-          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["3 photos"] })
+          await observe(in: f.window) { NativeViewAccess.containsText("3 photos", in: f.window) })
       } cleanup: {
         await refreshGate.releaseAll()
         await gate.releaseAll()
@@ -147,14 +148,14 @@ import Testing
       try await withCleanup {
         f.show(YearHost(service: f.service))
         try #require(
-          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["1 photo"] })
+          await observe(in: f.window) { NativeViewAccess.containsText("1 photo", in: f.window) })
         f.service.assetsByYearMonth["2026-9", default: []].append(
           TestAssetFactory.makeAsset(id: "second", creationDate: date))
         f.service.yearCounts = [(2026, 2)]
         f.library.invalidateCache()
         f.library.libraryRefresh.flush()
         #expect(
-          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["2 photos"] })
+          await observe(in: f.window) { NativeViewAccess.containsText("2 photos", in: f.window) })
       } cleanup: {
         await f.close()
       }

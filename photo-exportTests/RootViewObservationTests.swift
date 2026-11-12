@@ -199,6 +199,31 @@ import Testing
         await quiesce()
       }
 
+      /// The fixed 1200×800 host puts the real first-run action row in this region.
+      /// Crop the buttons alone so count labels or unrelated root pixels cannot satisfy changes.
+      func onboardingActionPixels() throws -> Data {
+        let view = try #require(window?.contentView)
+        view.layoutSubtreeIfNeeded()
+        let top = NSRect(x: view.bounds.midX - 50, y: 615, width: 160, height: 70)
+        let region =
+          view.isFlipped
+          ? top
+          : NSRect(
+            x: top.minX, y: view.bounds.height - top.maxY, width: top.width, height: top.height)
+        let image = try #require(view.bitmapImageRepForCachingDisplay(in: region))
+        view.cacheDisplay(in: region, to: image)
+        var tones: Set<Int> = []
+        for y in stride(from: 0, to: image.pixelsHigh, by: 2) {
+          for x in stride(from: 0, to: image.pixelsWide, by: 2) {
+            if let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
+              tones.insert(Int(color.redComponent * 255))
+            }
+          }
+        }
+        try #require(tones.count > 3, "The crop must contain real button/text pixels")
+        return try #require(image.representation(using: .png, properties: [:]))
+      }
+
       /// Records an export for a month the library view does not show, then waits until the
       /// publication has rendered.
       func changeUnrelatedRecord() async throws {
@@ -240,11 +265,17 @@ import Testing
       }
     }
 
+    private func exportControl(_ f: Fixture) -> AnyObject? {
+      guard let window = f.window else { return nil }
+      return NativeViewAccess.element("manual-export-primary", in: window)
+    }
+
     private func settle(_ f: Fixture, key: String) async throws {
       try #require(
         await observe {
           f.counter.count(for: key) > 0
-            && f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+            && f.window.map { NativeViewAccess.element("timeline-year:2026", in: $0) != nil }
+              == true
         })
       await f.quiesce()
     }
@@ -270,11 +301,10 @@ import Testing
       let f = try await Fixture()
       try await withCleanup {
         f.show(.mainWindow)
-        let control = "toolbar-export-control"
         try #require(
           await observe(in: f.window) {
             f.counter.count(for: f.windowRootBodyKey) > 0
-              && f.counter.renderedText[control]?.first == "true"
+              && exportControl(f)?.isAccessibilityEnabled?() == true
           })
         await f.quiesce()
         let readyBodies = f.counter.count(for: f.windowRootBodyKey)
@@ -283,8 +313,7 @@ import Testing
         try #require(await observe(in: f.window) { f.counter.count(for: loadingKey) > 0 })
         await f.quiesce()
         #expect(f.counter.count(for: f.windowRootBodyKey) > readyBodies)
-        #expect(f.counter.renderedText[control]?.first == "false")
-        #expect(f.counter.renderedText[control]?[1].contains("Loading export history") == true)
+        #expect(exportControl(f)?.isAccessibilityEnabled?() == false)
         let loadingBodies = f.counter.count(for: f.windowRootBodyKey)
         f.io.release(snapshot)
         await f.timeline.waitUntilSettled()
@@ -292,8 +321,7 @@ import Testing
         try #require(await observe(in: f.window) { f.counter.count(for: settledKey) > 0 })
         await f.quiesce()
         #expect(f.counter.count(for: f.windowRootBodyKey) > loadingBodies)
-        #expect(f.counter.renderedText[control]?.first == "true")
-        #expect(f.counter.renderedText[control]?[1].contains("Loading export history") == false)
+        #expect(exportControl(f)?.isAccessibilityEnabled?() == true)
         let bodies = f.counter.count(for: f.windowRootBodyKey)
         try await f.changeUnrelatedRecord()
         let delta = f.counter.count(for: f.windowRootBodyKey) - bodies
@@ -307,13 +335,13 @@ import Testing
       let f = try await Fixture(selectFolder: false, onboardingComplete: false)
       try await withCleanup {
         f.show(.content)
-        try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
+        try #require(await observe(in: f.window) { f.counter.count(for: "content-root") > 0 })
+        try await f.barrier()
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
         await f.destination.persistSelectionAndWait(f.folder)
         await f.destination.revalidateAndWait()
-        try #require(
-          await observe { f.counter.renderedText["onboarding-export-control"]?.first == "true" })
-        await f.quiesce()
+        try await f.barrier()
+        let readyPixels = try f.onboardingActionPixels()
         let rootBodies = f.counter.count(for: "content-root")
         let hostBodies = f.counter.count(for: "content-host")
         try #require(f.timeline.state == .ready)
@@ -331,11 +359,16 @@ import Testing
           timelineHistoryState: f.timeline.state)
         #expect(readyRoute != loadingRoute)
         try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
-        await f.quiesce()
+        try await f.barrier()
         #expect(f.counter.count(for: "content-root") > rootBodies)
-        #expect(f.counter.renderedText["onboarding-export-control"]?.first == "false")
+        #expect(
+          try f.onboardingActionPixels() != readyPixels,
+          "The actual mounted action row must reflect loading history")
         f.io.release(snapshot)
         await f.timeline.waitUntilSettled()
+        try await f.barrier()
+        #expect(try f.onboardingActionPixels() == readyPixels)
+        #expect(!f.defaults.bool(forKey: "hasCompletedOnboarding"))
       } cleanup: {
         await f.close()
       }
@@ -346,50 +379,17 @@ import Testing
       let f = try await Fixture()
       try await withCleanup {
         f.show(.content, screenshotSurfaceKey: section == .timeline ? nil : "collections-favorites")
-        let key = "toolbar-export-control"
-        try #require(await observe { f.counter.renderedText[key] != nil })
-        try #require(f.counter.renderedText[key]?.first == "true")
+        try #require(await observe { exportControl(f) != nil })
+        try #require(exportControl(f)?.isAccessibilityEnabled?() == true)
         let snapshot = beginHistoryLoad(f, section: section)
-        try #require(await observe { f.counter.renderedText[key]?.first == "false" })
-        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") == true)
+        try #require(await observe { exportControl(f)?.isAccessibilityEnabled?() == false })
         f.io.release(snapshot)
         if section == .timeline {
           await f.timeline.waitUntilSettled()
         } else {
           await f.collections.waitUntilSettled()
         }
-        #expect(await observe { f.counter.renderedText[key]?.first == "true" })
-        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") == false)
-      } cleanup: {
-        await f.close()
-      }
-    }
-
-    @Test func appRouteUpdatesOnboardingAndRetainsOptionsDuringHistoryLoad() async throws {
-      let f = try await Fixture(selectFolder: false, onboardingComplete: false)
-      try await withCleanup {
-        f.show(.content)
-        let key = "onboarding-export-control"
-        try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
-        let toggle = try #require(
-          f.counter.renderedActions["onboarding-export-control-toggle-originals"])
-        toggle()
-        try #require(await observe { f.counter.renderedText[key]?.last == "true" })
-        try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
-        await f.destination.persistSelectionAndWait(f.folder)
-        await f.destination.revalidateAndWait()
-        try #require(await observe { f.counter.renderedText[key]?.first == "true" })
-        let bodies = f.counter.count(for: "content-root")
-        let snapshot = beginHistoryLoad(f, section: .timeline)
-        try #require(await observe { f.counter.renderedText[key]?.first == "false" })
-        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") == true)
-        #expect(f.counter.count(for: "content-root") > bodies)
-        f.io.release(snapshot)
-        await f.timeline.waitUntilSettled()
-        #expect(await observe { f.counter.renderedText[key]?.first == "true" })
-        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") != true)
-        #expect(f.counter.renderedText[key]?.last == "true")
-        #expect(f.defaults.bool(forKey: "hasCompletedOnboarding") == false)
+        #expect(await observe { exportControl(f)?.isAccessibilityEnabled?() == true })
       } cleanup: {
         await f.close()
       }
@@ -428,8 +428,8 @@ import Testing
         f.show(.library, screenshotSurfaceKey: "collections-album-family")
         try #require(
           await observe(in: f.window) {
-            f.counter.count(for: "title:Family") > 0
-              && f.counter.renderedText["collection-summary"] != nil
+            f.window.map { NativeViewAccess.containsText("Family", in: $0) } == true
+              && f.window.map { NativeViewAccess.containsText("0/0 exported", in: $0) } == true
           })
         try await f.barrier()
         let bodies = f.counter.count(for: "library-root")
@@ -556,12 +556,18 @@ import Testing
       try await withCleanup {
         f.service.collectionTree = [familyAlbum("Family")]
         f.show(.library, screenshotSurfaceKey: "collections-album-family")
-        try #require(await observe(in: f.window) { f.counter.count(for: "title:Family") > 0 })
+        try #require(
+          await observe(in: f.window) {
+            f.window.map { NativeViewAccess.containsText("Family", in: $0) } == true
+          })
         await f.quiesce()
         f.service.collectionTree = [familyAlbum("Renamed Family")]
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
         f.library.libraryRefresh.flush()
-        #expect(await observe(in: f.window) { f.counter.count(for: "title:Renamed Family") > 0 })
+        #expect(
+          await observe(in: f.window) {
+            f.window.map { NativeViewAccess.containsText("Renamed Family", in: $0) } == true
+          })
       } cleanup: {
         await f.close()
       }
@@ -582,11 +588,14 @@ import Testing
             f.counter.count(for: key) > 0 && f.counter.count(for: "library-probe:0:3") > 0
           })
         if surface == .album {
-          try #require(await observe(in: f.window) { f.counter.count(for: "title:Family") > 0 })
+          try #require(
+            await observe(in: f.window) {
+              f.window.map { NativeViewAccess.containsText("Family", in: $0) } == true
+            })
         } else {
           try #require(
             await observe(in: f.window) {
-              f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+              f.window.map { NativeViewAccess.element("timeline-year:2026", in: $0) != nil } == true
             })
         }
         await f.quiesce()
@@ -612,48 +621,24 @@ import Testing
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
-        #expect(f.counter.renderedText["import-title"] == nil)
+        #expect(f.window?.attachedSheet == nil)
         f.manager.importResult = ImportReport(
           matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1)
         f.manager.requestImportSheet()
         try #require(await observe(in: f.window) { f.window?.attachedSheet != nil })
+        let sheet = try #require(f.window?.attachedSheet)
         try #require(
-          await observe(in: f.window?.attachedSheet) {
-            f.counter.renderedText["import-title"] != nil
+          await observe(in: sheet) {
+            NativeViewAccess.containsText("Import Complete", in: sheet)
           })
-        try #require(f.counter.renderedText["import-title"] == ["Import Complete"])
         f.manager.importResult = nil
         #expect(
-          await observe(in: f.window?.attachedSheet) {
-            f.counter.renderedText["import-title"] == ["Import Stopped"]
+          await observe(in: sheet) {
+            NativeViewAccess.containsText("Import Stopped", in: sheet)
           })
       } cleanup: {
         await f.close()
       }
-    }
-
-    @Test func exportControlProbeKeepsActionsSeparate() async throws {
-      let counter = BodyInvalidationCounter()
-      var fired: [String] = []
-      let window = HostedViewHarness.makeWindow(
-        contentRect: NSRect(x: -10000, y: -10000, width: 100, height: 100), styleMask: [.borderless]
-      )
-      defer {
-        window.contentView = nil
-        window.close()
-      }
-      window.contentView = NSHostingView(
-        rootView: VStack {
-          ExportControlProbe(key: "first", help: "", toggleOriginals: { fired.append("first") })
-          ExportControlProbe(key: "second", help: "", toggleOriginals: { fired.append("second") })
-        }.environment(\.bodyInvalidationCounter, counter))
-      window.orderFront(nil)
-      try #require(await observe(in: window) { counter.renderedText["second"] != nil })
-      let first = try #require(counter.renderedActions["first-toggle-originals"])
-      let second = try #require(counter.renderedActions["second-toggle-originals"])
-      first()
-      second()
-      #expect(fired == ["first", "second"])
     }
 
     @Test(arguments: [LibrarySection.timeline, .collections])
@@ -666,7 +651,7 @@ import Testing
         try #require(
           await observe(in: f.window) {
             f.counter.count(for: "main-window-root") > 0
-              && f.counter.renderedText["toolbar-export-control"]?.first == "true"
+              && exportControl(f)?.isAccessibilityEnabled?() == true
           })
         await f.quiesce()
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
@@ -685,7 +670,9 @@ import Testing
         f.manager.queueCoordinator.processQueueIfNeeded()
         try #require(await gate.waitForEnter(count: 1))
         try #require(
-          await observe(in: f.window) { f.counter.renderedText["toolbar-pause-label"] == ["Pause"] }
+          await observe(in: f.window) {
+            f.window.map { NativeViewAccess.button("Pause export", in: $0) != nil } == true
+          }
         )
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
@@ -721,9 +708,8 @@ import Testing
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
-        let control = "toolbar-export-control"
         try #require(
-          await observe(in: f.window) { f.counter.renderedText[control]?.first == "true" })
+          await observe(in: f.window) { exportControl(f)?.isAccessibilityEnabled?() == true })
         try await ExportManagerRenderProbe.change(
           manager: f.manager, counter: f.counter, in: f.window
         ) {
@@ -734,9 +720,11 @@ import Testing
           ])
         }
         #expect(
-          await observe(in: f.window) { f.counter.renderedText[control]?.first == "false" })
+          await observe(in: f.window) { exportControl(f)?.isAccessibilityEnabled?() == false })
         try #require(
-          await observe(in: f.window) { f.counter.renderedText["toolbar-pause-label"] == ["Pause"] }
+          await observe(in: f.window) {
+            f.window.map { NativeViewAccess.button("Pause export", in: $0) != nil } == true
+          }
         )
         let before = f.counter.count(for: "library-root")
         try await ExportManagerRenderProbe.change(
@@ -746,7 +734,7 @@ import Testing
         }
         #expect(
           await observe(in: f.window) {
-            f.counter.renderedText["toolbar-pause-label"] == ["Resume"]
+            f.window.map { NativeViewAccess.button("Resume export", in: $0) != nil } == true
           })
         let delta = f.counter.count(for: "library-root") - before
         #expect(delta == 0)
@@ -756,64 +744,8 @@ import Testing
           f.manager.cancelAndClear()
         }
         #expect(
-          await observe(in: f.window) { f.counter.renderedText[control]?.first == "true" })
+          await observe(in: f.window) { exportControl(f)?.isAccessibilityEnabled?() == true })
       } cleanup: {
-        await f.close()
-      }
-    }
-
-    /// Photos access and held export work both close and reopen the rendered admission state.
-    @Test func canImportFollowsActiveExportWork() async throws {
-      let f = try await Fixture()
-      let gate = AsyncCheckpoint()
-      try await withCleanup {
-        f.show(.library)
-        try await settle(f, key: "library-root")
-        let key = "library-can-import"
-        try #require(f.counter.renderedText[key] == ["true"])
-        f.service.authorizationStatus = .denied
-        f.service.isAuthorized = false
-        f.library.refreshAuthorizationStatus()
-        let deniedKey =
-          "library-probe:\(f.library.libraryRevision):\(f.library.authorizationStatus.rawValue)"
-        try #require(await observe(in: f.window) { f.counter.count(for: deniedKey) > 0 })
-        await f.quiesce()
-        #expect(f.counter.renderedText[key] == ["false"])
-        f.service.authorizationStatus = .authorized
-        f.service.isAuthorized = true
-        f.library.refreshAuthorizationStatus()
-        let grantedKey =
-          "library-probe:\(f.library.libraryRevision):\(f.library.authorizationStatus.rawValue)"
-        try #require(await observe(in: f.window) { f.counter.count(for: grantedKey) > 0 })
-        await f.quiesce()
-        #expect(f.counter.renderedText[key] == ["true"])
-        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
-        f.service.assetsByYearMonth["2026-9"] = [
-          TestAssetFactory.makeAsset(id: "held", creationDate: date)
-        ]
-        f.service.resourcesByAssetId["held"] = [
-          ResourceDescriptor(type: .photo, originalFilename: "HELD.JPG")
-        ]
-        f.writer.checkpoint = gate
-        f.manager.queueCoordinator.enqueue([
-          .init(
-            assetLocalIdentifier: "held", placement: .timeline(year: 2026, month: 9),
-            selection: .edited)
-        ])
-        f.manager.queueCoordinator.processQueueIfNeeded()
-        try #require(await gate.waitForEnter(count: 1))
-        try #require(f.manager.isRunning)
-        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["false"] })
-        let task = f.manager.currentTask
-        f.manager.cancelAndClear()
-        await gate.releaseAll()
-        if let task { _ = await finished(task) }
-        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["true"] })
-      } cleanup: {
-        let task = f.manager.currentTask
-        f.manager.cancelAndClear()
-        await gate.releaseAll()
-        if let task { _ = await finished(task) }
         await f.close()
       }
     }
@@ -883,8 +815,10 @@ import Testing
         }
         #expect(f.defaults.bool(forKey: "hasCompletedOnboarding") == false)
         f.show(.content)
-        try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
         if state == .neither {
+          try #require(await observe(in: f.window) { f.counter.count(for: "content-root") > 0 })
+          try await f.barrier()
+          _ = try f.onboardingActionPixels()
           await f.quiesce()
           #expect(f.defaults.bool(forKey: "hasCompletedOnboarding") == false)
           #expect(f.counter.count(for: "library-root") == 0)

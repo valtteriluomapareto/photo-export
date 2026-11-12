@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct OnboardingView: View {
-  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   let historyState: RecordStoreState
@@ -26,19 +25,6 @@ struct OnboardingView: View {
     }
     .firstRunWindowMinSize()
     .background(Color(.windowBackgroundColor))
-  }
-
-  private var exportAvailability: ManualExportAvailability {
-    ManualExportAvailability(
-      destinationCanExport: exportDestinationManager.canExportNow,
-      history: historyState)
-  }
-
-  /// Why Start Export is disabled while the picked folder's history loads; empty otherwise.
-  private var startExportHelp: String {
-    guard exportAll, exportAvailability == .loadingHistory else { return "" }
-    return exportAvailability.unavailableHelp(
-      destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? ""
   }
 
   private var content: some View {
@@ -107,75 +93,18 @@ struct OnboardingView: View {
             Text("Choose what to export")
               .font(.headline)
 
-            Picker("", selection: $exportAll) {
-              Text("Everything (Recommended)").tag(true)
-              Text("Let me pick months").tag(false)
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-
-            VStack(alignment: .leading, spacing: 4) {
-              Toggle("Include originals for edited photos", isOn: $includeOriginals)
-                .toggleStyle(.checkbox)
-              Text(
-                "Off: one file per photo. On: also keep original copies for photos "
-                  + "you've edited."
-              )
-              .font(.caption)
-              .foregroundColor(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-              Toggle("Convert HEIC to JPEG", isOn: $convertHEICToJPEG)
-                .toggleStyle(.checkbox)
-              Text(
-                "Off: HEIC captures keep their format. On: re-encode HEIC captures as "
-                  + "JPEG on export. Non-HEIC photos are unaffected."
-              )
-              .font(.caption)
-              .foregroundColor(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            }
+            OnboardingExportOptions(
+              exportAll: $exportAll, includeOriginals: $includeOriginals,
+              convertHEICToJPEG: $convertHEICToJPEG)
           }
         }
       }
       .padding(.horizontal, 40)
       .frame(maxWidth: 440)
 
-      HStack(spacing: 16) {
-        Button("Skip") {
-          onSkip()
-        }
-        .buttonStyle(.borderless)
-
-        Button(exportAll ? "Start Export" : "Continue") {
-          // Apply the chosen versions first so the export kicked off below uses the
-          // selection the user made here, not the persisted default.
-          exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
-          exportManager.convertHEICToJPEG = convertHEICToJPEG
-          if exportAll && exportAvailability.canStart {
-            exportManager.startExportAll()
-          }
-          onSkip()
-        }
-        .buttonStyle(.borderedProminent)
-        #if DEBUG
-          .background {
-            ExportControlProbe(
-              key: "onboarding-export-control", help: startExportHelp,
-              includesOriginals: includeOriginals,
-              toggleOriginals: { includeOriginals.toggle() })
-          }
-        #endif
-        // A folder picked here has its history read first; starting meanwhile would drop the
-        // export.
-        .disabled(
-          exportDestinationManager.selectedFolderURL == nil
-            || (exportAll && exportAvailability == .loadingHistory)
-        )
-        .help(startExportHelp)
-      }
+      OnboardingExportActions(
+        historyState: historyState, exportAll: exportAll, includeOriginals: includeOriginals,
+        convertHEICToJPEG: convertHEICToJPEG, onSkip: onSkip)
 
       Spacer(minLength: 0)
     }

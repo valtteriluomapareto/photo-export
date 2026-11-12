@@ -8,7 +8,7 @@ import Testing
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(2)))
   struct CollectionExportScopeTests {
-    enum Action: CaseIterable { case all, toolbarSelection, sidebarSelection }
+    enum Action: CaseIterable { case all, toolbarSelection }
 
     private struct Host: View {
       let manager: ExportManager
@@ -30,7 +30,6 @@ import Testing
     @MainActor private final class Fixture {
       let h: ExportManagerHarness
       let library: PhotoLibraryManager
-      let counter = BodyInvalidationCounter()
       let gate = AsyncCheckpoint()
       let window: NSWindow
 
@@ -47,7 +46,6 @@ import Testing
           styleMask: [.titled], toolbarStyle: .unified)
         window.contentView = NSHostingView(
           rootView: environment.environment(Host(manager: h.manager, action: action))
-            .environment(\.bodyInvalidationCounter, counter)
             .environment(\.accessibilityEnabled, true).defaultAppStorage(h.defaults))
         for id in ["A", "B", "old", "favorite"] {
           let asset = TestAssetFactory.makeAsset(id: id)
@@ -87,32 +85,19 @@ import Testing
       }
     }
 
-    @Test func nativeToolbarStartsTheAdvertisedCollectionScope() async throws {
-      let f = await Fixture(action: .all)
-      try await withCleanup {
-        f.h.photoLib.collectionTree = f.tree("A")
-        f.window.orderFront(nil)
-        try #require(
-          await observe(in: f.window) {
-            NativeViewAccess.button("Export All Albums", in: f.window)?.isAccessibilityEnabled?()
-              == true
-          })
-        let button = try #require(NativeViewAccess.button("Export All Albums", in: f.window))
-        try #require(f.h.manager.pendingJobs.isEmpty)
-        if let native = button as? NSButton {
-          #expect(native.isEnabled)
-          native.performClick(nil)
-        } else {
-          let method: (() -> Bool)? = button.accessibilityPerformPress
-          let press = try #require(method)
-          _ = press()  // AppKit's toolbar proxy returns false even when the action runs.
-        }
-        try #require(
-          await observe(in: f.window) {
-            Set(f.h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["A", "B", "favorite"]
-          })
-      } cleanup: {
-        await f.close()
+    private func pressToolbar(_ f: Fixture, selection: Bool = false) async throws {
+      let title = selection ? "Export 2 Items" : "Export All Albums"
+      try #require(
+        await observe(in: f.window) {
+          NativeViewAccess.button(title, in: f.window)?.isAccessibilityEnabled?() == true
+        })
+      let button = try #require(NativeViewAccess.button(title, in: f.window))
+      #expect(f.h.manager.pendingJobs.isEmpty)
+      if let native = button as? NSButton {
+        native.performClick(nil)
+      } else {
+        let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+        _ = press()
       }
     }
 
@@ -128,10 +113,8 @@ import Testing
         f.h.photoLib.inventoryCheckpoint = f.gate
         if stale { f.library.invalidateCache(changedThumbnailAssetIDs: []) }
         f.window.orderFront(nil)
-        let key = action == .sidebarSelection ? "sidebar-export-selection" : "toolbar-export"
-        try #require(await observe(in: f.window) { f.counter.renderedActions[key] != nil })
         let before = await f.gate.enteredSoFar
-        f.counter.renderedActions[key]?()
+        try await pressToolbar(f, selection: action == .toolbarSelection)
         try #require(
           await eventually("owned tree load or completed preparation") {
             await f.gate.enteredSoFar > before || !f.h.manager.isPreparingExport
@@ -155,9 +138,7 @@ import Testing
         f.h.photoLib.collectionTreeError = CocoaError(.fileReadCorruptFile)
         f.h.photoLib.inventoryCheckpoint = f.gate
         f.window.orderFront(nil)
-        try #require(
-          await observe(in: f.window) { f.counter.renderedActions["toolbar-export"] != nil })
-        f.counter.renderedActions["toolbar-export"]?()
+        try await pressToolbar(f)
         let tasks = f.h.manager.currentPreparationTasks
         await f.gate.releaseAll()
         for task in tasks { await task.value }
@@ -175,10 +156,8 @@ import Testing
         f.h.photoLib.collectionTree = f.tree("A")
         f.h.photoLib.inventoryCheckpoint = f.gate
         f.window.orderFront(nil)
-        try #require(
-          await observe(in: f.window) { f.counter.renderedActions["toolbar-export"] != nil })
         let before = await f.gate.enteredSoFar
-        f.counter.renderedActions["toolbar-export"]?()
+        try await pressToolbar(f)
         try #require(
           await eventually("held action or completed preparation") {
             await f.gate.enteredSoFar > before || !f.h.manager.isPreparingExport

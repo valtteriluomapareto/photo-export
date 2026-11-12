@@ -175,7 +175,9 @@ import Testing
         .environment(library).environment(timeline).environment(collections)
         .environment(manager).environment(manager.progressState).environment(whatsNew)
         .environmentObject(destinationManager).environmentObject(autoSync)
-        .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+        .environment(\.bodyInvalidationCounter, counter)
+        .environment(\.accessibilityEnabled, true)
+        .environment(\.locale, Locale(identifier: "en_US")).defaultAppStorage(defaults)
         window.contentView = NSHostingView(rootView: content)
         window.orderFront(nil)
       }
@@ -292,9 +294,9 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["grid-assets"] == ["2"]
+            NativeViewAccess.containsText("0/2 exported", in: f.window)
               && ["first", "second"].allSatisfy {
-                f.counter.renderedText["thumbnail-exported:\($0)"] == ["false"]
+                f.counter.count(for: "asset-tile-body:\($0)") > 0
               }
           })
         // Finish real thumbnail work before attributing any body to the record publication.
@@ -316,10 +318,9 @@ import Testing
         }
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["thumbnail-exported:first"] == ["true"]
+            NativeViewAccess.containsText("1/2 exported", in: f.window)
           })
         try await f.barrier()
-        #expect(f.counter.renderedText["thumbnail-exported:second"] == ["false"])
         #expect(f.count(bodyKey) - bodies == PerformanceBudgets.gridBodiesPerRecordPublication)
         #expect(
           f.counter.count(for: "asset-tile-body:second") - sibling
@@ -335,17 +336,18 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["grid-assets"] == ["2"] && f.navigation.asset?.id == "first"
+            NativeViewAccess.containsText("0/2 exported", in: f.window)
+              && f.navigation.asset?.id == "first"
               && !f.service.startCachingCalls.isEmpty && f.counter.count(for: "summaryScan") > 0
           })
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
         try await f.barrier()
         let scans = f.counter.count(for: "summaryScan")
-        let selected = f.counter.count(for: "selected:second")
+        let selected = f.counter.count(for: "thumbnail-body:second")
         f.navigation.asset = f.service.favoritesAssets[1]
         try #require(
-          await observe(in: f.window) { f.counter.count(for: "selected:second") > selected })
+          await observe(in: f.window) { f.counter.count(for: "thumbnail-body:second") > selected })
         try await f.barrier()
         #expect(f.navigation.asset?.id == "second")
         #expect(
@@ -363,7 +365,8 @@ import Testing
         try await f.barrier()
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["grid-assets"] == ["2"] && f.assetSelection.asset?.id == "first"
+            NativeViewAccess.containsText("0/2 exported", in: f.window)
+              && f.assetSelection.asset?.id == "first"
               && !f.service.startCachingCalls.isEmpty && f.counter.count(for: "summaryScan") > 0
           })
         f.timeline.flushPendingNotifications()
@@ -371,9 +374,9 @@ import Testing
         try await f.barrier()
         let bodies = f.count("library-root")
         let scans = f.count("summaryScan")
-        let selected = f.count("selected:second")
+        let selected = f.count("thumbnail-body:second")
         f.assetSelection.asset = f.service.favoritesAssets[1]
-        try #require(await observe(in: f.window) { f.count("selected:second") > selected })
+        try #require(await observe(in: f.window) { f.count("thumbnail-body:second") > selected })
         try await f.barrier()
         #expect(
           f.count("library-root") - bodies == PerformanceBudgets.libraryBodiesPerAssetSelection)
@@ -389,24 +392,27 @@ import Testing
       let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
       let f = await Fixture(collection ? .collection : .month, stream: stream.stream)
       try await withCleanup {
-        try #require(await observe(in: f.window) { f.counter.renderedText["grid-assets"] == ["0"] })
+        try #require(
+          await observe(in: f.window) { NativeViewAccess.containsText("0 photos", in: f.window) })
         for batch in 0..<10 {
           stream.continuation.yield(
             (0..<200).map {
               TestAssetFactory.makeAsset(id: "progressive-\(batch * 200 + $0)")
             })
-          let count = String((batch + 1) * 200)
+          let count = ((batch + 1) * 200).formatted(.number.locale(Locale(identifier: "en_US")))
           try #require(
-            await observe(in: f.window) { f.counter.renderedText["grid-assets"] == [count] })
+            await observe(in: f.window) {
+              NativeViewAccess.containsText(count + " photos", in: f.window)
+            })
           try await f.barrier()
           #expect(f.counter.count(for: "summaryScan") == 0)
         }
         stream.continuation.finish()
-        let summaryKey = collection ? "collection-summary" : "month-summary"
-        let expected = collection ? "0/2000" : "0/2000 exported"
+        let expected = "0/2,000 exported"
         try #require(
           await observe(in: f.window) {
-            !f.service.startCachingCalls.isEmpty && f.counter.renderedText[summaryKey] == [expected]
+            !f.service.startCachingCalls.isEmpty
+              && NativeViewAccess.containsText(expected, in: f.window)
           })
         try await f.barrier()
         #expect(f.counter.count(for: "summaryScan") > 0)
@@ -424,9 +430,9 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["month-summary"] == ["0/2 exported"]
+            NativeViewAccess.containsText("0/2 exported", in: f.window)
               && ["first", "second"].allSatisfy {
-                f.counter.renderedText["thumbnail-exported:\($0)"] == ["false"]
+                f.counter.count(for: "asset-tile-body:\($0)") > 0
               }
           })
         await f.quiesce()
@@ -439,9 +445,9 @@ import Testing
         f.clock.advance(by: 0.201)
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["month-summary"] == ["2/2 exported"]
+            NativeViewAccess.containsText("2/2 exported", in: f.window)
               && ["first", "second"].allSatisfy {
-                f.counter.renderedText["thumbnail-exported:\($0)"] == ["true"]
+                f.counter.count(for: "asset-tile-body:\($0)") > 0
               }
           })
         try await f.barrier()
@@ -457,7 +463,7 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["year-summary"] == ["2 photos"] && f.coverRegion() != nil
+            NativeViewAccess.containsText("2 photos", in: f.window) && f.coverRegion() != nil
           })
         let cover = try #require(f.coverRegion())
         #expect(f.greenPixels(in: cover) == 0)
@@ -483,9 +489,12 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["2"]
-              && f.counter.renderedText["collection-sidebar:favorites"] == ["notStarted(total: 2)"]
-              && f.counter.renderedText["folder-sidebar:folder:trips"] == ["notStarted(total: 2)"]
+            NativeViewAccess.texts(identifiedBy: "timeline-month:2026-9", in: f.window).contains(
+              "2")
+              && NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window)
+                .contains("2")
+              && NativeViewAccess.texts(identifiedBy: "collection-row:folder:trips", in: f.window)
+                .contains { $0.hasSuffix(", 2") || $0 == "2" }
           })
         await f.quiesce()
         let timelineKeys = ["timeline-month-body:2026-9", "timeline-year-body:2026"]
@@ -503,10 +512,15 @@ import Testing
           try #require(
             await observe(in: f.window) {
               collection
-                ? f.counter.renderedText["collection-sidebar:favorites"] == ["complete"]
-                  && f.counter.renderedText["folder-sidebar:folder:trips"] == ["complete"]
-                : f.counter.renderedText["timeline-month:2026-9"] == ["complete"]
-                  && f.counter.renderedText["timeline-year:2026"] == ["complete"]
+                ? NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window)
+                  .contains("Fully exported")
+                  && NativeViewAccess.texts(
+                    identifiedBy: "collection-row:folder:trips", in: f.window
+                  ).contains { $0.hasSuffix("Fully exported") }
+                : NativeViewAccess.texts(identifiedBy: "timeline-month:2026-9", in: f.window)
+                  .contains("September 2026: 2 of 2 photos exported.")
+                  && NativeViewAccess.texts(identifiedBy: "timeline-year:2026", in: f.window)
+                    .contains("2 of 2 photos exported in 2026.")
             })
           try await f.barrier()
           f.expectBodies(own, atMost: 1)

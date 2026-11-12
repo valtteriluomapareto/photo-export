@@ -69,9 +69,6 @@ struct ContentView: View {
           hasCompletedOnboarding = true
         }
       }
-      #if DEBUG
-        bodyCounter?.record("onboarding-auto-skip-checked")
-      #endif
     }
   }
 }
@@ -165,28 +162,18 @@ struct YearRow: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("timeline-year-body:\(year)")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([], for: "timeline-year:\(year)")
     #endif
     return HStack(spacing: 8) {
       Text(verbatim: String(year))
       Spacer()
       if let total, total > 0 && exported > 0 {
         if exported >= total {
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText(["complete"], for: "timeline-year:\(year)")
-          #endif
           Image(systemName: "checkmark.circle.fill")
             .foregroundColor(.green)
             .font(.caption)
             .accessibilityLabel(yearTooltip(selection: selection, exported: exported, total: total))
         } else {
           let pct = Int(Double(exported) / Double(total) * 100)
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText(["\(pct)%"], for: "timeline-year:\(year)")
-          #endif
           Text("\(pct)%")
             .foregroundColor(.orange)
             .font(.caption)
@@ -194,6 +181,7 @@ struct YearRow: View {
       }
     }
     .help(yearTooltip(selection: selection, exported: exported, total: total))
+    .accessibilityIdentifier("timeline-year:\(year)")
   }
 
   /// Returns nil until every month with assets has reported its adjusted count, so the
@@ -249,18 +237,11 @@ struct MonthRow: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("timeline-month-body:\(year)-\(month)")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([], for: "timeline-month:\(year)-\(month)")
     #endif
     return HStack(spacing: 8) {
       Text(MonthFormatting.name(for: month))
       Spacer()
       if queued > 0 {
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordText(
-            ["\(queued) left"], for: "timeline-month:\(year)-\(month)")
-        #endif
         if isActive {
           // `.controlSize(.mini)` renders the spinner at the right pixel size as a
           // vector; the previous `scaleEffect(0.5).frame(width:16, height:16)`
@@ -275,39 +256,20 @@ struct MonthRow: View {
       } else if total > 0, let summary {
         switch summary.status {
         case .complete:
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText(["complete"], for: "timeline-month:\(year)-\(month)")
-          #endif
           Image(systemName: "checkmark.circle.fill")
             .foregroundColor(.green)
             .font(.caption)
             .accessibilityLabel(monthTooltip(selection: selection, summary: summary))
         case .partial:
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText(
-              ["\(summary.exportedCount)/\(summary.totalCount)"],
-              for: "timeline-month:\(year)-\(month)")
-          #endif
           Text("\(summary.exportedCount)/\(summary.totalCount)")
             .foregroundColor(.orange)
             .font(.caption)
         case .notExported:
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText(
-              ["\(summary.totalCount)"], for: "timeline-month:\(year)-\(month)")
-          #endif
           Text("\(summary.totalCount)")
             .foregroundColor(.secondary)
             .font(.caption)
         }
       } else if total > 0 {
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordText(["…"], for: "timeline-month:\(year)-\(month)")
-        #endif
         // Adjusted count is still loading; show a neutral dash so the row doesn't flicker
         // between 0/0 and the real value.
         Text("…").foregroundColor(.secondary).font(.caption)
@@ -315,6 +277,7 @@ struct MonthRow: View {
     }
     .contentShape(Rectangle())
     .help(monthTooltip(selection: selection, summary: summary))
+    .accessibilityIdentifier("timeline-month:\(year)-\(month)")
   }
 
   private func monthTooltip(

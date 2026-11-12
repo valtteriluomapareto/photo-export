@@ -73,10 +73,6 @@ struct ExportToolbarView: ToolbarContent {
   @ViewBuilder
   private var destinationIndicator: some View {
     let destinationHelp = exportDestinationManager.destinationHelp
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([destinationHelp], for: "destination-help")
-    #endif
     if let url = exportDestinationManager.selectedFolderURL {
       Button {
         exportDestinationManager.selectFolder()
@@ -125,8 +121,6 @@ struct ExportToolbarView: ToolbarContent {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("export-toolbar-actions")
-      bodyCounter?.recordText([exportHelp], for: "toolbar-export-help")
-      bodyCounter?.recordAction("toolbar-export", action: handlePrimaryAction)
     #endif
     // Internal spacing 12pt rather than 8pt — closer to macOS's default
     // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt
@@ -140,9 +134,7 @@ struct ExportToolbarView: ToolbarContent {
       .controlSize(.large)
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
-      #if DEBUG
-        .background { ExportControlProbe(key: "toolbar-export-control", help: exportHelp) }
-      #endif
+      .accessibilityIdentifier("manual-export-primary")
       .disabled(!isPrimaryActionEnabled)
       .help(exportHelp)
       .confirmationDialog(
@@ -181,10 +173,6 @@ struct ExportToolbarView: ToolbarContent {
           }
         } label: {
           let pauseLabel = exportManager.isPaused ? "Resume" : "Pause"
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText([pauseLabel], for: "toolbar-pause-label")
-          #endif
           Label(
             pauseLabel,
             systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")

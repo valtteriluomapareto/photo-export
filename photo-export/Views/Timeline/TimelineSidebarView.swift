@@ -35,9 +35,6 @@ struct TimelineSidebarView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("timeline-sidebar-body")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(
-        years.map { "\($0):\(assetCountsByYear[$0] ?? 0)" }, for: "timeline-sidebar-years")
     #endif
     List(selection: timelineSelection) {
       Section("Photos by Year") {
