@@ -92,7 +92,7 @@ struct AutoExportSettingsView: View {
           .disabled(!autoSyncManager.state.canRunNow)
         }
       } footer: {
-        let message = exportNowFooter
+        let message = AutoExportPresentation.exportNowFooter(autoSyncManager.state)
         #if DEBUG
           // swiftlint:disable:next redundant_discardable_let
           let _ = bodyCounter?.recordText([message], for: "auto-export-now-footer")
@@ -159,33 +159,6 @@ struct AutoExportSettingsView: View {
     }
   }
 
-  private var exportNowFooter: String {
-    switch autoSyncManager.state {
-    case .disabled:
-      return "Enable Auto Export above to use Export Now."
-    case .blocked(.noScopesSelected):
-      return "Pick at least one scope above first."
-    case .blocked(.destinationMissing):
-      return "Select an export destination first."
-    case .blocked(.destinationUnsafe):
-      return "The destination has unresolved issues. Open the destination indicator to review."
-    case .blocked(.photosAccessMissing):
-      return PhotosAccessGuidance.message
-    case .blocked:
-      return "Auto Export is blocked. Resolve the issue above to run now."
-    case .running:
-      return "A run is already in progress."
-    case .waiting(.destinationUnavailable):
-      return
-        "The destination drive isn't connected. Export Now will queue the run for when it's reachable."
-    case .waiting(.destinationChecking):
-      return "Checking the destination folder. Export Now will run if the folder passes the check."
-    case .waiting:
-      return "Auto Export will run shortly."
-    case .scheduled, .idle:
-      return "Bypass the debounce and start a run right now."
-    }
-  }
 }
 
 // MARK: - Subviews
@@ -198,12 +171,12 @@ private struct StatusSummaryRow: View {
       Image(systemName: iconName)
         .foregroundStyle(iconTint)
       VStack(alignment: .leading, spacing: 2) {
-        Text(headline)
+        Text(AutoExportPresentation.statusHeadline(state))
         // TimelineView ticks once a second so the .scheduled countdown
         // ("fires in 9s", "fires in 8s", …) updates without depending on
         // an external state change to force a re-render.
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-          if let detail = detail(now: ctx.date) {
+          if let detail = AutoExportPresentation.statusDetail(state, now: ctx.date) {
             Text(detail)
               .font(.caption)
               .foregroundStyle(.secondary)
@@ -235,28 +208,6 @@ private struct StatusSummaryRow: View {
     }
   }
 
-  private var headline: String {
-    switch state {
-    case .disabled: return "Auto Export is off"
-    case .idle: return "Up to date"
-    case .scheduled: return "Run scheduled"
-    case .running: return "Exporting\u{2026}"
-    case .waiting(let reason): return "Waiting — \(reason.userFacingLabel)"
-    case .blocked(let reason): return "Blocked — \(reason.userFacingLabel)"
-    }
-  }
-
-  private func detail(now: Date) -> String? {
-    switch state {
-    case .scheduled(let reason, let fireAt):
-      let secs = max(0, Int(fireAt.timeIntervalSince(now).rounded()))
-      return "\(reason.userFacingLabel) — fires in \(secs)s"
-    case .running(let reason):
-      return reason.userFacingLabel
-    default:
-      return nil
-    }
-  }
 }
 
 private struct LastRunRow: View {
@@ -268,7 +219,7 @@ private struct LastRunRow: View {
         .foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 2) {
         Text("Last run \(relativeTime)")
-        Text(detail)
+        Text(AutoExportPresentation.lastRunDetail(summary))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -281,12 +232,6 @@ private struct LastRunRow: View {
     return formatter.localizedString(for: summary.endedAt, relativeTo: Date())
   }
 
-  private var detail: String {
-    let counts = "\(summary.completedCount) exported"
-    let failedSuffix = summary.failedCount > 0 ? ", \(summary.failedCount) failed" : ""
-    let resultSuffix = summary.result == .completed ? "" : " (\(summary.result.rawValue))"
-    return counts + failedSuffix + resultSuffix
-  }
 }
 
 /// Shows when the safety-net reconcile last consulted PhotoKit. Trust signal for
@@ -337,27 +282,12 @@ private struct LastCatchUpRow: View {
     HStack(spacing: 8) {
       Image(systemName: "tray.and.arrow.down")
         .foregroundStyle(.secondary)
-      Text(label)
+      Text(AutoExportPresentation.catchUpLabel(summary))
         .font(.caption)
         .foregroundStyle(.secondary)
     }
   }
 
-  private var label: String {
-    let durationMs = Int(summary.duration * 1000)
-    let durationText =
-      durationMs < 1000 ? "\(durationMs) ms" : String(format: "%.1f s", summary.duration)
-    switch summary.result {
-    case .capturedBaseline:
-      return "Last library check: captured baseline in \(durationText)"
-    case .emittedChanges(let count):
-      return "Last library check: \(count) change\(count == 1 ? "" : "s") in \(durationText)"
-    case .detailsUnavailable(let failures):
-      return "Last library check: details unavailable (\(failures) failures) in \(durationText)"
-    case .fetchError(let description):
-      return "Last library check: \(description) in \(durationText)"
-    }
-  }
 }
 
 // MARK: - Description helpers
