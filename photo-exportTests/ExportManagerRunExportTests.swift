@@ -1536,8 +1536,7 @@ struct ExportManagerRunExportTests {
           exportRunner: harness.manager, destination: builder.destination, scopes: builder.scopes,
           photos: builder.photos, importing: harness.manager, dirtyStateStore: builder.dirtyStore,
           retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
-          perDestinationTokenStore: builder.perDestinationTokenStore,
-          currentRunStore: builder.currentRunStore, clock: builder.clock,
+          clock: builder.clock,
           photosAuthorization: builder.photosAuthorization,
           userDefaults: builder.userDefaults))
 

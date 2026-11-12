@@ -79,8 +79,7 @@ struct NewDestinationSafetyHoldTests {
           photos: builder.photos, importing: builder.importing,
           dirtyStateStore: builder.dirtyStore, retryStateStore: builder.retryStore,
           runSummaryStore: builder.runSummaryStore,
-          perDestinationTokenStore: builder.perDestinationTokenStore,
-          currentRunStore: builder.currentRunStore, clock: builder.clock,
+          clock: builder.clock,
           photosAuthorization: builder.photosAuthorization,
           userDefaults: builder.userDefaults))
       let runner = builder.exportRunner

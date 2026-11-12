@@ -9,21 +9,6 @@ import Testing
 @MainActor
 struct DestinationFingerprintTests {
 
-  /// `ExportDestinationManager.computeDestinationId(for:)` is a thin wrapper over the
-  /// fingerprint factory; the id field is the same hex string.
-  @Test func managerIdMatchesFingerprintId() throws {
-    let dir = TestScratch.directory("Fingerprint-Match")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    let managerId = ExportDestinationManager.computeDestinationId(for: dir)
-    let fingerprint = ExportDestinationManager.computeDestinationFingerprint(for: dir)
-
-    #expect(managerId != nil)
-    #expect(fingerprint != nil)
-    #expect(managerId == fingerprint?.id)
-  }
-
   /// The fingerprint is deterministic — two calls against the same folder produce the same
   /// structured output (no per-call randomness).
   @Test func fingerprintIsDeterministic() throws {

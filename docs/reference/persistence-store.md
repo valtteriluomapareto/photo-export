@@ -33,7 +33,7 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
     fingerprint every launch — is what keeps a network-share remount (whose path-derived
     fingerprint drifts) from opening an empty record dir and re-exporting everything (issue
     #127). The same id keys the AutoSync per-destination state
-    (`AutoSync/destinations/<destinationId>/`), the current-run journal, and the
+    (`AutoSync/destinations/<destinationId>/`) and the
     safety-confirmation store; the fingerprint is retained only as the identity-confidence
     signal for the AutoSync safety gate. Identity ownership and the keying invariant live in
     [`docs/reference/architecture-conventions.md`](architecture-conventions.md) §Destination
@@ -49,7 +49,9 @@ Released-writer compatibility fixtures cover record snapshots/logs and the Auto 
 dirty, retry, summary, per-destination token, current-run, safety and scope stores, plus
 the stable destination id. See [historical persistence fixtures](../project/historical-persistence-fixtures.md)
 for first-release provenance, isolated defaults transport and the explicit global
-PhotoKit-token coverage limitation.
+PhotoKit-token coverage limitation. Retired destination token and current-run journal files
+are left untouched and ignored; their immutable fixtures still verify the released payloads
+using raw Data/JSON checks.
 
 ## Record-store value sets
 

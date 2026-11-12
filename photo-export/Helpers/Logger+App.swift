@@ -6,9 +6,7 @@ extension Logger {
   /// Stable category names keep saved Console and Instruments filters useful.
   enum AppCategory: String, Sendable {
     case autoSync = "AutoSync"
-    case autoSyncCurrentRunStore = "AutoSyncCurrentRunStore"
     case autoSyncDirtyStore = "AutoSyncDirtyStore"
-    case autoSyncPerDestTokenStore = "AutoSyncPerDestTokenStore"
     case autoSyncRetryStore = "AutoSyncRetryStore"
     case autoSyncRunSummaryStore = "AutoSyncRunSummaryStore"
     case autoSyncScopes = "AutoSyncScopes"

@@ -60,9 +60,8 @@ struct ScopeDirtyState: Codable, Equatable, Sendable {
   }
 }
 
-/// Per-destination dirty state for Auto Export. Persisted alongside the per-destination
-/// `lastDurablyRecordedToken` snapshot so accumulated work survives interruption, restart,
-/// and disable/enable cycles.
+/// Per-destination dirty state for Auto Export. Persisted so accumulated work survives
+/// interruption, restart and disable/enable cycles.
 struct AutoSyncDirtyState: Codable, Equatable, Sendable {
   /// Keyed by `AutoExportLibraryScope.rawValue` — `"timeline"`, `"favorites"`, `"albums"` —
   /// so the persisted JSON shape stays explicit and survives enum-case renames.

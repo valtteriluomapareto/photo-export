@@ -48,7 +48,6 @@ struct AutoSyncPhotosAccessManagerTests {
     builder.clock.advance(by: 30)
     #expect(manager.activeRunFanOutTask == nil)
     #expect(builder.exportRunner.receivedContexts.isEmpty)
-    #expect(builder.currentRunStore.saveCount == 0)
     #expect(builder.runSummaryStore.saveCount == 0)
     #expect(manager.state == .blocked(.photosAccessMissing))
     #expect(!builder.photosAuthorization.cached)
@@ -78,7 +77,6 @@ struct AutoSyncPhotosAccessManagerTests {
     #expect(await finished(fanOut))
 
     #expect(builder.exportRunner.receivedContexts.map(\.scope) == [.timelineFullLibrary])
-    #expect(builder.currentRunStore.load(destinationId: destinationId) == nil)
     #expect(
       builder.runSummaryStore.load(destinationId: destinationId)?.context.scope
         == .timelineFullLibrary)

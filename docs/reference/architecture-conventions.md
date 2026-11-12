@@ -686,8 +686,8 @@ Completion events carry the originating destination and are accepted only for th
 matching run boundary. Every destination identity change cancels the old fan-out and invalidates
 its boundary. Returning to the same destination does not revive an abandoned run.
 
-Task-handle and diagnostic-journal cleanup must verify ownership before clearing state.
-An old task exiting after a replacement starts must leave the replacement's handle and journal intact.
+Task-handle cleanup must verify ownership before clearing state.
+An old task exiting after a replacement starts must leave the replacement's handle intact.
 These guards are transient; persisted run-summary, retry, and dirty-state formats stay unchanged.
 
 ### AutoSync retry lifecycle
@@ -760,28 +760,22 @@ follows each guard is the live check. A cached collection tree is returned witho
 check, which keeps the album sidebar during the stale window; every collection scan still
 meets the check in `fetchAssetsProgressive`.
 
-### AutoSync dirty-state persistence acknowledgement
+### AutoSync dirty-state recovery
 
-The effect runner saves a destination's dirty snapshot before writing its advisory
-`lastDurablyRecordedToken`. A failed dirty save blocks that destination's token writes
-across later events, including events that produce no export work. Only a successful
-dirty-state save for the same stable destination releases the block. Other destinations
-continue independently; existing export and debounce effects still run.
+The reducer's latest dirty snapshot remains authoritative in memory after a failed save,
+including an empty snapshot after valid completion. Returning to that destination must
+not replace it with older disk state. A later existing save for the same destination
+recovers persistence; other destinations continue independently, and existing export and
+debounce effects still run. There is no additional retry timer.
 
-While persistence is blocked, the reducer's latest snapshot remains authoritative in
-memory, including an empty snapshot after valid completion. Returning to that destination
-must not replace it with older disk state. A later existing save recovers persistence;
-there is no additional retry timer or deferred-token queue.
-
-This guarantee applies to per-destination acknowledgement, not PhotoKit fetching. The
-PhotoKit adapter independently saves the global fetch cursor before emitting a change.
-Per-destination tokens are currently loaded but do not drive fetching. Unsaved snapshots
-and the failure block do not survive process exit; an enabled, eligible app launch uses
-the existing full-scope reconciliation. Persisted file formats remain unchanged.
+The PhotoKit adapter independently saves its global fetch cursor before emitting a change.
+Unsaved snapshots and the failure set do not survive process exit; an enabled, eligible
+app launch uses the existing full-scope reconciliation. Legacy destination token and
+current-run journal files are ignored and left untouched.
 
 Dirty/retry metadata loads throw on corrupt or inaccessible files; only missing files
 are empty. Uncertain dirty loads retain known reducer state and mark all recognized
-scopes for full reconciliation, blocked from acknowledgement until that snapshot saves.
+scopes for full reconciliation, retaining that snapshot until it saves.
 Every metadata save preflights the source. Readable invalid bytes are copied to a unique
 sibling before atomic replacement; an unreadable source or failed preservation prevents
 replacement. The source stays present if the recovery write fails.
@@ -995,7 +989,7 @@ stop on a failed result.
 ## Destination identity
 
 Every per-destination store — both record stores (`ExportRecords/<id>/`), the AutoSync state
-(`AutoSync/destinations/<id>/`), the current-run journal, and the safety-confirmation store — is
+(`AutoSync/destinations/<id>/`) and the safety-confirmation store — is
 keyed on a single **stable logical destination id**. This is a load-bearing contract: it is the
 root-cause fix for #127 (a network-share remount re-exporting everything).
 

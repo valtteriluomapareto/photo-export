@@ -9,11 +9,6 @@ enum AutoSyncBlockedReason: String, Codable, Equatable, CaseIterable, Sendable {
   /// access in System Settings before Auto Export can run.
   case photosAccessMissing
 
-  /// Photos authorization is `.limited` and the visible selection is empty. A non-empty
-  /// limited library runs Auto Export normally with the limited-access notice visible —
-  /// this case is reserved for "nothing visible to export."
-  case limitedPhotosAccess
-
   /// No destination is currently selected.
   case destinationMissing
 
@@ -42,7 +37,4 @@ enum AutoSyncBlockedReason: String, Codable, Equatable, CaseIterable, Sendable {
   /// `manualExportActive`.
   case importActive
 
-  /// At least one variant is sitting in retry backoff and there is no other work eligible
-  /// for export. Becomes `idle` when the backoff window elapses.
-  case retryBackoff
 }

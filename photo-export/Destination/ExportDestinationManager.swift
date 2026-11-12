@@ -464,11 +464,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     return prompt.decision(forButtonAt: index)
   }
 
-  func revealInFinder() {
-    guard let url = selectedFolderURL else { return }
-    NSWorkspace.shared.activateFileViewerSelecting([url])
-  }
-
   func clearSelection() {
     invalidateValidation()
     let generation = validationGeneration
@@ -577,29 +572,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     selectedFolderURL = url
     guard generation == validationGeneration else { return false }
     return true
-  }
-
-  /// Derives the seed for a new stable destination id from a folder URL.
-  ///
-  /// Delegates to `DestinationFingerprint.compute(for:)`. With a volume UUID, the digest
-  /// combines that UUID and the relative path within the volume, so a mount-point rename
-  /// does not change it. Without a UUID, it hashes an empty identity key and the canonical
-  /// standardized path. That low-confidence fingerprint can drift across remounts; an
-  /// existing destination keeps its persisted stable id instead of recomputing this seed.
-  ///
-  /// Returns `nil` when no usable identity component can be read (typically because the drive
-  /// is unmounted). Callers treat this as "destination not yet available" and wait for the
-  /// volume to mount.
-  nonisolated static func computeDestinationId(for url: URL) -> String? {
-    // Derives the *seed* for a fresh stable id, not a live keying read.
-    DestinationFingerprint.compute(for: url)?.fingerprint.id  // keying-id-ok
-  }
-
-  /// Computes the full `DestinationFingerprint` for a folder URL. Used by code paths that need
-  /// identity-confidence and the structured volume/path components in addition to the id.
-  /// Returns `nil` under the same conditions as `computeDestinationId(for:)`.
-  nonisolated static func computeDestinationFingerprint(for url: URL) -> DestinationFingerprint? {
-    DestinationFingerprint.compute(for: url)?.fingerprint
   }
 
   /// Legacy destination-id derivation: SHA-256 of the security-scoped bookmark bytes.

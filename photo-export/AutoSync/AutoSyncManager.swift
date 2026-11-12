@@ -17,13 +17,6 @@ final class AutoSyncManager: ObservableObject {
   /// Most recently completed run's summary. `nil` until the first run finishes.
   /// Persisted per destination and reloaded when the selected destination changes.
   @Published private(set) var lastRunSummary: ExportRunSummary?
-  /// `$lastRunSummary` for subscribers outside this type: synchronous, delivered before the
-  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
-  /// Test-only accessor for synchronous delivery characterization.
-  var lastRunSummaryPublisher: AnyPublisher<ExportRunSummary?, Never> {
-    $lastRunSummary.eraseToAnyPublisher()
-  }
-
   /// Whether the user has Auto Export enabled. Surfaced separately from `state`
   /// because the toggle copy stays "on" even when AutoSync is currently
   /// blocked (e.g. `.blocked(.noScopesSelected)` should still render the
@@ -65,7 +58,6 @@ final class AutoSyncManager: ObservableObject {
   /// after ownership has moved to a newer fan-out.
   private(set) var activeRunFanOutTask: Task<Void, Never>?
   private var activeRunFanOutID: UUID?
-  private var activeRunFanOutDestinationId: String?
   private var isAttached = false
   /// Serializes event dispatch — events produced by an effect (e.g. an export run
   /// completing while we're in the middle of a `photosChanged` reduce) must be
@@ -216,9 +208,8 @@ final class AutoSyncManager: ObservableObject {
   ///
   /// `lastRunSummary` is loaded directly into the manager's `@Published` field
   /// rather than flowing through the reducer — the reducer doesn't read it,
-  /// and the UI consumes it via observation. The per-destination
-  /// `lastDurablyRecordedToken` is advisory and currently unused for fetching;
-  /// the Photos adapter owns its independent global fetch cursor.
+  /// and the UI consumes it via observation. The Photos adapter owns its
+  /// independent global fetch cursor.
   private func handleDestinationSnapshot(_ snapshot: DestinationSnapshot) {
     guard let environment else { return }
     // Key on the stable logical id, not `fingerprint?.id` — a network-share remount drifts the
@@ -229,7 +220,7 @@ final class AutoSyncManager: ObservableObject {
     if newId != oldId {
       retryTimerDeferredDestinationId = nil
       // Cancel before loading B's UI state. A's suspended runner may still return,
-      // but it no longer owns a completion or the current-run journal.
+      // but it no longer owns a completion or the active task handle.
       cancelActiveFanOut()
     }
     if let newId, newId != oldId {
@@ -263,10 +254,6 @@ final class AutoSyncManager: ObservableObject {
       if lastRunSummary != summary {
         lastRunSummary = summary
       }
-      // Advisory acknowledgement only; it does not drive PhotoKit fetching.
-      // Loading still surfaces read failures in logs on destination switches.
-      _ = environment.perDestinationTokenStore.load(destinationId: newId)
-
       // Refresh retry state for the new destination so the Issues UI shows
       // this destination's failures immediately, not the previous one's.
       let snapshot = retrySnapshot(destinationId: newId, reload: true)
@@ -474,18 +461,6 @@ final class AutoSyncManager: ObservableObject {
           )
         }
 
-      case .advancePersistentChangeToken(let token, let destinationId):
-        // A later token-only event must not bypass an earlier failed dirty save.
-        // Another destination's successful save cannot release this gate.
-        guard !failedDirtyStateDestinationIds.contains(destinationId) else { continue }
-        do {
-          try environment.perDestinationTokenStore.save(token, destinationId: destinationId)
-        } catch {
-          log.error(
-            "Failed to persist per-destination token for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-          )
-        }
-
       case .recordRetryFailures(let failures, let destinationId):
         let isHotPath = reducerState.destination.id == destinationId
         let snapshot = retrySnapshot(destinationId: destinationId)
@@ -636,52 +611,17 @@ final class AutoSyncManager: ObservableObject {
     // `.autoExport` directly — translating here keeps the runner narrow.
     let runScopes = Self.expand(scope: spec.scope)
 
-    // Write the current-run journal *before* dispatching the fan-out Task.
-    // The journal is the crash-survivable signal: if it exists on the next
-    // launch's diagnostic, this fan-out was killed mid-flight. Doing the
-    // write synchronously here (rather than as the first thing inside the
-    // Task) means the journal lands on disk before any per-scope await
-    // could be interrupted — even a SIGKILL between the write and the
-    // first await still leaves the journal observable. Manual export runs
-    // are out of scope and do not write a journal; they don't route
-    // through `startRun`.
-    //
-    // `initialJournal` is `let` so the per-iteration update inside the
-    // Task can build a new struct from it without capturing a mutable
-    // `var` across the Task boundary. `AutoSyncRunJournal` is `Sendable`,
-    // so the immutable capture is concurrency-clean.
     guard let destinationId = reducerState.destination.id else { return }
     let fanOutID = UUID()
     activeRunFanOutID = fanOutID
-    activeRunFanOutDestinationId = destinationId
-    let fanOutStartedAt = environment.clock.now()
-    let plannedScopeRawValues = runScopes.compactMap { $0.clearableScope?.rawValue }
-    let initialJournal = AutoSyncRunJournal(
-      startedAt: fanOutStartedAt,
-      trigger: spec.reason.rawValue,
-      scopes: plannedScopeRawValues,
-      currentScope: nil,
-      currentScopeStartedAt: nil
-    )
-    do {
-      try environment.currentRunStore.save(initialJournal, destinationId: destinationId)
-    } catch {
-      log.error(
-        "Failed to write current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-      )
-    }
-
     activeRunFanOutTask = Task { @MainActor [weak self] in
       defer {
-        // Cancellation clears the old journal immediately. A late A task must
-        // never clear a newer A journal after A→B→A or nil a newer task handle.
+        // A late task must never clear a replacement fan-out after A→B→A.
         if let self, self.activeRunFanOutID == fanOutID {
           let fireDeferredRetry = self.retryTimerDeferredDestinationId == destinationId
           self.retryTimerDeferredDestinationId = nil
           self.activeRunFanOutTask = nil
           self.activeRunFanOutID = nil
-          self.activeRunFanOutDestinationId = nil
-          self.clearRunJournal(destinationId: destinationId)
           if fireDeferredRetry, self.reducerState.destination.id == destinationId,
             self.reducerState.enabled
           {
@@ -696,27 +636,6 @@ final class AutoSyncManager: ObservableObject {
         // the reducer is blocked and the scope's dirty state stays.
         environment.photosAuthorization.refreshAuthorization()
         guard self?.reducerState.photosAuthorized == true else { return }
-        // Update the journal with the sub-scope about to start. Done
-        // *before* the `await` so a SIGKILL during the await leaves the
-        // journal pointing at the in-flight scope, not the previous one.
-        // Builds a new struct from `initialJournal` rather than mutating
-        // a captured var — keeps the closure concurrency-clean.
-        if let scopeRaw = runScope.clearableScope?.rawValue {
-          let updated = AutoSyncRunJournal(
-            startedAt: initialJournal.startedAt,
-            trigger: initialJournal.trigger,
-            scopes: initialJournal.scopes,
-            currentScope: scopeRaw,
-            currentScopeStartedAt: environment.clock.now()
-          )
-          do {
-            try environment.currentRunStore.save(updated, destinationId: destinationId)
-          } catch {
-            self?.log.error(
-              "Failed to update current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-            )
-          }
-        }
         let context = ExportRunContext(
           runId: UUID(),
           source: spec.source,
@@ -753,21 +672,6 @@ final class AutoSyncManager: ObservableObject {
     activeRunFanOutTask?.cancel()
     activeRunFanOutTask = nil
     activeRunFanOutID = nil
-    if let destinationId = activeRunFanOutDestinationId {
-      clearRunJournal(destinationId: destinationId)
-    }
-    activeRunFanOutDestinationId = nil
-  }
-
-  private func clearRunJournal(destinationId: String) {
-    guard let environment else { return }
-    do {
-      try environment.currentRunStore.clear(destinationId: destinationId)
-    } catch {
-      log.error(
-        "Failed to clear current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-      )
-    }
   }
 
   /// Expands an `.autoExport(scopes)` spec scope into per-scope full-scope

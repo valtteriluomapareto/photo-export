@@ -120,8 +120,6 @@ struct AutoSyncPhotosAccessIntegrationTests {
           dirtyStateStore: builder.dirtyStore,
           retryStateStore: builder.retryStore,
           runSummaryStore: builder.runSummaryStore,
-          perDestinationTokenStore: builder.perDestinationTokenStore,
-          currentRunStore: builder.currentRunStore,
           clock: builder.clock,
           photosAuthorization: library,
           userDefaults: builder.userDefaults
@@ -183,7 +181,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
     await expectExported(f, summaries: 1)
   }
 
-  /// Without access nothing runs: no journal, no summary, the change stays pending. Once
+  /// Without access nothing runs: no summary, the change stays pending. Once
   /// access returns, the catch-up exports it.
   @Test func missingAccessHoldsTheChangeUntilAccessReturns() async {
     let f = await Fixture()
@@ -197,7 +195,6 @@ struct AutoSyncPhotosAccessIntegrationTests {
     f.builder.clock.advance(by: 30)
     f.builder.clock.advance(by: 30)
     #expect(f.autoSync.activeRunFanOutTask == nil)
-    #expect(f.builder.currentRunStore.saveCount == 0)
     #expect(f.builder.runSummaryStore.saveCount == 0)
     #expect(f.photoLibrary.scopeFetchCalls.isEmpty)
     #expect(f.builder.clock.pendingCount == 0)
@@ -227,7 +224,6 @@ struct AutoSyncPhotosAccessIntegrationTests {
     f.builder.clock.advance(by: 30)
     #expect(f.autoSync.state == .blocked(.photosAccessMissing))
     #expect(f.autoSync.activeRunFanOutTask == nil)
-    #expect(f.builder.currentRunStore.saveCount == 0)
     #expect(f.builder.runSummaryStore.saveCount == 0)
     #expect(f.photoLibrary.scopeFetchCalls.isEmpty)
     #expect(f.favorites.pendingAssetIds.contains(f.asset.id))

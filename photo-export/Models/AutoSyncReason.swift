@@ -60,7 +60,6 @@ extension AutoSyncBlockedReason {
   var userFacingLabel: String {
     switch self {
     case .photosAccessMissing: return "Photos access needed"
-    case .limitedPhotosAccess: return "limited Photos access"
     case .destinationMissing: return "no destination"
     case .destinationUnavailable: return "drive disconnected"
     case .destinationChecking: return "checking the destination"
@@ -68,7 +67,6 @@ extension AutoSyncBlockedReason {
     case .noScopesSelected: return "pick what to export"
     case .manualExportActive: return "manual export running"
     case .importActive: return "import running"
-    case .retryBackoff: return "retry backoff"
     }
   }
 }

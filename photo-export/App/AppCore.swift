@@ -105,10 +105,6 @@ final class AppCore {
     let retryStore = FileBackedAutoSyncRetryStateStore(baseDirectoryURL: destinationsRoot)
     let runSummaryStore = FileBackedAutoSyncRunSummaryStore(
       baseDirectoryURL: destinationsRoot)
-    let perDestinationTokenStore = FileBackedAutoSyncPerDestinationTokenStore(
-      baseDirectoryURL: destinationsRoot)
-    let currentRunStore = FileBackedAutoSyncCurrentRunStore(
-      baseDirectoryURL: destinationsRoot)
     let tokenStore = GlobalPhotoChangeTokenStore(fileURL: composition.photoChangeTokenFileURL)
     let clock = composition.clock
     // The bridge callback wakes `PhotoLibraryManager` whenever the safety-net reconcile turns
@@ -166,8 +162,6 @@ final class AppCore {
       dirtyStateStore: dirtyStore,
       retryStateStore: retryStore,
       runSummaryStore: runSummaryStore,
-      perDestinationTokenStore: perDestinationTokenStore,
-      currentRunStore: currentRunStore,
       clock: clock,
       photosAuthorization: plm,
       userDefaults: defaults)

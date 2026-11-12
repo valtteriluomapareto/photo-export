@@ -342,8 +342,7 @@ struct AmbiguousSameFolderTests {
         exportRunner: builder.exportRunner, destination: adapter, scopes: builder.scopes,
         photos: builder.photos, importing: exportManager, dirtyStateStore: builder.dirtyStore,
         retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
-        perDestinationTokenStore: builder.perDestinationTokenStore,
-        currentRunStore: builder.currentRunStore, clock: builder.clock,
+        clock: builder.clock,
         photosAuthorization: builder.photosAuthorization,
         userDefaults: builder.userDefaults))
     let runner = builder.exportRunner
