@@ -7,9 +7,6 @@ import Testing
 /// saved stores, not the manager's transient persistence bookkeeping.
 @MainActor
 struct AutoSyncDirtyPersistenceAcknowledgementTests {
-  private let firstToken = Data([0x01])
-  private let secondToken = Data([0x02])
-  private let thirdToken = Data([0x03])
 
   private func destination(_ id: String = "ack-A") -> DestinationSnapshot {
     DestinationSnapshot(stableId: id, fingerprint: nil, isAvailable: true, safety: .safe)
@@ -25,13 +22,13 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
   }
 
   private func change(
-    _ builder: FakeAutoSyncEnvironmentBuilder, ids: Set<String> = [], token: Data
+    _ builder: FakeAutoSyncEnvironmentBuilder, ids: Set<String> = []
   ) {
     builder.photos.push(
       PhotoLibraryPersistentChangeEvent(
         insertedLocalIdentifiers: ids,
         deletedLocalIdentifiers: ids.isEmpty ? ["deleted"] : [],
-        observedAt: builder.clock.now(), nextToken: token))
+        observedAt: builder.clock.now()))
   }
 
   private func completeAutoSyncRun(
@@ -55,48 +52,43 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
   }
 
   @Test(arguments: [1, 2])
-  func failedDirtySaveKeepsPriorTokenUntilAccumulatedWorkSaves(failedSaveCount: Int) throws {
+  func failedDirtySaveRetainsAccumulatedWorkUntilRecovery(failedSaveCount: Int) throws {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
-    try builder.perDestinationTokenStore.save(firstToken, destinationId: "ack-A")
     var pendingIds: Set<String> = []
     for attempt in 1...failedSaveCount {
       let assetId = "failed-\(attempt)"
       pendingIds.insert(assetId)
       builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
-      change(builder, ids: [assetId], token: secondToken)
+      change(builder, ids: [assetId])
       #expect(builder.dirtyStore.load(destinationId: "ack-A").isEmpty)
-      #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == firstToken)
     }
     pendingIds.insert("recovered")
-    change(builder, ids: ["recovered"], token: thirdToken)
+    change(builder, ids: ["recovered"])
     #expect(
       builder.dirtyStore.load(destinationId: "ack-A").scope(.timeline).pendingAssetIds == pendingIds
     )
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == thirdToken)
   }
 
   @Test(arguments: [false, true])
-  func tokenOnlyEventsCannotBypassAnEarlierFailedSave(fullReconciliation: Bool) throws {
+  func noWorkEventsCannotDiscardAnEarlierFailedSave(fullReconciliation: Bool) throws {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
-    try builder.perDestinationTokenStore.save(firstToken, destinationId: "ack-A")
     builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
     if fullReconciliation {
       builder.photos.pushError(.detailsUnavailable)
     } else {
-      change(builder, ids: ["unsaved"], token: secondToken)
+      change(builder, ids: ["unsaved"])
     }
 
-    change(builder, token: thirdToken)
+    change(builder)
 
     #expect(builder.dirtyStore.load(destinationId: "ack-A").isEmpty)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == firstToken)
     #expect(builder.exportRunner.receivedContexts.isEmpty)
 
-    change(builder, ids: ["later"], token: thirdToken)
+    change(builder, ids: ["later"])
 
     let saved = builder.dirtyStore.load(destinationId: "ack-A").scope(.timeline)
     if fullReconciliation {
@@ -104,35 +96,31 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     } else {
       #expect(saved.pendingAssetIds == ["unsaved", "later"])
     }
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == thirdToken)
   }
 
   @Test func anotherDestinationCannotReleaseFailedDestinationsGateOrDiscardItsWork() throws {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
-    try builder.perDestinationTokenStore.save(firstToken, destinationId: "ack-A")
     builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
-    change(builder, ids: ["unsaved-A"], token: secondToken)
+    change(builder, ids: ["unsaved-A"])
 
     builder.destination.subject.send(destination("ack-B"))
-    change(builder, ids: ["saved-B"], token: secondToken)
+    change(builder, ids: ["saved-B"])
     #expect(
       builder.dirtyStore.load(destinationId: "ack-B").scope(.timeline).pendingAssetIds == [
         "saved-B"
       ])
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-B") == secondToken)
 
     builder.destination.subject.send(destination())
-    change(builder, token: thirdToken)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == firstToken)
-    change(builder, ids: ["later-A"], token: thirdToken)
+    change(builder)
+    #expect(builder.dirtyStore.load(destinationId: "ack-A").isEmpty)
+    change(builder, ids: ["later-A"])
 
     #expect(
       builder.dirtyStore.load(destinationId: "ack-A").scope(.timeline).pendingAssetIds == [
         "unsaved-A", "later-A",
       ])
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == thirdToken)
     #expect(
       builder.dirtyStore.load(destinationId: "ack-B").scope(.timeline).pendingAssetIds == [
         "saved-B"
@@ -143,7 +131,7 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
-    change(builder, ids: ["exported"], token: firstToken)
+    change(builder, ids: ["exported"])
     completeAutoSyncRun(manager, builder) {
       builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
     }
@@ -154,13 +142,11 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
 
     builder.destination.subject.send(destination("ack-B"))
     builder.destination.subject.send(destination())
-    change(builder, token: secondToken)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == firstToken)
-    change(builder, ids: ["new"], token: thirdToken)
+    change(builder)
+    change(builder, ids: ["new"])
 
     #expect(
       builder.dirtyStore.load(destinationId: "ack-A").scope(.timeline).pendingAssetIds == ["new"])
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == thirdToken)
   }
 
   @Test func successfulCompletionCanRecoverBySavingEmptyDirtyState() {
@@ -168,43 +154,26 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
     builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
-    change(builder, ids: ["exported"], token: firstToken)
+    change(builder, ids: ["exported"])
 
     completeAutoSyncRun(manager, builder)
-    change(builder, token: secondToken)
+    change(builder)
 
     #expect(builder.dirtyStore.savedDestinationIds.contains("ack-A"))
     #expect(builder.dirtyStore.load(destinationId: "ack-A").isEmpty)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == secondToken)
   }
 
-  @Test func healthyTokenOnlyEventDoesNotWriteDirtyStateOrScheduleNewWork() {
+  @Test func healthyNoWorkEventDoesNotWriteDirtyStateOrScheduleNewWork() {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
     let stateBefore = manager.state
 
-    change(builder, token: firstToken)
+    change(builder)
 
     #expect(builder.dirtyStore.savedDestinationIds.isEmpty)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == firstToken)
     #expect(manager.state == stateBefore)
     #expect(builder.exportRunner.receivedContexts.isEmpty)
-  }
-
-  @Test func failedTokenWriteDoesNotPreventLaterAcknowledgement() {
-    let builder = FakeAutoSyncEnvironmentBuilder()
-    let manager = attach(builder)
-    defer { manager.setEnabled(false) }
-    builder.perDestinationTokenStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
-
-    change(builder, ids: ["saved"], token: firstToken)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == nil)
-    #expect(
-      builder.dirtyStore.load(destinationId: "ack-A").scope(.timeline).pendingAssetIds == ["saved"])
-
-    change(builder, token: secondToken)
-    #expect(builder.perDestinationTokenStore.load(destinationId: "ack-A") == secondToken)
   }
 
   @Test(arguments: [false, true])
@@ -213,11 +182,10 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
   {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let original = attach(builder)
-    try builder.perDestinationTokenStore.save(firstToken, destinationId: "ack-A")
     builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
-    change(builder, ids: ["unsaved"], token: secondToken)
+    change(builder, ids: ["unsaved"])
     if recoverBeforeRestart {
-      change(builder, ids: ["recovered"], token: thirdToken)
+      change(builder, ids: ["recovered"])
     }
     original.setEnabled(false)
 
@@ -225,9 +193,6 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     defer { restarted.setEnabled(false) }
     let saved = builder.dirtyStore.load(destinationId: "ack-A")
     #expect(saved.isEmpty == !recoverBeforeRestart)
-    #expect(
-      builder.perDestinationTokenStore.load(destinationId: "ack-A")
-        == (recoverBeforeRestart ? thirdToken : firstToken))
 
     builder.clock.advance(by: 10)
     let startup = try #require(restarted.activeRunFanOutTask)
@@ -237,6 +202,6 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     #expect(builder.exportRunner.receivedContexts.first?.scope == .timelineFullLibrary)
     #expect(builder.exportRunner.receivedContexts.first?.reason == .appLaunch)
     // Neither the failure latch nor unsaved identifiers are crash-durable.
-    // Startup reconciles the full scope rather than replaying the advisory token.
+    // Startup reconciles the full scope rather than replaying unsaved identifiers.
   }
 }

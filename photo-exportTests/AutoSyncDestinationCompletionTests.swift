@@ -141,7 +141,7 @@ struct AutoSyncDestinationCompletionTests {
       await oldGate.release()
       await oldTask.value
       #expect(builder.currentRunStore.load(destinationId: "A") == newJournal)
-      #expect(manager.activeRunFanOutTask != nil)
+      #expect(manager.activeRunFanOutTask == newTask)
 
       await newGate.release()
       await newTask.value

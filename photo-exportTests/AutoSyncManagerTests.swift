@@ -715,7 +715,7 @@ struct AutoSyncManagerTests {
   /// A sub-scope that returns a non-`.completed` summary breaks the
   /// fan-out early. The deferred `clear` still fires. The next launch
   /// must NOT see a phantom in-flight journal.
-  @Test func nonCompletedSubSummaryBreaksFanOutAndStillClearsJournal() async {
+  @Test func nonCompletedSubSummaryBreaksFanOutAndStillClearsJournal() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
@@ -738,7 +738,9 @@ struct AutoSyncManagerTests {
     )
 
     builder.clock.advance(by: 10)
-    for _ in 0..<8 { await Task.yield() }
+    let fanOut = try #require(manager.activeRunFanOutTask)
+    await fanOut.value
+    #expect(manager.activeRunFanOutTask == nil)
 
     #expect(
       builder.currentRunStore.load(destinationId: destId) == nil,

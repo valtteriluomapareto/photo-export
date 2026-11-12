@@ -25,7 +25,7 @@ struct AutoSyncGeneratedSequenceTests {
   }
 
   @Test(arguments: seeds)
-  func savedTokensNeverAcknowledgeUnpersistedObservedWork(seed: UInt64) {
+  func savedDirtyStateRetainsObservedWorkAcrossFailedSaves(seed: UInt64) {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
@@ -33,58 +33,55 @@ struct AutoSyncGeneratedSequenceTests {
     var trace = SequenceTrace(seed: seed)
     var active = "A"
     var observed: [String: Set<String>] = ["A": [], "B": []]
-    // Mandatory prefix: successful save, failed save, token-only, B, B work, A,
+    // Mandatory prefix: successful save, failed save, no-work, B, B work, A,
     // then recovery. Random tails explore additional cross-event combinations.
     let prefix = [1, 2, 3, 0, 1, 0, 1]
     for step in 0..<48 {
       let action = step < prefix.count ? prefix[step] : generator.pick(4)
       let other = active == "A" ? "B" : "A"
       let otherDirty = builder.dirtyStore.load(destinationId: other)
-      let otherToken = builder.perDestinationTokenStore.load(destinationId: other)
       if action == 0 {
         active = other
         trace.append("\(step): select \(active)")
         builder.destination.subject.send(destination(active))
       } else {
-        let token = Data([UInt8(step + 1)])
-        let oldToken = builder.perDestinationTokenStore.load(destinationId: active)
+        let oldDirty = builder.dirtyStore.load(destinationId: active)
+        let savesBefore = builder.dirtyStore.savedDestinationIds.count
         let work = action != 3
         let id = "asset-\(step)"
         if work { observed[active, default: []].insert(id) }
         if action == 2 {
           builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("generated")
         }
-        trace.append("\(step): \(active) \(work ? id : "token-only") saveFailure=\(action == 2)")
+        trace.append("\(step): \(active) \(work ? id : "no-work") saveFailure=\(action == 2)")
         builder.photos.push(
           PhotoLibraryPersistentChangeEvent(
             insertedLocalIdentifiers: work ? [id] : [],
             deletedLocalIdentifiers: work ? [] : ["deleted"],
-            observedAt: builder.clock.now(), nextToken: token))
-        let saved = builder.dirtyStore.load(destinationId: active).scope(.timeline)
-        if builder.perDestinationTokenStore.load(destinationId: active) != oldToken {
-          #expect(
-            saved.pendingFullReconciliation
-              || observed[active, default: []].isSubset(of: saved.pendingAssetIds), "\(trace)")
+            observedAt: builder.clock.now()))
+        let saved = builder.dirtyStore.load(destinationId: active)
+        if action == 1 {
+          #expect(saved.scope(.timeline).pendingAssetIds == observed[active], "\(trace)")
+        } else {
+          #expect(saved == oldDirty, "a failed save or no-work event preserves disk: \(trace)")
+          if !work {
+            #expect(builder.dirtyStore.savedDestinationIds.count == savesBefore, "\(trace)")
+          }
         }
         #expect(builder.dirtyStore.load(destinationId: other) == otherDirty, "\(trace)")
-        #expect(
-          builder.perDestinationTokenStore.load(destinationId: other) == otherToken, "\(trace)")
       }
     }
     // Force successful progress for both destinations after every generated tail.
     for id in ["A", "B"] {
       builder.destination.subject.send(destination(id))
       observed[id, default: []].insert("final-\(id)")
-      let token = Data([id == "A" ? 250 : 251])
       trace.append("final successful \(id)")
       builder.photos.push(
         PhotoLibraryPersistentChangeEvent(
-          insertedLocalIdentifiers: ["final-\(id)"], observedAt: builder.clock.now(),
-          nextToken: token))
+          insertedLocalIdentifiers: ["final-\(id)"], observedAt: builder.clock.now()))
       #expect(
         builder.dirtyStore.load(destinationId: id).scope(.timeline).pendingAssetIds == observed[id],
         "\(trace)")
-      #expect(builder.perDestinationTokenStore.load(destinationId: id) == token, "\(trace)")
     }
     #expect(
       builder.exportRunner.receivedContexts.isEmpty, "The export clock remains stopped. \(trace)")
