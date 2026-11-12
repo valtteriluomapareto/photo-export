@@ -114,8 +114,6 @@ struct PhotoLibraryServiceCollectionsTests {
     #expect(count == 2)
   }
 
-  // MARK: - fetchCollectionTree
-
   // MARK: - descriptorKind subtype routing
 
   /// The `PHAssetCollectionSubtype → PhotoCollectionDescriptor.Kind` mapping
@@ -147,30 +145,5 @@ struct PhotoLibraryServiceCollectionsTests {
     #expect(PhotoLibraryManager.descriptorKind(for: .smartAlbumScreenshots) == nil)
     #expect(PhotoLibraryManager.descriptorKind(for: .smartAlbumVideos) == nil)
     #expect(PhotoLibraryManager.descriptorKind(for: .any) == nil)
-  }
-
-  @Test func fetchCollectionTreeReturnsCannedTree() throws {
-    let svc = FakePhotoLibraryService()
-    let tree: [PhotoCollectionDescriptor] = [
-      PhotoCollectionDescriptor(
-        id: "favorites", localIdentifier: nil, title: "Favorites", kind: .favorites,
-        pathComponents: [], children: []),
-      PhotoCollectionDescriptor(
-        id: "folder:family", localIdentifier: "family-id", title: "Family", kind: .folder,
-        pathComponents: [],
-        children: [
-          PhotoCollectionDescriptor(
-            id: "album:trip", localIdentifier: "trip-id", title: "Trip 2024", kind: .album,
-            pathComponents: ["Family"], children: [])
-        ]),
-    ]
-    svc.collectionTree = tree
-    let result = try svc.fetchCollectionTree()
-    #expect(result.count == 2)
-    #expect(result[0].kind == .favorites)
-    #expect(result[1].kind == .folder)
-    #expect(result[1].children.count == 1)
-    #expect(result[1].children[0].kind == .album)
-    #expect(result[1].children[0].pathComponents == ["Family"])
   }
 }

@@ -24,10 +24,11 @@ import Testing
       var body: some View {
         let current: ExportPlacement? = {
           guard let selection = navigation.selection else { return navigation.placement }
-          guard let tree = try? library.fetchCollectionTree() else { return nil }
+          guard let tree = library.libraryRefresh.tree else { return nil }
           return collections.currentPlacement(for: selection, collections: tree)
         }()
         AssetDetailView(asset: navigation.asset, placement: current)
+          .modifier(LibraryTreeLoading())
       }
     }
 

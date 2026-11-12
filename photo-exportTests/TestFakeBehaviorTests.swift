@@ -46,14 +46,11 @@ struct TestFakeBehaviorTests {
       try await service.fetchAssets(in: scope, mediaType: nil).map(\.id) == ["early", "late"])
     #expect(
       try await service.fetchAssets(in: scope, mediaType: .video).isEmpty)
-    #expect(try service.countAssets(year: 2025, month: 6) == 2)
     #expect(try await service.countAssets(in: scope) == 2)
     #expect(try await service.countAdjustedAssets(in: scope) == 1)
     #expect(
       try await service.fetchAssets(year: 2025, month: nil, mediaType: nil).map(\.id)
         == ["early", "late", "next-month"])
-    #expect(try service.countAssets(year: 2025) == 3)
-    #expect(try await service.countAdjustedAssets(year: 2025) == 1)
     var streamed: [String] = []
     for try await batch in service.fetchAssetsProgressive(in: scope, mediaType: nil, batchSize: 1) {
       streamed += batch.map(\.id)

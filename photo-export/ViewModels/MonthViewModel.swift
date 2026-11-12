@@ -93,13 +93,6 @@ final class MonthViewModel {
     return Array(assets[start..<end])
   }
 
-  /// Timeline-scope wrapper kept for the existing `MonthContentView` call site.
-  func loadAssets(
-    forYear year: Int, month: Int, isCurrent: @escaping @MainActor () -> Bool = { true }
-  ) async {
-    await loadAssets(for: .timeline(year: year, month: month), isCurrent: isCurrent)
-  }
-
   /// Scope-based loader used by both timeline and collection grids. A `nil` scope clears
   /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
   /// selected).

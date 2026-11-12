@@ -988,20 +988,6 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == "b-0")
   }
 
-  // MARK: - Wrapper: loadAssets(forYear:month:)
-
-  @Test func legacyWrapperIsEquivalentToScopeBasedLoader() async throws {
-    let svc = FakePhotoLibraryService()
-    let asset = makeAsset(id: "wrapper", month: 8)
-    svc.assetsByYearMonth["2025-8"] = [asset]
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(forYear: 2025, month: 8)
-
-    #expect(vm.assets.map(\.id) == ["wrapper"])
-    #expect(vm.selectedAssetId == "wrapper")
-  }
-
   // MARK: - Observation
 
   /// The month and collection grids own the model as `@State`, which builds a new one on every

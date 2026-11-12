@@ -106,11 +106,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   @ObservationIgnored
   private var phAssetCache: [String: PHAsset] = [:]
 
-  /// Cache of adjusted-asset counts keyed by `"YYYY-M"`. Populated lazily by
-  /// `countAdjustedAssets` and cleared when the Photos library changes or the user re-authorises.
-  @ObservationIgnored
-  private var adjustedCountByYearMonth: [String: Int] = [:]
-
   /// Scope-keyed collection-count cache. Invalidated on
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
@@ -192,9 +187,8 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     await MainActor.run { self.noteLiveDenial() }
   }
 
-  /// The live check at a main-actor scan entry point. These can run inside a view body
-  /// (`fetchCollectionTree` on a cache miss), so the refresh waits for the next main-actor
-  /// turn instead of publishing during the view update.
+  /// The live check at a main-actor scan entry point. It can run inside a view body, so the
+  /// refresh waits for the next main-actor turn instead of publishing during the view update.
   private func requireLiveAuthorization() throws {
     guard isLiveAuthorizationSufficient() else {
       Task { @MainActor [weak self] in self?.noteLiveDenial() }
@@ -492,9 +486,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     await MainActor.run {
       self.authorizationStatus = status
       self.isAuthorized = Self.isAuthorizationSufficient(status)
-      // Authorisation changes may change which assets are visible; drop the adjusted-count
-      // cache so the next query reflects the new scope.
-      self.adjustedCountByYearMonth.removeAll()
     }
 
     return Self.isAuthorizationSufficient(status)
@@ -510,35 +501,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     publisher
       .sink { [weak self] in self?.livePhotoDetectionFallbackEnabled = $0 }
       .store(in: &livePhotoDetectionCancellables)
-  }
-
-  /// Returns the number of assets in the given year/month whose `hasAdjustments` is true.
-  ///
-  /// `PHAsset.hasAdjustments` cannot be expressed as a Photos fetch predicate, so this falls
-  /// back to iterating the month's assets. Results are cached until the next library change
-  /// or authorisation change.
-  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
-    if let s = overrideService { return try await s.countAdjustedAssets(year: year, month: month) }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
-    let key = "\(year)-\(month)"
-    if let cached = adjustedCountByYearMonth[key] { return cached }
-    let assets = try await fetchPHAssets(year: year, month: month, mediaType: nil)
-    var count = 0
-    for asset in assets where asset.hasAdjustments { count += 1 }
-    adjustedCountByYearMonth[key] = count
-    return count
-  }
-
-  /// Returns the number of assets in the given year whose `hasAdjustments` is true. Sums the
-  /// per-month cache, populating each month on demand.
-  func countAdjustedAssets(year: Int) async throws -> Int {
-    if let s = overrideService { return try await s.countAdjustedAssets(year: year) }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
-    var total = 0
-    for month in 1...12 {
-      total += try await countAdjustedAssets(year: year, month: month)
-    }
-    return total
   }
 
   // MARK: - Asset Fetching (PhotoLibraryService)
@@ -812,56 +774,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     return Self.descriptor(from: asset, useResourceFallback: livePhotoDetectionFallbackEnabled)
   }
 
-  /// Fast count of assets in a given year/month without loading them into memory
-  func countAssets(year: Int, month: Int) throws -> Int {
-    if let s = overrideService { return try s.countAssets(year: year, month: month) }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
-    let calendar = Calendar.current
-    var start = DateComponents()
-    start.year = year
-    start.month = month
-    start.day = 1
-    var end = DateComponents()
-    end.year = year
-    end.month = month + 1
-    end.day = 1
-    guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end)
-    else {
-      throw PhotoLibraryError.fetchFailed
-    }
-    let opts = PHFetchOptions()
-    opts.predicate = NSPredicate(
-      format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate,
-      endDate as NSDate)
-    let result = PHAsset.fetchAssets(with: opts)
-    return result.count
-  }
-
-  /// Fast count of assets in a given year
-  func countAssets(year: Int) throws -> Int {
-    if let s = overrideService { return try s.countAssets(year: year) }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
-    let calendar = Calendar.current
-    var start = DateComponents()
-    start.year = year
-    start.month = 1
-    start.day = 1
-    var end = DateComponents()
-    end.year = year + 1
-    end.month = 1
-    end.day = 1
-    guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end)
-    else {
-      throw PhotoLibraryError.fetchFailed
-    }
-    let opts = PHFetchOptions()
-    opts.predicate = NSPredicate(
-      format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate,
-      endDate as NSDate)
-    let result = PHAsset.fetchAssets(with: opts)
-    return result.count
-  }
-
   /// Returns descending list of years that have at least one asset
   func availableYears() throws -> [Int] {
     if let s = overrideService { return try s.availableYears() }
@@ -924,14 +836,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     return try await requestImage(
       for: assetId, targetSize: pixelSize, deliveryMode: .opportunistic,
       onDegraded: onDegraded)
-  }
-
-  /// Original-size requests remain available to consumers that need source pixels.
-  func requestFullImage(for assetId: String) async throws -> NSImage {
-    if let service = overrideService { return try await service.requestFullImage(for: assetId) }
-    return try await requestImage(
-      for: assetId, targetSize: PHImageManagerMaximumSize, deliveryMode: .highQualityFormat,
-      onDegraded: { _ in })
   }
 
   private func requestImage(
@@ -1069,7 +973,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     invalidatingQueryChanges = queryChanges
     defer { invalidatingQueryChanges = nil }
     phAssetCache.removeAll()
-    adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
     if let changedThumbnailAssetIDs,
       assetThumbnailContentRevisions.count
@@ -1210,36 +1113,10 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
 
   // MARK: - Collection tree
 
-  /// Cached collection tree. Invalidated on `photoLibraryDidChange`. Constructed lazily
-  /// on the first `fetchCollectionTree()` call after a change (or first launch).
+  /// Cached collection tree. Invalidated on `photoLibraryDidChange`; rebuilt by the first
+  /// `loadCollectionTree()` after a change (or first launch).
   @ObservationIgnored
   private var cachedCollectionTree: [PhotoCollectionDescriptor]?
-
-  /// Builds the user's Photos collection tree: a synthetic Favorites entry first, then
-  /// user-created top-level albums and folders (recursively), then any iCloud shared
-  /// albums as flat top-level entries.
-  ///
-  /// Shared albums require a **separate** fetch: `PHCollection.fetchTopLevelUserCollections`
-  /// returns user-created albums and folders only, and excludes iCloud shared albums by
-  /// design even though they share the same `.album` collection type. The second call,
-  /// `PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumCloudShared,
-  /// options: nil)`, surfaces them. Without the second call the "Shared Albums" sidebar
-  /// section would stay empty even when the user has shared albums in Photos.
-  ///
-  /// Both passes route through `descriptor(from:parentPath:)` for consistency, so the
-  /// `descriptorKind(for:)` subtype switch is the single source of truth for which
-  /// collections we surface and how.
-  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    access(keyPath: \.libraryRevision)
-    if let s = overrideService { return try s.fetchCollectionTree() }
-    // A cache hit stays cheap and keeps the album sidebar while access is being rechecked.
-    // Every collection scan still meets the live check in `fetchAssetsProgressive`.
-    if let cached = cachedCollectionTree { return cached }
-    try requireLiveAuthorization()
-    let tree = try Self.scanCollectionTree(logger: logger)
-    cachedCollectionTree = tree
-    return tree
-  }
 
   nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
     while true {
@@ -1256,10 +1133,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
         tree = try await service.loadCollectionTree()
       } else {
         try await requireLiveAuthorizationAsync()
-        let logger = self.logger
-        tree = try await runDetached(priority: .userInitiated) {
-          try Self.scanCollectionTree(logger: logger)
-        }
+        tree = try await runDetached(priority: .userInitiated) { try Self.scanCollectionTree() }
       }
       try Task.checkCancellation()
       let current = await MainActor.run {
@@ -1272,9 +1146,12 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     }
   }
 
-  nonisolated private static func scanCollectionTree(logger: Logger) throws
-    -> [PhotoCollectionDescriptor]
-  {
+  /// Builds the tree in two passes. `PHCollection.fetchTopLevelUserCollections` returns
+  /// user-created albums and folders only; iCloud shared albums need their own
+  /// `.albumCloudShared` fetch, or the Shared Albums sidebar section would stay empty. Both
+  /// passes go through `descriptor(from:parentPath:)`, so `descriptorKind(for:)` alone decides
+  /// which collections are surfaced.
+  nonisolated private static func scanCollectionTree() throws -> [PhotoCollectionDescriptor] {
     try Task.checkCancellation()
     var tree: [PhotoCollectionDescriptor] = []
     tree.append(
@@ -1297,61 +1174,16 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     }
     tree.append(contentsOf: userTopResults)
 
-    // Pass 2: iCloud shared albums. Returned by a dedicated fetch — they are
-    // intentionally absent from `fetchTopLevelUserCollections`. Shared albums never
-    // nest, so they always land at the top level with `parentPath = []`.
-    //
-    // Logged with raw counts and per-collection (subtype, title) tuples so a user
-    // reporting "I have shared albums in Photos but the sidebar section is empty"
-    // can run Console.app and see whether PhotoKit returned anything at all, and
-    // if so, why a given collection was dropped by `descriptor(from:)`.
+    // Pass 2: iCloud shared albums. They never nest, so they land at the top level.
     let sharedFetch = PHAssetCollection.fetchAssetCollections(
       with: .album, subtype: .albumCloudShared, options: nil)
-    logger.info(
-      "fetchCollectionTree: shared-album fetch returned \(sharedFetch.count) result(s)"
-    )
     var sharedAlbumResults: [PhotoCollectionDescriptor] = []
     sharedFetch.enumerateObjects { collection, _, _ in
-      let title = collection.localizedTitle ?? "<nil>"
-      let subtypeRaw = collection.assetCollectionSubtype.rawValue
-      let descriptor = Self.descriptor(from: collection, parentPath: [])
-      if let descriptor {
-        logger.info(
-          "fetchCollectionTree: shared-album surfaced title=\(title, privacy: .public) subtype=\(subtypeRaw) kind=\(descriptor.kind.rawValue, privacy: .public)"
-        )
+      if let descriptor = Self.descriptor(from: collection, parentPath: []) {
         sharedAlbumResults.append(descriptor)
-      } else {
-        logger.info(
-          "fetchCollectionTree: shared-album dropped title=\(title, privacy: .public) subtype=\(subtypeRaw) — descriptor builder returned nil"
-        )
       }
     }
     tree.append(contentsOf: sharedAlbumResults)
-
-    // Diagnostic: if the targeted shared-album fetch came back empty, do a broad
-    // sweep with `.any` subtype and log everything PhotoKit knows about. This
-    // disambiguates "shared albums exist but PhotoKit classified them under a
-    // subtype I didn't anticipate" (a code bug we need to fix) from "PhotoKit
-    // genuinely has no shared albums" (typically because **Photos.app → Settings
-    // → iCloud → Shared Albums** is disabled, which prevents Photos from
-    // syncing them down to the local library at all). The log line tells the
-    // user which checkbox to look at.
-    if sharedFetch.count == 0 {
-      let anyAlbums = PHAssetCollection.fetchAssetCollections(
-        with: .album, subtype: .any, options: nil)
-      var subtypeHistogram: [Int: Int] = [:]
-      anyAlbums.enumerateObjects { collection, _, _ in
-        subtypeHistogram[collection.assetCollectionSubtype.rawValue, default: 0] += 1
-      }
-      let histogramString =
-        subtypeHistogram
-        .sorted { $0.key < $1.key }
-        .map { "subtype=\($0.key):\($0.value)" }
-        .joined(separator: " ")
-      logger.info(
-        "fetchCollectionTree: no shared albums returned. Broad .album scan found \(anyAlbums.count) collection(s): \(histogramString, privacy: .public). If you have shared albums in Photos.app, check Photos → Settings → iCloud → \"Shared Albums\" is enabled. PHAssetCollectionSubtype.albumCloudShared raw value is 102."
-      )
-    }
 
     try Task.checkCancellation()
     return tree
@@ -1367,7 +1199,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// Smart albums (including the Favorites smart album) have a different
   /// `assetCollectionType == .smartAlbum`, so they are excluded at the type check
   /// upstream and never reach this routing — Favorites is surfaced as a synthetic
-  /// descriptor in `fetchCollectionTree()` instead.
+  /// descriptor in `scanCollectionTree()` instead.
   ///
   /// Shared albums (`.albumCloudShared`) route to `.sharedAlbum` so the sidebar
   /// and export path can preserve their distinct fidelity and placement rules.
@@ -1437,15 +1269,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
       )
     }
     return nil
-  }
-
-  private func fetchPHAssets(identifiers: [String]) -> [PHAsset] {
-    let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
-    var assets: [PHAsset] = []
-    result.enumerateObjects { asset, _, _ in
-      assets.append(asset)
-    }
-    return assets
   }
 
   /// Fetch raw PHAssets for a specific year and month

@@ -252,9 +252,7 @@ struct CollectionsSidebarView: View {
   }
 
   /// Top-level shared albums (iCloud-shared). PhotoKit doesn't nest them, so this is a
-  /// flat list. `PhotoLibraryManager.fetchCollectionTree` partitions them out so they
-  /// always appear here even though PhotoKit's traversal interleaves them with user
-  /// albums.
+  /// flat list; the tree scan lists them after the user albums and folders.
   private var sharedAlbums: [PhotoCollectionDescriptor] {
     tree.filter { $0.kind == .sharedAlbum }
   }
