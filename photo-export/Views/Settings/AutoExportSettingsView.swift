@@ -8,42 +8,16 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @Environment(LoginItemController.self) private var loginItemController
-  @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
 
-  @State private var isShowingMigrationRecoverySheet = false
-  @State private var isShowingSafetyConfirm = false
-
   var body: some View {
     Form {
-      if lifecycleCoordinator.migrationConflict != nil {
-        let showRecovery = { isShowingMigrationRecoverySheet = true }
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction("auto-export-migration-recovery", action: showRecovery)
-        #endif
-        Section {
-          MigrationConflictBanner(onTap: showRecovery)
-            .listRowInsets(EdgeInsets())
-        }
-      } else if safetyMonitor.needsSafetyConfirmation {
-        let showConfirmation = { isShowingSafetyConfirm = true }
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction(
-            "auto-export-safety-confirmation", action: showConfirmation)
-        #endif
-        Section {
-          SafetyConfirmationBanner(onTap: showConfirmation)
-            .listRowInsets(EdgeInsets())
-        }
-      }
+      AutoExportRecoveryPrompt()
 
       Section {
         Toggle(
@@ -129,72 +103,13 @@ struct AutoExportSettingsView: View {
       }
 
       Section("Startup") {
-        Toggle(
-          isOn: Binding(
-            get: { loginItemController.status == .enabled },
-            set: { newValue in
-              if newValue {
-                loginItemController.register()
-              } else {
-                loginItemController.unregister()
-              }
-            }
-          )
-        ) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Open Photo Export at login")
-            Text(loginItemController.status.footerText)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              #if DEBUG
-                .background {
-                  RenderedTextRecord(
-                    key: "login-item-footer", text: loginItemController.status.footerText)
-                }
-              #endif
-          }
-        }
-        if loginItemController.status == .requiresApproval {
-          Button("Open System Settings\u{2026}") {
-            loginItemController.openSystemLoginItems()
-          }
-        }
+        LoginItemSettingsControls()
       }
     }
     .onAppear { loginItemController.refresh() }
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
-    .sheet(isPresented: $isShowingMigrationRecoverySheet) {
-      DestinationRecordRecoveryView(
-        mode: .migrationConflict,
-        onRebuildComplete: { lifecycleCoordinator.clearMigrationConflictAfterReconcile() },
-        onUseAsIs: nil
-      )
-      .environmentObject(lifecycleCoordinator)
-      .environment(exportManagerFromEnvironment)
-      .environmentObject(exportDestinationManager)
-    }
-    .sheet(isPresented: $isShowingSafetyConfirm) {
-      // The destination has files but no records. Offer to rebuild
-      // progress from the drive (so re-exports skip the existing files instead
-      // of creating ` (1)` duplicates) as well as the plain "these are my
-      // pre-existing files" confirm. Both resolve the safety prompt by
-      // confirming the destination; the rebuild path additionally restores the
-      // record store from the drive's contents first.
-      DestinationRecordRecoveryView(
-        mode: .orphanedProgress,
-        onRebuildComplete: { safetyMonitor.confirmCurrentDestination() },
-        onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
-      )
-      .environmentObject(lifecycleCoordinator)
-      .environment(exportManagerFromEnvironment)
-      .environmentObject(exportDestinationManager)
-    }
   }
-
-  // Supply the existing manager to both recovery sheets so their actions share the app's
-  // export state alongside the lifecycle and destination services.
-  @Environment(ExportManager.self) private var exportManagerFromEnvironment
 
   // MARK: - Scope binding helper
 
@@ -274,84 +189,6 @@ struct AutoExportSettingsView: View {
 }
 
 // MARK: - Subviews
-
-private struct MigrationConflictBanner: View {
-  let onTap: () -> Void
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "exclamationmark.triangle.fill")
-        .foregroundStyle(.orange)
-        .font(.title3)
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Destination Has Unresolved Issues")
-          .font(.headline)
-        Text(
-          "This destination has both current and legacy record sets. Auto Export is blocked until you resolve which to use."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        HStack {
-          Spacer()
-          Button("Resolve\u{2026}") { onTap() }
-            .controlSize(.regular)
-        }
-      }
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
-    .background(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color.orange.opacity(0.1))
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
-    )
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-  }
-}
-
-private struct SafetyConfirmationBanner: View {
-  let onTap: () -> Void
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "exclamationmark.shield.fill")
-        .foregroundStyle(.orange)
-        .font(.title3)
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Confirm This Destination")
-          .font(.headline)
-        Text(
-          "The destination folder already contains files but has no export records. If you've exported here before, you can rebuild your progress; otherwise confirm it's your backup before Auto Export starts writing."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        HStack {
-          Spacer()
-          Button("Review\u{2026}") { onTap() }
-            .controlSize(.regular)
-        }
-      }
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
-    .background(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color.orange.opacity(0.1))
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
-    )
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-  }
-}
 
 private struct StatusSummaryRow: View {
   let state: AutoSyncState
@@ -528,19 +365,3 @@ private struct LastCatchUpRow: View {
 // Per-view label extensions removed — surface uses
 // `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
 // directly. See `AutoSyncReason.swift`.
-
-#if DEBUG
-  /// Records the text of the view it backs, so a hosted test reads what that view renders
-  /// rather than what the enclosing body computed.
-  private struct RenderedTextRecord: View {
-    let key: String
-    let text: String
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-
-    var body: some View {
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([text], for: key)
-      Color.clear
-    }
-  }
-#endif

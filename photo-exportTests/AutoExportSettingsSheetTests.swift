@@ -6,20 +6,26 @@ import Testing
 @testable import Photo_Export
 
 #if DEBUG
-  /// Missing banner actions fail before instrumentation. A sheet without its manager traps
-  /// the process; each test witnesses the header's title from its mounted background.
+  /// Real settings controls must present a recovery sheet with the current app manager.
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct AutoExportSettingsSheetTests {
-    private func expectHeader(
-      _ title: String, in window: NSWindow, counter: BodyInvalidationCounter
-    ) async throws {
+    private func expectHeader(_ title: String, in window: NSWindow) async throws {
       try #require(await observe(in: window) { window.attachedSheet != nil })
       let sheet = try #require(window.attachedSheet)
       try #require(
         await observe(in: sheet) {
-          counter.renderedText["destination-recovery-header"] == [title]
-        }, "The attached recovery header must record its actual title")
+          NativeViewAccess.containsText(title, in: sheet)
+        }, "The attached recovery sheet must render its actual header")
+    }
+
+    private func press(_ title: String, in window: NSWindow) async throws {
+      try #require(await observe(in: window) { NativeViewAccess.button(title, in: window) != nil })
+      let button = try #require(NativeViewAccess.button(title, in: window))
+      #expect(button.isAccessibilityEnabled?() == true)
+      let press: (() -> Bool)? = button.accessibilityPerformPress
+      let action = try #require(press)
+      _ = action()
     }
 
     private func close(_ window: NSWindow, core: AppCore, counter: BodyInvalidationCounter) async {
@@ -52,18 +58,15 @@ import Testing
         collectionExportRecordStore: core.collectionExportRecordStore,
         confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
       let counter = BodyInvalidationCounter()
-      let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter, safety: safety)
+      let window = AppCoreTestHarness.settingsWindow(
+        core: core, counter: counter, safety: safety, recoveryPromptOnly: true)
       try await withCleanup {
         safety.attach()
         try #require(await eventually("safety scan completed") { safety.needsSafetyConfirmation })
         window.orderFront(nil)
-        try #require(
-          await observe(in: window) { counter.renderedText["auto-export-now-footer"] != nil })
-        let action = try #require(counter.renderedActions["auto-export-safety-confirmation"])
         #expect(window.attachedSheet == nil)
-        #expect(counter.renderedText["destination-recovery-header"] == nil)
-        action()
-        try await expectHeader("Confirm This Destination", in: window, counter: counter)
+        try await press("Review…", in: window)
+        try await expectHeader("Confirm This Destination", in: window)
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
@@ -85,18 +88,14 @@ import Testing
           identity: DestinationIdentity(stableId: "C", fingerprint: nil)))
       let counter = BodyInvalidationCounter()
       let window = AppCoreTestHarness.settingsWindow(
-        core: core, counter: counter, lifecycle: lifecycle)
+        core: core, counter: counter, lifecycle: lifecycle, recoveryPromptOnly: true)
       try await withCleanup {
         try #require(
           lifecycle.migrationConflict == MigrationConflictState(newId: "new", legacyId: "legacy"))
         window.orderFront(nil)
-        try #require(
-          await observe(in: window) { counter.renderedText["auto-export-now-footer"] != nil })
-        let action = try #require(counter.renderedActions["auto-export-migration-recovery"])
         #expect(window.attachedSheet == nil)
-        #expect(counter.renderedText["destination-recovery-header"] == nil)
-        action()
-        try await expectHeader("Destination Has Unresolved Issues", in: window, counter: counter)
+        try await press("Resolve…", in: window)
+        try await expectHeader("Destination Has Unresolved Issues", in: window)
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
