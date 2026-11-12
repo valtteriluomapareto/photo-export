@@ -216,7 +216,12 @@ import Testing
       window.setContentSize(CGSize(width: 800, height: narrow.height))
       let wide = try await settledContentSize(in: f)
       #expect(wide.width == 800)
-      #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
+      // On macOS 15 (measured on 15.8.2), a window whose content view is the hosting view keeps
+      // the content's zero-width height as its minimum, so its height stays fixed as it widens.
+      // Wrapping is checked on macOS 26 and later; macOS 15 still checks the replacements below.
+      if #available(macOS 26, *) {
+        #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
+      }
 
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
