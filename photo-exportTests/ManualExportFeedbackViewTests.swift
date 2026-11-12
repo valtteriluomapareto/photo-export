@@ -280,7 +280,10 @@ import Testing
       let issuesShown = await observe {
         f.settingsWindow.map { NativeViewAccess.selectedTab("Export Issues", in: $0) } == true
       }
-      #expect(issuesShown, "The shared Settings binding must show the actual issues tab")
+      #expect(
+        issuesShown,
+        "The shared Settings binding must show the actual issues tab. Native tabs: \(f.settingsWindow.map { NativeViewAccess.tabDescriptions(in: $0) } ?? "window missing")"
+      )
       let dismiss = try #require(f.window.flatMap { NativeViewAccess.button("Dismiss", in: $0) })
       #expect(dismiss.accessibilityPerformPress?() == true)
 
@@ -298,7 +301,9 @@ import Testing
         try #require(
           await observe(in: f.settingsWindow) {
             f.settingsWindow.map { NativeViewAccess.selectedTab(title, in: $0) } == true
-          })
+          },
+          "Expected \(title). Native tabs: \(f.settingsWindow.map { NativeViewAccess.tabDescriptions(in: $0) } ?? "window missing")"
+        )
       }
     }
 

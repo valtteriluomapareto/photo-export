@@ -57,13 +57,24 @@ enum NativeViewAccess {
   }
 
   static func selectedTab(_ title: String, in window: NSWindow) -> Bool {
-    elements(in: window).contains { element in
+    let candidates = elements(in: window)
+    let selectedRadio = candidates.contains { element in
       guard element.accessibilityRole?() == .radioButton,
         element.accessibilityTitle?() == title || element.accessibilityLabel?() == title
       else { return false }
       let value: (() -> NSNumber?)? = element.accessibilityValue
       return value?()?.boolValue == true
     }
+    return selectedRadio
+      || candidates.contains {
+        ($0 as? NSTabView)?.selectedTabViewItem?.label == title
+      }
+  }
+
+  static func tabDescriptions(in window: NSWindow) -> String {
+    elements(in: window).compactMap { $0 as? NSTabView }.map {
+      "selected=\($0.selectedTabViewItem?.label ?? "none"); items=\($0.tabViewItems.map(\.label))"
+    }.joined(separator: " | ")
   }
 
   static func element(_ identifier: String, in window: NSWindow) -> AnyObject? {
