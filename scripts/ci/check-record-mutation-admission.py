@@ -7,7 +7,7 @@ import sys
 from swift_source import code_only
 
 MUTATION = re.compile(r'\b(?:markVariantInProgress|markVariantExported|markVariantFailed|'
-                      r'bulkImportRecords|upsertPlacement|deletePlacement|removeVariant|'
+                      r'bulkImportRecords|upsertPlacement|removeVariant|'
                       r'removeRecord|retryPersistence|resetToEmpty|configure)\s*\(')
 RECEIVER = re.compile(r'(?:\b(?:\w*RecordStore|timelineStore|collectionStore|'
                       r'recordStoreRouter|collections|timeline))\s*\.\s*$')

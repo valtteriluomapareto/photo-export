@@ -436,28 +436,6 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-  func deletedCollectionPlacementIsRestoredForCommittedOutput(switchAway: Bool) async throws {
-    let f = try await Fixture(collection: true, phase: .move)
-    try await withCleanup {
-      f.start()
-      await f.gate.entered.waitForEnter(count: 1)
-      let old = try #require(f.manager.currentTask)
-      f.manager.cancelAndClear()
-      try await f.collections.withMutationAdmission {
-        f.collections.deletePlacement(id: f.placement.id)
-      }
-      if switchAway { await f.select("B") }
-      f.gate.release()
-      await old.value
-      await f.select("A")
-      #expect(f.variants()[.original]?.status == .done)
-      #expect(f.collections.placement(id: f.placement.id) == f.placement)
-    } cleanup: {
-      await f.cleanup()
-    }
-  }
-
   @Test(.timeLimit(.minutes(1)))
   func lateMoveFailureCannotWriteIntoReplacementDestination() async throws {
     let f = try await Fixture(collection: true, phase: .move)

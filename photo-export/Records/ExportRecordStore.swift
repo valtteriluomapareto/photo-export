@@ -37,16 +37,15 @@ final class ExportRecordStore {
     configurationPending && !applyingCancellationCleanup ? [:] : storedRecords
   }
 
-  /// Incrementally-maintained per-`(year, month)` counters that back the public count
-  /// queries. Without these, `recordCount`, `monthSummary`, `sidebarSummary`, and the
-  /// year-roll-up helpers each iterate `recordsById.values` once per call — a 500k-record
-  /// library × ~5 visible years on screen × every coalesced `mutationCounter` bump turned
-  /// the timeline sidebar into a multi-second stall during exports. The counters are
-  /// rebuilt from scratch at `beginConfigure(for:)` time and updated incrementally on every
-  /// `apply(_:)` thereafter (every public mutation routes through `apply` via `append`).
+  /// Incrementally-maintained per-`(year, month)` counters that back the sidebar count
+  /// queries. Without these, `sidebarSummary` and the year roll-up each iterate
+  /// `recordsById.values` once per call — a 500k-record library × ~5 visible years on
+  /// screen × every coalesced `mutationCounter` bump turned the timeline sidebar into a
+  /// multi-second stall during exports. The counters are rebuilt from scratch at
+  /// `beginConfigure(for:)` time and updated incrementally on every `apply(_:)` thereafter
+  /// (every public mutation routes through `apply` via `append`).
   ///
-  /// All public read methods translate one-for-one against the original implementations;
-  /// `ExportRecordStoreQueryGoldenTests` pins the exact integer outputs against
+  /// `ExportRecordStoreQueryGoldenTests` pins the exact counter values against
   /// hand-checked fixtures so any drift here surfaces immediately.
   struct MonthKey: Hashable, Sendable {
     let year: Int
@@ -135,9 +134,6 @@ final class ExportRecordStore {
   /// The installed history's claims, maintained with every accepted record mutation.
   @ObservationIgnored private var filenameClaims = FilenameClaims<ClaimFolder>()
   @ObservationIgnored private(set) var recordsEpoch: UInt64 = 0
-  #if DEBUG
-    @ObservationIgnored var preparationCheckpoint: (@Sendable () async -> Void)?
-  #endif
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
   private var configurationPending = false
@@ -306,9 +302,6 @@ final class ExportRecordStore {
       guard request == configurationRequest else { return }
       let transition = mutationAdmission.requestCheckpoint { [weak self] in
         guard let self, request == configurationRequest else { return }
-        if hasUnsavedChanges, let id = configuredDestinationId {
-          pendingRecovery[id] = storedRecords
-        }
         mutationAdmission.installAfterMaintenance {
           self.configurationPending = false
           self.pendingConfiguration = nil
@@ -339,18 +332,12 @@ final class ExportRecordStore {
     let ticket = LoadTicket(generation: loadGeneration, file: file, signpost: signpost)
     let inputs = file.readInputs
     let latestLoad = latestLoad
-    #if DEBUG
-      let preparationCheckpoint = preparationCheckpoint
-    #endif
     ioQueue.async(qos: .userInitiated, flags: .enforceQoS) { [weak self] in
       let raw = inputs.read()
       Task.detached(priority: .userInitiated) { [weak self] in
         var separator: Bool?
         var outcome: LoadOutcome?
         if latestLoad.isCurrent(ticket.generation) {
-          #if DEBUG
-            await preparationCheckpoint?()
-          #endif
           let decoded = inputs.decode(raw)
           separator = decoded.needsLogSeparator
           outcome = Self.prepare(decoded)
@@ -933,33 +920,6 @@ final class ExportRecordStore {
   /// Registers reads against the same revision that coalesces record notifications.
   private func trackRecords() { _ = mutationCounter }
 
-  /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
-  /// yearly progress counting for unadjusted libraries.
-  private var visibleMonthCounters: [MonthKey: MonthCounters] {
-    configurationPending ? [:] : monthCounters
-  }
-
-  func yearExportedCount(year: Int) -> Int {
-    trackRecords()
-    var total = 0
-    for month in 1...12 {
-      total +=
-        visibleMonthCounters[MonthKey(year: year, month: month)]?
-        .variantStatus[.original]?[.done] ?? 0
-    }
-    return total
-  }
-
-  /// Legacy month summary that counts `.original` done records. Preserved for call sites that
-  /// have not yet adopted `monthSummary(assets:selection:)`.
-  func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
-    trackRecords()
-    let exportedCount =
-      visibleMonthCounters[MonthKey(year: year, month: month)]?
-      .variantStatus[.original]?[.done] ?? 0
-    return makeSummary(year: year, month: month, exported: exportedCount, total: totalAssets)
-  }
-
   /// Selection-aware month summary. Caller supplies the month's loaded asset descriptors so the
   /// evaluator can consult each asset's `hasAdjustments`. `livePhotosPaired` is the user's
   /// current setting — without it, a Live Photo whose paired video is pending
@@ -985,60 +945,6 @@ final class ExportRecordStore {
       exported += 1
     }
     return makeSummary(year: year, month: month, exported: exported, total: assets.count)
-  }
-
-  /// Count of records in `year`/`month` whose variant matches the requested `variant` with the
-  /// requested `status`. Used by selection-aware sidebar summaries that do not have access to the
-  /// loaded asset descriptors.
-  func recordCount(
-    year: Int, month: Int, variant: ExportVariant, status: ExportStatus
-  ) -> Int {
-    trackRecords()
-    return visibleMonthCounters[MonthKey(year: year, month: month)]?
-      .variantStatus[variant]?[status] ?? 0
-  }
-
-  /// Count of records in `year`/`month` whose `.original` and `.edited` variants are both
-  /// `.done`. These records are definitely fully complete under `editedWithOriginals`
-  /// regardless of whether the asset is currently adjusted.
-  func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
-    trackRecords()
-    return visibleMonthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
-  }
-
-  /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
-  /// records-only sidebar formula for the default mode.
-  func recordCountEditedDone(year: Int, month: Int) -> Int {
-    trackRecords()
-    return recordCount(year: year, month: month, variant: .edited, status: .done)
-  }
-
-  /// Count of records in `year`/`month` with `.original.done` at a natural-stem filename
-  /// (i.e. not a `_orig` companion) AND `.edited` not `.done`. Used by the records-only
-  /// sidebar formula to estimate "unedited asset, exported once" rows without loading
-  /// descriptors.
-  func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
-    trackRecords()
-    return visibleMonthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
-  }
-
-  /// Records covered by the fallback in `(year, month)`. Counted as
-  /// "exported" by the sidebar's records-only formula in `.edited` mode so a
-  /// year that finishes with fallback-covered assets reads as 100% rather
-  /// than 99% — matching the asset-aware `isExported(asset:selection:)`.
-  func recordCountEditedFallback(year: Int, month: Int) -> Int {
-    trackRecords()
-    return visibleMonthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
-  }
-
-  /// Records in `(year, month)` with at least one paired-video variant whose
-  /// status is not `.done`. Subtracted by `sidebarSummary` when the caller
-  /// passes `livePhotosPaired: true` so a Live Photo whose still landed but
-  /// whose motion file is still pending no longer reads as fully exported
-  /// in the timeline sidebar / month tile badges.
-  func recordCountPairedVideoIncomplete(year: Int, month: Int) -> Int {
-    trackRecords()
-    return visibleMonthCounters[MonthKey(year: year, month: month)]?.pairedVideoIncomplete ?? 0
   }
 
   /// Records-only approximation of "fully exported under this selection," capped by the
@@ -1071,7 +977,8 @@ final class ExportRecordStore {
     year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
     selection: ExportVersionSelection, livePhotosPaired: Bool
   ) -> MonthStatusSummary? {
-    let counters = visibleMonthCounters[MonthKey(year: year, month: month)] ?? .zero
+    let counters =
+      configurationPending ? .zero : monthCounters[MonthKey(year: year, month: month)] ?? .zero
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
     let origOnlyAtStem = counters.originalDoneAtNaturalStem
@@ -1397,9 +1304,10 @@ final class ExportRecordStore {
   }
 
   /// Lands an acknowledged final commit where its destination now stands: deferred behind a
-  /// corrupt load, held while the destination loads, recorded in the active history, or written
-  /// to the parked history of a destination the store has left. A held commit comes back here
-  /// when that load finishes, or when the store leaves the destination first.
+  /// corrupt load, held while the destination loads, recorded in the active history (on top of
+  /// its captured history after an unreadable reload), or written to the parked history of a
+  /// destination the store has left. A held commit comes back here when that load finishes, or
+  /// when the store leaves the destination first.
   private func landFinalCommit(
     _ filename: String,
     context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>,
@@ -1438,35 +1346,16 @@ final class ExportRecordStore {
         ))
       return .held
     }
-    return landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
-      ? .recorded : .held
-  }
-
-  /// Records an acknowledged final commit in the active destination's history: deferred
-  /// behind a corrupt load, added to the parked history after an unreadable reload, or
-  /// recorded. Returns whether the completion was written and its flush is still owed.
-  @discardableResult
-  private func landOnActiveDestination(
-    _ filename: String,
-    context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>,
-    applyCompletion: @escaping (String) -> Void
-  ) -> Bool {
-    if state == .failed {
-      deferredFinalCompletions[context.destinationId, default: []].append {
-        applyCompletion(filename)
-      }
-      return false
-    }
     if state == .persistenceFailed, !hasUnsavedChanges {
       installHistory(Self.prepareRetained(context.snapshot))
       hasUnsavedChanges = true
     }
     applyCompletion(filename)
-    if state == .persistenceFailed {
+    guard state != .persistenceFailed else {
       retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
-      return false
+      return .held
     }
-    return true
+    return .recorded
   }
 
   /// Lands the final commits acknowledged while `destinationId` loaded, by default the active

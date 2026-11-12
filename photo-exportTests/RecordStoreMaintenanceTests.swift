@@ -61,6 +61,7 @@ struct RecordStoreMaintenanceTests {
     let root = TestScratch.directory("RecordStoreMaintenance")
     let replacement = Replacement()
     let log = Log()
+    let reads: HeldReadIO
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let collection: Bool
@@ -69,10 +70,11 @@ struct RecordStoreMaintenanceTests {
 
     init(collection: Bool) async {
       self.collection = collection
+      reads = HeldReadIO(inner: log)
       timeline = ExportRecordStore(
-        baseDirectoryURL: root, recordLogIO: log, snapshotReplacer: replacement)
+        baseDirectoryURL: root, recordLogIO: reads, snapshotReplacer: replacement)
       collections = CollectionExportRecordStore(
-        baseDirectoryURL: root, recordLogIO: log, snapshotReplacer: replacement)
+        baseDirectoryURL: root, recordLogIO: reads, snapshotReplacer: replacement)
       if collection {
         await collections.configureAndWait(for: "A")
         collections.upsertPlacement(placement)
@@ -162,7 +164,11 @@ struct RecordStoreMaintenanceTests {
       }
     }
     var state: RecordStoreState { collection ? collections.state : timeline.state }
+    var ticket: RecordMutationTicket {
+      collection ? collections.mutationTicket : timeline.mutationTicket
+    }
     func close() {
+      reads.releaseAll()
       replacement.release()
       timeline.drainSynchronously()
       collections.drainSynchronously()
@@ -408,7 +414,10 @@ struct RecordStoreMaintenanceTests {
         #expect(f.collections.summary(for: f.placement).totalCount == 0)
       } else {
         #expect(f.timeline.recordsById.isEmpty)
-        #expect(f.timeline.yearExportedCount(year: 2026) == 0)
+        #expect(
+          f.timeline.sidebarSummary(
+            year: 2026, month: 10, totalCount: 1, adjustedCount: 0, selection: .edited,
+            livePhotosPaired: false)?.exportedCount == 0)
       }
       #expect(f.closed)
       f.replacement.release()
@@ -653,30 +662,24 @@ struct RecordStoreMaintenanceTests {
     await f.select("B")
     f.log.failReads.mutate { $0 = true }
     await f.select("A")
-    let preparation = AsyncCheckpoint()
-    let preparations = LockedBox(0)
-    let checkpoint: @Sendable () async -> Void = {
-      var first = false
-      preparations.mutate { count in
-        count += 1
-        first = count == 1
-      }
-      if first { await preparation.enter() }
-    }
-    if collection {
-      f.collections.preparationCheckpoint = checkpoint
-    } else {
-      f.timeline.preparationCheckpoint = checkpoint
-    }
+    let snapshot = f.root.appendingPathComponent("A").appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+    f.reads.hold(snapshot, fromRead: f.reads.readCount(of: snapshot) + 1)
     let retry = Task { await f.retry() }
     var completion: Task<Void, Never>?
     try await withCleanup {
-      try #require(await preparation.waitForEnter(count: 1))
+      try #require(
+        await eventually("the retry load reads the held snapshot") {
+          f.reads.heldCount == 1
+        })
+      let ticket = f.ticket
       completion = Task { await acknowledge("late.JPG") }
       await completion?.value
-      #expect(preparations.value == 1, "The acknowledgement must wait for the actual retry load")
+      #expect(f.ticket == ticket, "The acknowledgement must wait for the actual retry load")
       #expect(!f.has("seed") && !f.has("commit"))
-      await preparation.releaseAll()
+      f.reads.release(snapshot)
       await retry.value
       #expect(f.has("seed") && f.has("commit"))
       f.log.failReads.mutate { $0 = false }
@@ -686,7 +689,7 @@ struct RecordStoreMaintenanceTests {
       await f.select("A")
       #expect(f.has("seed") && f.has("commit"))
     } cleanup: {
-      await preparation.releaseAll()
+      f.reads.releaseAll()
       await completion?.value
       await retry.value
       f.close()
@@ -712,15 +715,9 @@ struct RecordStoreMaintenanceTests {
     f.log.failReads.mutate { $0 = true }
     await f.select("A")
     #expect(f.state == .persistenceFailed)
-    let preparations = LockedBox(0)
-    let checkpoint: @Sendable () async -> Void = { preparations.mutate { $0 += 1 } }
-    if collection {
-      f.collections.preparationCheckpoint = checkpoint
-    } else {
-      f.timeline.preparationCheckpoint = checkpoint
-    }
+    let ticket = f.ticket
     await acknowledge("late.JPG")
-    #expect(preparations.value == 0, "Known corruption must defer without restoring its capture")
+    #expect(f.ticket == ticket, "Known corruption must defer without restoring its capture")
     #expect(!f.has("seed") && !f.has("commit"))
     await f.retry()
     #expect(f.state == .persistenceFailed)

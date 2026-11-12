@@ -66,7 +66,7 @@ and the backticked, comma-separated value lists in this shape.
 | `ExportStatus` | variant `status` | `pending`, `inProgress`, `done`, `failed` |
 | `ExportVariantReason` | variant `reason`; an open set, unknown codes round-trip | `interrupted`, `editedResourceUnavailable`, `editedUnavailableOriginalBackedUp`, `pairedVideoUnavailable` |
 | `ExportRecordMutation.Operation` | timeline log `op` | `upsert`, `delete` |
-| `CollectionExportRecordStore.LogOp.OpDiscriminator` | collection log `op` | `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord` |
+| `CollectionExportRecordStore.LogOp.OpDiscriminator` | collection log `op` | `upsertPlacement`, `upsertRecord`, `deleteRecord` |
 
 The AutoSync metadata files have their own persisted enums, such as
 [`AutoSyncFailureCategory`](../../photo-export/Models/AutoSyncFailureCategory.swift); see
@@ -185,7 +185,7 @@ settings. The other kinds use the `standard` policy, which honors those settings
     Shared albums never nest. When sanitized sibling names collide, later placements get
     `_2`, `_3`, … suffixes; a shared album collides only with other shared albums.
   - `createdAt` (ISO8601 date) — diagnostic only, not part of identity.
-- `LogOp` (JSON Lines): four operations, distinguished by an `op` discriminator (a
+- `LogOp` (JSON Lines): three operations, distinguished by an `op` discriminator (a
   `CollectionExportRecordStore.LogOp.OpDiscriminator` value). Record-level bodies are the
   same `{ variants: { ... } }` shape as the snapshot, under the key `record`.
 
@@ -302,8 +302,7 @@ adjusted asset whose `original` is `done` and whose `edited` failed with reason
 - `exportInfo(assetId:)` (timeline) and `exportInfo(assetId:placement:)` (collections)
   return the record; callers read `variants` directly, including the paired-video keys.
 - `monthSummary(assets:selection:livePhotosPaired:)` counts the loaded assets for which
-  `isExported` holds. The older `monthSummary(year:month:totalAssets:)` and
-  `yearExportedCount(year:)` count `original` `done` records only.
+  `isExported` holds.
 - `sidebarSummary(year:month:totalCount:adjustedCount:selection:livePhotosPaired:)`
   approximates the count for sidebar rows without loaded `AssetDescriptor`s, from
   per-month record counters. It returns nil until `adjustedCount` is known. The exported

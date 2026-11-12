@@ -207,6 +207,5 @@ struct RecordStoreLoadCharacterizationTests {
     #expect(try Data(contentsOf: logURL) == seeded + separator + (try line("c")))
     let reloaded = (await makeFile(root, io: FaultyReadIO()).load())
     #expect(reloaded.ops == [Entry(id: "a"), Entry(id: "c")])
-    #expect(reloaded.malformedLineCount == 0)
   }
 }

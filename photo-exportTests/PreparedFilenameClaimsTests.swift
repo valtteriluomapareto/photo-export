@@ -22,8 +22,8 @@ struct PreparedFilenameClaimsTests {
           ])
       }
       let loaded = ExportRecordStore.RecordFile.LoadResult(
-        snapshot: records, snapshotStatus: .loaded, ops: [], malformedLineCount: 0,
-        ioFailure: nil, needsLogSeparator: false)
+        snapshot: records, snapshotStatus: .loaded, ops: [], ioFailure: nil,
+        needsLogSeparator: false)
       return (ExportRecordStore.prepare(loaded), Thread.isMainThread)
     }.value
     #expect(!prepared.1)
@@ -115,10 +115,9 @@ struct PreparedFilenameClaimsTests {
     async throws
   {
     let root = TestScratch.directory("PreparedClaimsOwnership")
-    let gate = AsyncCheckpoint()
-    let threads = LockedBox<[Bool]>([])
-    let timeline = ExportRecordStore(baseDirectoryURL: root)
-    let collections = CollectionExportRecordStore(baseDirectoryURL: root)
+    let io = HeldReadIO()
+    let timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
+    let collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     let placement = ExportPlacement.favorites()
     if collection {
       await collections.configureAndWait(for: "A")
@@ -136,20 +135,17 @@ struct PreparedFilenameClaimsTests {
       await timeline.configureAndWait(for: nil)
     }
     let finished = collection ? collections.finishedLoadCount : timeline.finishedLoadCount
+    let snapshot = root.appendingPathComponent("A").appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+    io.hold(snapshot, fromRead: io.readCount(of: snapshot) + 1)
     if collection {
-      collections.preparationCheckpoint = {
-        threads.mutate { $0.append(Thread.isMainThread) }
-        await gate.enter()
-      }
       collections.beginConfigure(for: "A")
     } else {
-      timeline.preparationCheckpoint = {
-        threads.mutate { $0.append(Thread.isMainThread) }
-        await gate.enter()
-      }
       timeline.beginConfigure(for: "A")
     }
-    await gate.waitForEnter(count: 1)
+    try #require(await eventually("the load reads the held snapshot") { io.heldCount == 1 })
     #expect((collection ? collections.state : timeline.state) == .loading)
     #expect(
       collection
@@ -164,13 +160,13 @@ struct PreparedFilenameClaimsTests {
         await timeline.configureAndWait(for: nil)
       }
     }
-    await gate.releaseAll()
+    io.releaseAll()
     try #require(
       await eventually("obsolete preparation discarded") {
         collection
           ? collections.finishedLoadCount > finished : timeline.finishedLoadCount > finished
       })
-    #expect(threads.value == [false])
+    #expect(io.mainThreadReads.isEmpty)
     #expect(
       (collection ? collections.state : timeline.state) == (supersede ? .unconfigured : .ready))
     #expect(

@@ -9,14 +9,11 @@ struct RecordStoreObservationTests {
   enum Query: String, CaseIterable, Sendable {
     case timelineDestination, timelineIsExported, timelineExportInfo
     case timelineFilenameExceptVariant, timelineFilenameExceptAsset
-    case timelineYearCount, timelineMonthTotal, timelineMonthAssets, timelineRecordCount
-    case timelineBothDone, timelineEditedDone, timelineNaturalStem, timelineFallback
-    case timelinePairedIncomplete, timelineSidebar, timelineSidebarYear
-    case collectionDestination, collectionCurrentPlacement, collectionPlacement,
-      collectionPlacements
+    case timelineMonthAssets, timelineSidebar, timelineSidebarYear
+    case collectionDestination, collectionCurrentPlacement, collectionPlacement
     case collectionRecordedVariants, collectionExportInfo
     case collectionFilenameExceptVariant, collectionFilenameExceptAsset
-    case collectionIsExported, collectionRecordCount, collectionMonthAssets, collectionSummary
+    case collectionIsExported, collectionMonthAssets, collectionSummary
 
     var collection: Bool { rawValue.hasPrefix("collection") }
 
@@ -32,19 +29,8 @@ struct RecordStoreObservationTests {
       case .timelineFilenameExceptAsset:
         _ = f.timeline.isFilenameClaimed(
           "SEED.HEIC", year: 2026, month: 9, subfolder: nil, exceptAsset: "other")
-      case .timelineYearCount: _ = f.timeline.yearExportedCount(year: 2026)
-      case .timelineMonthTotal: _ = f.timeline.monthSummary(year: 2026, month: 9, totalAssets: 1)
       case .timelineMonthAssets:
         _ = f.timeline.monthSummary(assets: [f.asset], selection: .edited, livePhotosPaired: false)
-      case .timelineRecordCount:
-        _ = f.timeline.recordCount(year: 2026, month: 9, variant: .original, status: .done)
-      case .timelineBothDone: _ = f.timeline.recordCountBothVariantsDone(year: 2026, month: 9)
-      case .timelineEditedDone: _ = f.timeline.recordCountEditedDone(year: 2026, month: 9)
-      case .timelineNaturalStem:
-        _ = f.timeline.recordCountOriginalDoneAtNaturalStem(year: 2026, month: 9)
-      case .timelineFallback: _ = f.timeline.recordCountEditedFallback(year: 2026, month: 9)
-      case .timelinePairedIncomplete:
-        _ = f.timeline.recordCountPairedVideoIncomplete(year: 2026, month: 9)
       case .timelineSidebar:
         _ = f.timeline.sidebarSummary(
           year: 2026, month: 9, totalCount: 1, adjustedCount: 0,
@@ -57,7 +43,6 @@ struct RecordStoreObservationTests {
       case .collectionCurrentPlacement:
         _ = f.collections.currentPlacement(for: .favorites, collections: [])
       case .collectionPlacement: _ = f.collections.placement(id: f.placement.id)
-      case .collectionPlacements: _ = f.collections.placements(matching: .favorites)
       case .collectionRecordedVariants:
         _ = f.collections.recordedVariantCount(of: [
           .init(placement: f.placement, records: ["seed": [.original: f.original]])
@@ -73,7 +58,6 @@ struct RecordStoreObservationTests {
       case .collectionIsExported:
         _ = f.collections.isExported(
           asset: f.asset, placement: f.placement, selection: .edited, livePhotosPaired: false)
-      case .collectionRecordCount: _ = f.collections.recordCount(in: .favorites)
       case .collectionMonthAssets:
         _ = f.collections.monthSummary(
           assets: [f.asset], placement: f.placement, selection: .edited, livePhotosPaired: false)

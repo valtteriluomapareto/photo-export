@@ -98,7 +98,6 @@ struct CollectionExportRecordStoreTests {
       let asset = "asset-\(Int(seed >> 16) % 13)"
       switch seed % 7 {
       case 0: store.remove(assetId: asset, placement: placement)
-      case 1: store.deletePlacement(id: placement.id)
       case 2: store.removeVariant(assetId: asset, placement: placement, variant: .original)
       default:
         store.upsertPlacement(placement)
@@ -288,25 +287,6 @@ struct CollectionExportRecordStoreTests {
     #expect(store.recordBodies == beforeBodies)
   }
 
-  @Test func deletePlacementForUnknownIdIsAllowed() async throws {
-    let (dir, store) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    await store.configureAndWait(for: "dest-reject-9")
-    // No-op delete for an unknown id is harmless and emits a delete log line; verify the
-    // call doesn't crash and state stays empty.
-    store.deletePlacement(id: "collections:album:unknown")
-    #expect(store.placements.isEmpty)
-    #expect(store.recordBodies.isEmpty)
-  }
-
-  @Test func placementsMatchingTimelineReturnsEmpty() async throws {
-    let (dir, store) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    await store.configureAndWait(for: "dest-reject-10")
-    store.upsertPlacement(favoritesPlacement())
-    #expect(store.placements(matching: .timeline).isEmpty)
-  }
-
   @Test func readApisRejectTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -412,24 +392,6 @@ struct CollectionExportRecordStoreTests {
     #expect(store.placement(id: p.id) == p)
     #expect(store.placements(matching: .favorites) == [p])
     #expect(store.placements(matching: .album).isEmpty)
-  }
-
-  @Test func deletePlacementRemovesPlacementAndRecords() async throws {
-    let (dir, store) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    await store.configureAndWait(for: "dest-2")
-    let album = albumPlacement()
-    store.upsertPlacement(album)
-    store.markVariantExported(
-      assetId: "a", placement: album, variant: .original,
-      filename: "IMG_0001.HEIC", exportedAt: Date())
-    #expect(store.placement(id: album.id) != nil)
-    #expect(store.recordBodies[album.id]?.count == 1)
-
-    store.deletePlacement(id: album.id)
-    #expect(store.placement(id: album.id) == nil)
-    #expect(store.recordBodies[album.id] == nil)
   }
 
   // MARK: - Variant lifecycle
@@ -812,14 +774,11 @@ struct CollectionExportRecordStoreTests {
     #expect(store.placements(matching: .sharedAlbum).count == 1)
   }
 
-  /// `recordCount(in:)` discriminates user albums from shared albums even when
-  /// the underlying `collectionLocalIdentifier` is identical. The matching is
-  /// `(kind, collectionLocalIdentifier)` — `.album(id:)` must not pick up a
-  /// `.sharedAlbum` placement and vice versa. Same id across both kinds is
-  /// unlikely in production (PhotoKit hands out distinct identifiers per
-  /// collection class), but the invariant is what guards us against a future
-  /// kind-collapse refactor.
-  @Test func recordCountDiscriminatesUserAndSharedByKindNotJustId() async throws {
+  /// A user album and a shared album keep separate records even when the underlying
+  /// `collectionLocalIdentifier` is identical. Same id across both kinds is unlikely in
+  /// production (PhotoKit hands out distinct identifiers per collection class), but the
+  /// invariant is what guards us against a future kind-collapse refactor.
+  @Test func userAndSharedAlbumsWithOneIdentifierKeepSeparateRecords() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     await store.configureAndWait(for: "dest-count")
@@ -840,8 +799,7 @@ struct CollectionExportRecordStoreTests {
       exportedAt: Date(timeIntervalSince1970: 1_700_000_011))
     store.drainSynchronously()
 
-    #expect(store.recordCount(in: .album(collectionLocalId: sharedId)) == 1)
-    #expect(store.recordCount(in: .sharedAlbum(collectionLocalId: sharedId)) == 1)
-    #expect(store.recordCount(in: .any) == 2)
+    #expect(store.summary(for: userAlbum).totalCount == 1)
+    #expect(store.summary(for: sharedAlbum).totalCount == 1)
   }
 }

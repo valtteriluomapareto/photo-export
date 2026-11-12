@@ -558,8 +558,19 @@ struct RecordStoreAsyncLoadTests {
     try await f.seed("A", ["a1": "A1.JPG"])
     await f.configure(nil)
     let log = f.url("A", snapshot: false)
+    let queue = DispatchQueue(label: "RecordStoreAsyncLoad.reload")
+    let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
+    let timelineFile = {
+      ExportRecordStore.RecordFile(
+        snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger)
+    }
+    let collectionFile = {
+      CollectionExportRecordStore.RecordFile(
+        snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger)
+    }
+    let timelineOps = collection ? [] : await timelineFile().load().ops
+    let collectionOps = collection ? await collectionFile().load().ops : []
     var bytes = try Data(contentsOf: log)
-    let completeLines = bytes.split(separator: 0x0A).count
     switch tail {
     case .completeLineWithoutLF:
       #expect(bytes.last == 0x0A)
@@ -578,29 +589,22 @@ struct RecordStoreAsyncLoadTests {
     let written = try Data(contentsOf: log)
     #expect(written.starts(with: bytes + Data([0x0A])))
     #expect(written.last == 0x0A)
-    let malformed: Int
-    let ops: Int
-    let queue = DispatchQueue(label: "RecordStoreAsyncLoad.reload")
-    let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
-    if collection {
-      let reload =
-        (await CollectionExportRecordStore.RecordFile(
-          snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
-        ).load())
-      (malformed, ops) = (reload.malformedLineCount, reload.ops.count)
-    } else {
-      let reload =
-        (await ExportRecordStore.RecordFile(
-          snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
-        ).load())
-      (malformed, ops) = (reload.malformedLineCount, reload.ops.count)
-    }
-    #expect(ops == completeLines + 1)
-    #expect(malformed == (tail == .partialLine ? 1 : 0))
     await f.configure("B")
     await f.configure("A")
     #expect(f.filename("a1") == "A1.JPG")
     #expect(f.filename("a2") == "A2.JPG")
+    // The damaged tail is skipped and the new line replays after every earlier one. The
+    // expected record is the reloaded one, since the log stores whole-second dates.
+    if collection {
+      let body = try #require(f.collections.recordBodies[f.placement.id]?["a2"])
+      #expect(
+        await collectionFile().load().ops
+          == collectionOps + [.upsertRecord(placementId: f.placement.id, assetId: "a2", body: body)]
+      )
+    } else {
+      let record = try #require(f.timeline.exportInfo(assetId: "a2"))
+      #expect(await timelineFile().load().ops == timelineOps + [.upsert(record)])
+    }
   }
 
   // MARK: - Notifications

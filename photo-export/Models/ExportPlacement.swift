@@ -116,23 +116,6 @@ extension ExportPlacement {
   }
 }
 
-/// In-memory ergonomic key for record lookups: `(placementId, assetId)`. Not persisted —
-/// records on disk are nested by placement id (outer dict) and asset id (inner dict).
-struct ExportRecordKey: Hashable, Sendable {
-  let placementId: String
-  let assetId: String
-}
-
-/// Scope for `CollectionExportRecordStore.recordCount(in:)`. Mirrors the kinds the collection
-/// store accepts (`.favorites`, `.album`, `.sharedAlbum`); excludes `.timeline` because the
-/// collection store rejects timeline placements at the API boundary.
-enum CollectionPlacementScope: Hashable, Sendable {
-  case favorites
-  case album(collectionLocalId: String)
-  case sharedAlbum(collectionLocalId: String)
-  case any  // favorites + albums + shared albums
-}
-
 /// In-memory shape callers use to read and upsert collection records. Joins the on-disk
 /// `(placementId, assetId)` key with the variants dictionary and the placement object so
 /// callers don't have to look up the placement separately.

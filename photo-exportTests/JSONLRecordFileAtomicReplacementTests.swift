@@ -6,7 +6,7 @@ import os
 
 @MainActor
 struct JSONLRecordFileAtomicReplacementTests {
-  private struct Mutation: Codable, Sendable {
+  private struct Mutation: Codable, Equatable, Sendable {
     let key: String
     let value: String?
   }
@@ -72,6 +72,7 @@ struct JSONLRecordFileAtomicReplacementTests {
       in: directory, fileReplacer: InterruptingReplacer(interruption: interruption))
     let count = Store.Constants.compactEveryNMutations
     var snapshot = oldSnapshot
+    var appended: [Mutation] = []
     for index in 0..<count {
       let mutation: Mutation
       switch index {
@@ -81,6 +82,7 @@ struct JSONLRecordFileAtomicReplacementTests {
       }
       snapshot[mutation.key] = mutation.value
       store.append(mutation)
+      appended.append(mutation)
     }
     store.drainSynchronously()
 
@@ -92,8 +94,7 @@ struct JSONLRecordFileAtomicReplacementTests {
     #expect(reopened.snapshotStatus == .loaded)
     let expectedSnapshot = interruption == .afterReplacement ? snapshot : oldSnapshot
     #expect(reopened.snapshot == expectedSnapshot)
-    #expect(reopened.ops.count == count, "The log must survive an interrupted compaction")
-    #expect(reopened.malformedLineCount == 0)
+    #expect(reopened.ops == appended, "The log must survive an interrupted compaction")
 
     var replayed = try #require(reopened.snapshot)
     for mutation in reopened.ops {

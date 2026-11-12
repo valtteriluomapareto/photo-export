@@ -65,12 +65,11 @@ final class CollectionExportRecordStore {
     }
   }
 
-  /// One log line, representing one of four operations:
-  /// `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord`.
+  /// One log line, representing one of three operations:
+  /// `upsertPlacement`, `upsertRecord`, `deleteRecord`.
   /// The `op` discriminator keeps replay dispatch explicit and stable.
   enum LogOp: Codable, Sendable, Equatable {
     case upsertPlacement(placementId: String, placement: ExportPlacement)
-    case deletePlacement(placementId: String)
     case upsertRecord(placementId: String, assetId: String, body: RecordBody)
     case deleteRecord(placementId: String, assetId: String)
 
@@ -79,7 +78,7 @@ final class CollectionExportRecordStore {
     }
 
     private enum OpDiscriminator: String, Codable {
-      case upsertPlacement, deletePlacement, upsertRecord, deleteRecord
+      case upsertPlacement, upsertRecord, deleteRecord
     }
 
     func encode(to encoder: Encoder) throws {
@@ -89,9 +88,6 @@ final class CollectionExportRecordStore {
         try c.encode(OpDiscriminator.upsertPlacement, forKey: .op)
         try c.encode(placementId, forKey: .placementId)
         try c.encode(placement, forKey: .placement)
-      case .deletePlacement(let placementId):
-        try c.encode(OpDiscriminator.deletePlacement, forKey: .op)
-        try c.encode(placementId, forKey: .placementId)
       case .upsertRecord(let placementId, let assetId, let body):
         try c.encode(OpDiscriminator.upsertRecord, forKey: .op)
         try c.encode(placementId, forKey: .placementId)
@@ -112,8 +108,6 @@ final class CollectionExportRecordStore {
       case .upsertPlacement:
         let placement = try c.decode(ExportPlacement.self, forKey: .placement)
         self = .upsertPlacement(placementId: placementId, placement: placement)
-      case .deletePlacement:
-        self = .deletePlacement(placementId: placementId)
       case .upsertRecord:
         let assetId = try c.decode(String.self, forKey: .assetId)
         let body = try c.decode(RecordBody.self, forKey: .record)
@@ -169,9 +163,6 @@ final class CollectionExportRecordStore {
   /// The installed history's claims, maintained with every accepted record mutation.
   @ObservationIgnored private var filenameClaims = FilenameClaims<ClaimFolder>()
   @ObservationIgnored private(set) var recordsEpoch: UInt64 = 0
-  #if DEBUG
-    @ObservationIgnored var preparationCheckpoint: (@Sendable () async -> Void)?
-  #endif
 
   /// Per-store load state. See `RecordStoreState` for semantics.
   private var configurationPending = false
@@ -338,11 +329,6 @@ final class CollectionExportRecordStore {
       guard request == configurationRequest else { return }
       let transition = mutationAdmission.requestCheckpoint { [weak self] in
         guard let self, request == configurationRequest else { return }
-        if hasUnsavedChanges, let id = configuredDestinationId {
-          pendingRecovery[id] = Snapshot(
-            version: Constants.snapshotVersion, placements: storedPlacements,
-            records: storedRecordBodies)
-        }
         mutationAdmission.installAfterMaintenance {
           self.configurationPending = false
           self.pendingConfiguration = nil
@@ -374,18 +360,12 @@ final class CollectionExportRecordStore {
     let inputs = file.readInputs
     let latestLoad = latestLoad
     let logger = logger
-    #if DEBUG
-      let preparationCheckpoint = preparationCheckpoint
-    #endif
     ioQueue.async(qos: .userInitiated, flags: .enforceQoS) { [weak self] in
       let raw = inputs.read()
       Task.detached(priority: .userInitiated) { [weak self] in
         var separator: Bool?
         var outcome: LoadOutcome?
         if latestLoad.isCurrent(ticket.generation) {
-          #if DEBUG
-            await preparationCheckpoint?()
-          #endif
           let decoded = inputs.decode(raw)
           separator = decoded.needsLogSeparator
           outcome = Self.prepare(decoded, logger: logger)
@@ -922,22 +902,6 @@ final class CollectionExportRecordStore {
     append(.upsertPlacement(placementId: placement.id, placement: placement))
   }
 
-  func deletePlacement(id: String) {
-    // `accept(_:)` takes a placement object; this entry point only has an id. Look up the
-    // existing placement to validate kind. If we don't know the placement (already deleted
-    // or never-recorded), we still allow the no-op `deleteRecord` op to land — a stray
-    // delete is harmless. We *do* refuse if the id matches a `.timeline`-kind entry that
-    // somehow snuck into memory (the snapshot-decode guard above is the primary defense;
-    // this is belt-and-braces).
-    if let existing = placements[id], existing.kind == .timeline {
-      logger.error(
-        "CollectionExportRecordStore.deletePlacement called for a .timeline placement \(id, privacy: .public); drop and ignore."
-      )
-      return
-    }
-    append(.deletePlacement(placementId: id))
-  }
-
   func removeInProgressAfterAdmission(
     assetId: String, placement: ExportPlacement, variant: ExportVariant
   ) {
@@ -986,21 +950,6 @@ final class CollectionExportRecordStore {
   func placement(id: String) -> ExportPlacement? {
     trackRecords()
     return placements[id]
-  }
-
-  func placements(matching kind: ExportPlacement.Kind) -> [ExportPlacement] {
-    trackRecords()
-    if kind == .timeline {
-      // The collection store never holds `.timeline` placements (snapshot-decode and
-      // log-apply guards enforce that), so an empty array is the correct answer for the
-      // `.timeline` query. Log the call so a routing bug surfaces in diagnostics rather
-      // than the empty result quietly hiding it.
-      logger.error(
-        "CollectionExportRecordStore.placements(matching:) called with .timeline; returning empty."
-      )
-      return []
-    }
-    return placements.values.filter { $0.kind == kind }
   }
 
   // MARK: - Record write API
@@ -1432,31 +1381,6 @@ final class CollectionExportRecordStore {
 
   // MARK: - Scoped queries
 
-  func recordCount(in scope: CollectionPlacementScope) -> Int {
-    trackRecords()
-    var count = 0
-    for (placementId, byAsset) in recordBodies {
-      guard let placement = placements[placementId] else { continue }
-      let matches: Bool
-      switch scope {
-      case .favorites: matches = (placement.kind == .favorites)
-      case .album(let id):
-        matches = (placement.kind == .album && placement.collectionLocalIdentifier == id)
-      case .sharedAlbum(let id):
-        matches =
-          (placement.kind == .sharedAlbum && placement.collectionLocalIdentifier == id)
-      case .any:
-        matches =
-          (placement.kind == .favorites || placement.kind == .album
-            || placement.kind == .sharedAlbum)
-      }
-      if matches {
-        count += byAsset.count
-      }
-    }
-    return count
-  }
-
   /// Asset-aware summary used by the collection grid header (`CollectionContentView`).
   /// Mirrors `ExportRecordStore.monthSummary(assets:selection:)` on the timeline side:
   /// the caller supplies the visible asset list, the store evaluates each asset's
@@ -1616,9 +1540,10 @@ final class CollectionExportRecordStore {
   }
 
   /// Lands an acknowledged final commit where its destination now stands: deferred behind a
-  /// corrupt load, held while the destination loads, recorded in the active history, or written
-  /// to the parked history of a destination the store has left. A held commit comes back here
-  /// when that load finishes, or when the store leaves the destination first.
+  /// corrupt load, held while the destination loads, recorded in the active history (on top of
+  /// its captured history after an unreadable reload), or written to the parked history of a
+  /// destination the store has left. A held commit comes back here when that load finishes, or
+  /// when the store leaves the destination first.
   private func landFinalCommit(
     _ filename: String, context: FinalCommitContext<Snapshot, LogOp>,
     applyCompletion: @escaping (String) -> Void,
@@ -1656,34 +1581,16 @@ final class CollectionExportRecordStore {
         ))
       return .held
     }
-    return landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
-      ? .recorded : .held
-  }
-
-  /// Records an acknowledged final commit in the active destination's history: deferred
-  /// behind a corrupt load, added to the parked history after an unreadable reload, or
-  /// recorded. Returns whether the completion was written and its flush is still owed.
-  @discardableResult
-  private func landOnActiveDestination(
-    _ filename: String, context: FinalCommitContext<Snapshot, LogOp>,
-    applyCompletion: @escaping (String) -> Void
-  ) -> Bool {
-    if state == .failed {
-      deferredFinalCompletions[context.destinationId, default: []].append {
-        applyCompletion(filename)
-      }
-      return false
-    }
     if state == .persistenceFailed, !hasUnsavedChanges {
       installHistory(Self.prepareRetained(context.snapshot, logger: logger))
       hasUnsavedChanges = true
     }
     applyCompletion(filename)
-    if state == .persistenceFailed {
+    guard state != .persistenceFailed else {
       retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
-      return false
+      return .held
     }
-    return true
+    return .recorded
   }
 
   /// Lands the final commits acknowledged while `destinationId` loaded, by default the active
@@ -1773,66 +1680,38 @@ final class CollectionExportRecordStore {
   }
 
   private func apply(_ op: LogOp) {
-    let recordKey: TileRecordKey?
-    let oldPlacement: ExportPlacement?
     switch op {
-    case .upsertRecord(let id, let asset, _), .deleteRecord(let id, let asset):
-      recordKey = TileRecordKey(placementId: id, assetId: asset)
-      oldPlacement = nil
-    case .upsertPlacement(let id, _), .deletePlacement(let id):
-      recordKey = nil
-      oldPlacement = placements[id]
-    }
-    let oldBody = recordKey.flatMap { recordBodies[$0.placementId]?[$0.assetId] }
-    switch op {
+    case .upsertPlacement(let id, let placement):
+      let oldPlacement = placements[id]
+      placementsChanged = placementsChanged || oldPlacement != placement
+      Self.apply(
+        op, placements: &storedPlacements, recordBodies: &storedRecordBodies, logger: logger)
+      if let oldPlacement {
+        placementCandidates[CollectionKey(oldPlacement)]?.removeValue(forKey: id)
+      }
+      if let placement = placements[id] {
+        placementCandidates[CollectionKey(placement), default: [:]][id] = placement
+      }
     case .upsertRecord(let placementId, let assetId, _),
       .deleteRecord(let placementId, let assetId):
+      let oldBody = recordBodies[placementId]?[assetId]
       pendingTileRecords.insert(TileRecordKey(placementId: placementId, assetId: assetId))
-    case .upsertPlacement(let id, let placement):
-      placementsChanged = placementsChanged || placements[id] != placement
-    case .deletePlacement:
-      placementsChanged = true
-      invalidatesAllTiles = true
-    }
-    if case .deletePlacement(let id) = op, let bodies = storedRecordBodies[id] {
-      for body in bodies.values {
-        Self.update(&filenameClaims, placementId: id, body: body, adding: false)
-      }
-    }
-    Self.apply(
-      op, placements: &storedPlacements, recordBodies: &storedRecordBodies,
-      logger: logger)
-    if let key = recordKey {
-      let newBody = recordBodies[key.placementId]?[key.assetId]
+      Self.apply(
+        op, placements: &storedPlacements, recordBodies: &storedRecordBodies, logger: logger)
+      let newBody = recordBodies[placementId]?[assetId]
       if let oldBody {
-        Self.update(&filenameClaims, placementId: key.placementId, body: oldBody, adding: false)
+        Self.update(&filenameClaims, placementId: placementId, body: oldBody, adding: false)
       }
       if let newBody {
-        Self.update(&filenameClaims, placementId: key.placementId, body: newBody, adding: true)
+        Self.update(&filenameClaims, placementId: placementId, body: newBody, adding: true)
       }
-      var counts = placementCounts[key.placementId] ?? PlacementCounts()
+      var counts = placementCounts[placementId] ?? PlacementCounts()
       counts.total += (newBody == nil ? 0 : 1) - (oldBody == nil ? 0 : 1)
       counts.done += Self.doneContribution(newBody) - Self.doneContribution(oldBody)
       if counts.total == 0 {
-        placementCounts.removeValue(forKey: key.placementId)
+        placementCounts.removeValue(forKey: placementId)
       } else {
-        placementCounts[key.placementId] = counts
-      }
-    } else {
-      switch op {
-      case .upsertPlacement(let id, _), .deletePlacement(let id):
-        if let oldPlacement {
-          placementCandidates[CollectionKey(oldPlacement)]?.removeValue(forKey: id)
-        }
-      case .upsertRecord, .deleteRecord: break
-      }
-      switch op {
-      case .upsertPlacement(let id, _):
-        if let placement = placements[id] {
-          placementCandidates[CollectionKey(placement), default: [:]][id] = placement
-        }
-      case .deletePlacement(let id): placementCounts.removeValue(forKey: id)
-      case .upsertRecord, .deleteRecord: break
+        placementCounts[placementId] = counts
       }
     }
   }
@@ -1858,9 +1737,6 @@ final class CollectionExportRecordStore {
         return
       }
       placements[placementId] = placement
-    case .deletePlacement(let placementId):
-      placements.removeValue(forKey: placementId)
-      recordBodies.removeValue(forKey: placementId)
     case .upsertRecord(let placementId, let assetId, let body):
       // Reject orphan records: the on-disk format requires every record to reference an
       // existing placement. If a log truncation or partial write loses the upsertPlacement

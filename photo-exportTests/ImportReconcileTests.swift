@@ -229,9 +229,9 @@ struct ImportReconcileTests {
 
   // Note: there is no test for the "orphan record body" branch (a record body
   // keyed by a placementId with no corresponding placement metadata). The store's
-  // log-replay logic rejects orphan upsertRecord ops, and `deletePlacement`
-  // wipes both the placement and its bodies — so the orphan state is
-  // unreachable from any public API. The defensive prune branch in
+  // log-replay logic rejects orphan upsertRecord ops, and nothing removes a
+  // placement while keeping its records — so the orphan state is unreachable
+  // from any public API. The defensive prune branch in
   // `reconcileAgainstFilesystem` is a belt-and-braces guard for an invariant
   // that shouldn't break, kept because the cost is one cheap dictionary lookup
   // and the alternative is silently leaving garbage forever.

@@ -93,13 +93,11 @@ struct JSONLRecordFileTailRecoveryTests {
     let second = file(root)
     let reloaded = (await second.load())
     #expect(reloaded.ops.map(\.id) == expectedPrefix + ["c", "d"])
-    #expect(reloaded.malformedLineCount == (tail == .complete ? 0 : 1))
     second.append(
       Operation(id: "e"))
     try await second.flush()
     let last = (await file(root).load())
     #expect(last.ops.map(\.id) == expectedPrefix + ["c", "d", "e"])
-    #expect(last.malformedLineCount == (tail == .complete ? 0 : 1))
   }
 
   @Test(arguments: Tail.allCases)
@@ -157,7 +155,6 @@ struct JSONLRecordFileTailRecoveryTests {
     let final = (await file(root).load())
     #expect(final.snapshot == retained)
     #expect(final.ops == [Operation(id: "e")])
-    #expect(final.malformedLineCount == 0)
   }
 
   @Test(arguments: [false, true])

@@ -160,7 +160,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let snapshot: Snapshot?
     let snapshotStatus: SnapshotStatus
     let ops: [LogOp]
-    let malformedLineCount: Int
     /// A failed snapshot or log read. A missing file is normal and has no error.
     let ioFailure: (any Error)?
     /// Whether the log ends in a line with no final LF, so the next append must start a
@@ -268,7 +267,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
 
     var ops: [LogOp] = []
-    var malformedLineCount = 0
     let needsLogSeparator: Bool?
     if let error = raw.logError {
       needsLogSeparator = nil
@@ -293,7 +291,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
           let op = try decoder.decode(LogOp.self, from: lineData)
           ops.append(op)
         } catch {
-          malformedLineCount += 1
           logger.error(
             "Skipping malformed log line in \(logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
           )
@@ -304,8 +301,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
 
     return LoadResult(
-      snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
-      malformedLineCount: malformedLineCount, ioFailure: ioFailure,
+      snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops, ioFailure: ioFailure,
       needsLogSeparator: needsLogSeparator, replayBytes: raw.logData?.count ?? 0)
   }
 

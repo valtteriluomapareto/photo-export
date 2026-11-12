@@ -297,14 +297,9 @@ struct FilenameClaimsTests {
     #expect(Self.collectionClaimed(store, "A.JPG", placement: album))
     #expect(Self.collectionClaimed(store, "V.MOV", placement: album, subfolder: "videos"))
     #expect(!Self.collectionClaimed(store, "A.JPG", placement: favorites))
-
-    store.deletePlacement(id: album.id)
-    #expect(!Self.collectionClaimed(store, "A.JPG", placement: album))
-    #expect(!Self.collectionClaimed(store, "V.MOV", placement: album, subfolder: "videos"))
   }
 
-  /// Exporting a recorded asset again under another name moves its claim to the new name, and
-  /// deleting the placement then releases the new name too.
+  /// Exporting a recorded asset again under another name moves its claim to the new name.
   @Test func collectionReexportUnderANewNameMovesTheClaim() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -325,8 +320,5 @@ struct FilenameClaimsTests {
       exportedAt: Date())
     #expect(!Self.collectionClaimed(store, "A.JPG", placement: album))
     #expect(Self.collectionClaimed(store, "a (1).jpg", placement: album))
-
-    store.deletePlacement(id: album.id)
-    #expect(!Self.collectionClaimed(store, "A (1).JPG", placement: album))
   }
 }

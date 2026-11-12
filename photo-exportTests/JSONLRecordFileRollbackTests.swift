@@ -134,7 +134,6 @@ struct JSONLRecordFileRollbackTests {
     let loaded = (await file.load())
     #expect(loaded.snapshot == nil)
     #expect(loaded.ops.isEmpty)
-    #expect(loaded.malformedLineCount == 0)
 
     // Merely restoring the parent directory cannot make a later operation durable:
     // the missing first operation still exists only in the owner's memory.
