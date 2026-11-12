@@ -324,6 +324,7 @@ struct ExportIssuePresentationTests {
       let content = Group {
         if rowOnly {
           ExportIssueRow(
+            autoSyncManager: autoSync, exportDestinationManager: destination,
             entry: ExportIssuesProjection.snapshot(
               destinationId: destinationId, timeline: timeline, collections: collections,
               retryState: autoSync.currentRetryState,

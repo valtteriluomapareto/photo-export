@@ -94,6 +94,8 @@ struct ExportIssuesView: View {
           Section(header: Self.header(for: category, count: entries.count)) {
             ForEach(entries) { entry in
               ExportIssueRow(
+                autoSyncManager: autoSyncManager,
+                exportDestinationManager: exportDestinationManager,
                 entry: entry, canRetry: canRetry, autoExportEnabled: autoSyncManager.isEnabled)
             }
           }
@@ -156,8 +158,8 @@ struct ExportIssuesView: View {
 }
 
 struct ExportIssueRow: View {
-  @EnvironmentObject private var autoSyncManager: AutoSyncManager
-  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  let autoSyncManager: AutoSyncManager
+  let exportDestinationManager: ExportDestinationManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(\.locale) private var locale
