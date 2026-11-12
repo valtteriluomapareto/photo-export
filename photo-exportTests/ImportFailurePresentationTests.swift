@@ -11,6 +11,13 @@ import Testing
   struct ImportFailurePresentationTests {
     enum History: CaseIterable { case timeline, collection }
 
+    private struct SheetHost: View {
+      @State private var presented = true
+      var body: some View {
+        Color.clear.frame(width: 300, height: 200).sheet(isPresented: $presented) { ImportView() }
+      }
+    }
+
     private final class FailingLogIO: JSONLRecordLogIO, @unchecked Sendable {
       private let lock = NSLock()
       private var armed = false
@@ -90,14 +97,24 @@ import Testing
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
       }
 
-      func show() {
+      func show(asSheet: Bool = false) {
+        if asSheet {
+          show(SheetHost(), style: [.titled])
+        } else {
+          show(ImportView(), style: [.borderless])
+        }
+      }
+
+      private func show<Content: View>(_ content: Content, style: NSWindow.StyleMask) {
         let hosted = NSHostingView(
-          rootView: ImportView()
+          rootView:
+            content
             .environment(manager).environment(timeline).environment(collections)
+            .environment(\.accessibilityEnabled, true)
             .environmentObject(destinationManager).environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 460, height: Self.hostHeight),
-          styleMask: [.borderless], backing: .buffered, defer: false)
+          styleMask: style, backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
         window = hostWindow
@@ -108,6 +125,10 @@ import Testing
       func close() {
         manager.cancelImport()
         window?.orderOut(nil)
+        if let sheet = window?.attachedSheet {
+          window?.endSheet(sheet)
+          sheet.close()
+        }
         window?.contentView = nil
         window?.close()
         window = nil
@@ -129,6 +150,26 @@ import Testing
       let shown = await observe { f.counter.renderedText["import-title"] == [title] }
       #expect(shown)
       return shown
+    }
+
+    private func press(_ title: String, in window: NSWindow) throws {
+      let button = try #require(NativeViewAccess.button(title, in: window))
+      let press: (() -> Bool)? = button.accessibilityPerformPress
+      let action = try #require(press)
+      _ = action()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func nativeCloseDismissesTheActualImportSheet() async throws {
+      let f = await Fixture()
+      defer { f.close() }
+      f.show(asSheet: true)
+      let parent = try #require(f.window)
+      try #require(await observe(in: parent) { parent.attachedSheet != nil })
+      let sheet = try #require(parent.attachedSheet)
+      try #require(await observe(in: sheet) { NativeViewAccess.button("Close", in: sheet) != nil })
+      try press("Close", in: sheet)
+      try #require(await observe(in: parent) { parent.attachedSheet == nil })
     }
 
     /// The result lists album and Favorites files matched and album folders no current album
@@ -208,8 +249,7 @@ import Testing
       #expect(f.manager.importError == failure)
       let blocked = await observe { f.counter.renderedText["import-can-retry"] == ["false"] }
       try #require(blocked)
-      let rejectedRetry = try #require(f.counter.renderedActions["import-retry"])
-      rejectedRetry()
+      try press("Retry", in: try #require(f.window))
       #expect(!f.manager.isImporting && f.manager.importError == failure)
       await f.timeline.configureAndWait(for: "A")
       f.destinationManager.clearSelection()
@@ -219,8 +259,7 @@ import Testing
       f.destination.selectedFolderURL = f.destination.rootURL
       let eligible = await observe { f.counter.renderedText["import-can-retry"] == ["true"] }
       try #require(eligible)
-      let retry = try #require(f.counter.renderedActions["import-retry"])
-      retry()
+      try press("Retry", in: try #require(f.window))
       #expect(f.manager.isImporting)
       #expect(f.manager.importError == nil, "An accepted retry clears failure synchronously")
       await f.manager.waitForImportCompletion()
@@ -292,8 +331,7 @@ import Testing
       try #require(blocked)
       #expect(f.counter.renderedText["import-recovery"]?.first?.contains("history") == true)
       let failure = f.manager.importError
-      let blockedRetry = try #require(f.counter.renderedActions["import-retry"])
-      blockedRetry()
+      try press("Retry", in: try #require(f.window))
       #expect(!f.manager.isImporting && f.manager.importError == failure)
       f.io.arm(false)
       if history == .timeline {
@@ -303,8 +341,7 @@ import Testing
       }
       let eligible = await observe { f.counter.renderedText["import-can-retry"] == ["true"] }
       try #require(eligible)
-      let retry = try #require(f.counter.renderedActions["import-retry"])
-      retry()
+      try press("Retry", in: try #require(f.window))
       #expect(f.manager.isImporting && f.manager.importError == nil)
       await f.manager.waitForImportCompletion()
       #expect(f.manager.importResult?.matchedCount == 1)
@@ -440,8 +477,7 @@ import Testing
         try #require(matching)
         let shown = await shows("Importing Existing Backup", in: f)
         try #require(shown)
-        let cancel = try #require(f.counter.renderedActions["import-cancel"])
-        cancel()
+        try press("Cancel", in: try #require(f.window))
         #expect(
           !f.manager.isImporting && f.manager.importError == nil && f.manager.importResult == nil)
         await gate.releaseAll()
