@@ -105,7 +105,7 @@ struct PublisherParityTests {
 
   // MARK: - DestinationSafetyMonitor
 
-  @Test func safetyNeedsConfirmation() async throws {
+  @Test func safetyVerdict() async throws {
     let root = TestScratch.directory("ParitySafety")
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
@@ -120,7 +120,7 @@ struct PublisherParityTests {
     monitor.attach()
     try #require(await eventually("scan flags the destination") { monitor.needsSafetyConfirmation })
     await assertPublishedParity(
-      monitor, \.needsSafetyConfirmation, { $0.needsSafetyConfirmationPublisher },
+      monitor, \.verdict, { $0.verdictPublisher },
       change: { monitor.confirmCurrentDestination() },
       // Confirming again stores `false` again.
       unchangedWrite: .after { monitor.confirmCurrentDestination() })
@@ -396,7 +396,13 @@ struct PublisherParityTests {
       confirmationStore: confirmations, scanDirectory: { false })
     let adapter = DestinationSnapshotAdapter(
       destinationManager: manager, lifecycleCoordinator: lifecycle, safetyMonitor: monitor)
-    await withCleanup {
+    // The rows below start from a checked destination.
+    monitor.attach()
+    try await withCleanup {
+      try #require(
+        await eventually("destination checked") {
+          monitor.verdict.stableId == manager.identity.stableId
+        })
       await assertPublishedParity(
         { adapter.destinationSnapshotPublisher },
         value: {

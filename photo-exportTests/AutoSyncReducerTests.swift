@@ -138,6 +138,58 @@ struct AutoSyncReducerTests {
     #expect(next.current == .blocked(.destinationUnsafe))
   }
 
+  // MARK: - Destination check
+
+  private func withSafety(
+    _ snapshot: DestinationSnapshot, _ safety: DestinationSafetyState
+  ) -> DestinationSnapshot {
+    DestinationSnapshot(
+      stableId: snapshot.stableId, fingerprint: snapshot.fingerprint,
+      isAvailable: snapshot.isAvailable, safety: safety)
+  }
+
+  /// A launch or an Export Now that arrives while the destination is still being checked
+  /// waits, then runs as itself with its own delay. The end of the check is not a new trigger.
+  @Test(arguments: [AutoSyncReason.appLaunch, .userExportNow])
+  func triggerHeldByTheCheckRunsAsItselfOnceChecked(reason: AutoSyncReason) {
+    var initial = AutoSyncReducer.State.initial
+    initial.destination = withSafety(safeDestination(), .checking)
+    initial.scopeSelection = AutoExportScopeSelection(timeline: true)
+    var (state, _) = AutoSyncReducer.reduce(.enabledChanged(true), in: initial, now: now)
+    #expect(state.current == .waiting(.destinationChecking))
+    if reason == .userExportNow {
+      (state, _) = AutoSyncReducer.reduce(.runNowRequested, in: state, now: now)
+      #expect(state.current == .waiting(.destinationChecking))
+    }
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .destinationChanged(withSafety(state.destination, .safe)), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))
+    #expect(next.current == .scheduled(reason: reason, fireAt: fireAt))
+    #expect(effects == [.scheduleDebounce(reason, fireAt: fireAt)])
+  }
+
+  /// A newly picked destination waits for its check; a safe result schedules the pick's run,
+  /// and a folder that needs confirmation blocks.
+  @Test(arguments: [DestinationSafetyState.safe, .unsafeNeedsConfirmation])
+  func newDestinationWaitsForItsCheck(result: DestinationSafetyState) {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let picked = withSafety(safeDestination("dest-B"), .checking)
+    let (waiting, _) = AutoSyncReducer.reduce(.destinationChanged(picked), in: state, now: now)
+    #expect(waiting.current == .waiting(.destinationChecking))
+
+    let (next, _) = AutoSyncReducer.reduce(
+      .destinationChanged(withSafety(picked, result)), in: waiting, now: now)
+
+    if result == .safe {
+      let fireAt = now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: .destinationSelected))
+      #expect(next.current == .scheduled(reason: .destinationSelected, fireAt: fireAt))
+    } else {
+      #expect(next.current == .blocked(.destinationUnsafe))
+    }
+  }
+
   /// #127: a network-share remount drifts the fingerprint but keeps the stable id. The reducer
   /// must keep keying on the stable id so the destination's accumulated dirty work is preserved,
   /// not orphaned under a new key.

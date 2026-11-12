@@ -21,6 +21,10 @@ enum AutoSyncBlockedReason: String, Codable, Equatable, CaseIterable, Sendable {
   /// resolved. Resolves to `idle` once the drive becomes reachable again.
   case destinationUnavailable
 
+  /// The safety monitor has not finished checking the destination. Resolves on its own once
+  /// the folder has been listed and its history loaded.
+  case destinationChecking
+
   /// Destination is reachable but the safety scan blocks automatic runs (e.g., non-empty
   /// existing backup with no matching records, or a low-confidence identity that the user
   /// has not confirmed).

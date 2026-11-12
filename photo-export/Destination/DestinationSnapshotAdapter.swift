@@ -11,11 +11,11 @@ import Foundation
 ///    nothing about whether the folder is writable.
 /// 3. `migrationConflict` from `AppLifecycleCoordinator`: non-nil → safety
 ///    becomes `.unsafeMigrationConflict`.
-/// 4. `needsSafetyConfirmation` from `DestinationSafetyMonitor`:
-///    true → safety becomes `.unsafeNeedsConfirmation`. Migration conflict
-///    takes precedence — both being true is rare (a fresh destination with
-///    legacy records is itself a rare collision) but if it ever happens the
-///    migration conflict UX leads.
+/// 4. `verdict` from `DestinationSafetyMonitor`: a verdict for another stable id means this
+///    destination has not been checked yet → `.checking`; otherwise needing confirmation →
+///    `.unsafeNeedsConfirmation`. Migration conflict takes precedence — both being true is
+///    rare (a fresh destination with legacy records is itself a rare collision) but if it
+///    ever happens the migration conflict UX leads.
 ///
 /// `Publishers.CombineLatest4` waits for all four sources to publish before
 /// emitting; each is an `@Published` that fires an initial value, so the first
@@ -54,13 +54,15 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
       destinationManager.identityPublisher,
       destinationManager.isAvailablePublisher,
       lifecycleCoordinator.migrationConflictPublisher,
-      safetyMonitor.needsSafetyConfirmationPublisher
+      safetyMonitor.verdictPublisher
     )
-    .map { identity, isAvailable, conflict, needsConfirm in
+    .map { identity, isAvailable, conflict, verdict in
       let safety: DestinationSafetyState
       if conflict != nil {
         safety = .unsafeMigrationConflict
-      } else if needsConfirm {
+      } else if verdict.stableId != identity.stableId {
+        safety = .checking
+      } else if verdict.needsConfirmation {
         safety = .unsafeNeedsConfirmation
       } else {
         safety = .safe

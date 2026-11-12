@@ -3,10 +3,10 @@ import Foundation
 import os
 
 /// Observes the destination identity and detects the
-/// "destination has files but no matching records" state. Surfaces it as
-/// `@Published needsSafetyConfirmation`, which `DestinationSnapshotAdapter`
-/// folds into the `DestinationSnapshot.safety` field as
-/// `.unsafeNeedsConfirmation`.
+/// "destination has files but no matching records" state. Publishes a `Verdict` naming the
+/// stable id it was reached for. `DestinationSnapshotAdapter` folds it into
+/// `DestinationSnapshot.safety`: `.checking` until the verdict names the current destination,
+/// then `.unsafeNeedsConfirmation` or `.safe`.
 ///
 /// The confirmation is keyed on the **stable logical id**, not `fingerprint?.id`, so a user's
 /// confirmation survives a network-share remount that drifts the fingerprint — otherwise the
@@ -22,12 +22,19 @@ import os
 /// one with matching records, stays `.safe`.
 @MainActor
 final class DestinationSafetyMonitor: ObservableObject {
-  @Published private(set) var needsSafetyConfirmation: Bool = false
-  /// `$needsSafetyConfirmation` for subscribers outside this type: synchronous, delivered
-  /// before the value is stored, and replaying the current value (pinned by
-  /// `PublisherParityTests`).
-  var needsSafetyConfirmationPublisher: AnyPublisher<Bool, Never> {
-    $needsSafetyConfirmation.eraseToAnyPublisher()
+  /// The latest safety decision and the destination it belongs to. A destination whose
+  /// stable id differs from `stableId` has not been checked yet.
+  struct Verdict: Equatable {
+    let stableId: String?
+    let needsConfirmation: Bool
+  }
+
+  @Published private(set) var verdict = Verdict(stableId: nil, needsConfirmation: false)
+  var needsSafetyConfirmation: Bool { verdict.needsConfirmation }
+  /// `$verdict` for subscribers outside this type: synchronous, delivered before the value is
+  /// stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var verdictPublisher: AnyPublisher<Verdict, Never> {
+    $verdict.eraseToAnyPublisher()
   }
 
   private let identityPublisher: AnyPublisher<DestinationIdentity, Never>
@@ -130,7 +137,8 @@ final class DestinationSafetyMonitor: ObservableObject {
   /// User confirmed the destination's existing contents are theirs. Persist
   /// the confirmation and clear the flag.
   func confirmCurrentDestination() {
-    guard let id = currentIdentity.stableId else { return }
+    // Only a destination that has been checked can be confirmed.
+    guard let id = currentIdentity.stableId, verdict.stableId == id else { return }
     do {
       try confirmationStore.confirm(destinationId: id)
       log.info("User confirmed destination \(id, privacy: .public)")
@@ -139,10 +147,18 @@ final class DestinationSafetyMonitor: ObservableObject {
         "Failed to persist safety confirmation for \(id, privacy: .public): \(error.localizedDescription, privacy: .public)"
       )
     }
-    needsSafetyConfirmation = false
+    verdict = Verdict(stableId: id, needsConfirmation: false)
   }
 
   // MARK: - Private
+
+  /// Records count only when the store holds this destination's history. A store still
+  /// keyed to the previous destination (its switch waits for pending writes) reads as empty.
+  private func hasOwnRecords(for id: String) -> Bool {
+    (exportRecordStore.destinationId == id && !exportRecordStore.recordsById.isEmpty)
+      || (collectionExportRecordStore.destinationId == id
+        && !collectionExportRecordStore.placements.isEmpty)
+  }
 
   private func evaluate(for identity: DestinationIdentity) {
     evaluationGeneration += 1
@@ -151,29 +167,24 @@ final class DestinationSafetyMonitor: ObservableObject {
     defer { if finishesHere { completedEvaluationCount += 1 } }
 
     guard let id = identity.stableId else {
-      needsSafetyConfirmation = false
+      verdict = Verdict(stableId: nil, needsConfirmation: false)
       return
     }
 
     if confirmationStore.isConfirmed(destinationId: id) {
-      needsSafetyConfirmation = false
+      verdict = Verdict(stableId: id, needsConfirmation: false)
       return
     }
 
     // Records present → user has used the app with this destination before;
-    // no need to prompt. Lazy-evaluation: timeline store first, fall back to
-    // collection store. Both checks are O(1) on in-memory data. A store that is
+    // no need to prompt. Both checks are O(1) on in-memory data. A store that is
     // still loading reads as empty, so it is judged after the scan instead.
     let isLoading =
       !exportRecordStore.state.isSettled || !collectionExportRecordStore.state.isSettled
-    let hasTimelineRecords = !exportRecordStore.recordsById.isEmpty
-    let hasCollectionRecords = !collectionExportRecordStore.placements.isEmpty
-    if !isLoading, hasTimelineRecords || hasCollectionRecords {
-      needsSafetyConfirmation = false
+    if !isLoading, hasOwnRecords(for: id) {
+      verdict = Verdict(stableId: id, needsConfirmation: false)
       return
     }
-    let timelineDestination = exportRecordStore.destinationId
-    let collectionDestination = collectionExportRecordStore.destinationId
 
     // Records empty — scan the destination directory. Async because the
     // scoped-access dance crosses an actor hop and the filesystem read
@@ -186,31 +197,17 @@ final class DestinationSafetyMonitor: ObservableObject {
       // Judge the loaded history, not the empty one a loading store shows.
       await self.exportRecordStore.waitUntilSettled()
       await self.collectionExportRecordStore.waitUntilSettled()
-      guard self.evaluationGeneration == gen,
-        self.exportRecordStore.destinationId == timelineDestination,
-        self.collectionExportRecordStore.destinationId == collectionDestination
-      else {
-        // Stale: the user switched destinations, or the stores moved on while it waited.
-        return
-      }
+      // A newer evaluation owns the verdict. Any other result is written, so a destination
+      // never stays unchecked waiting for an evaluation that will not come.
+      guard self.evaluationGeneration == gen else { return }
       // Re-check the synchronous gates against the *post-scan* world, with both
       // stores' history loaded: if it has records, the destination is no longer
       // "records empty" and we must not flag it. Same for confirmation:
       // the user might have confirmed via another path while we waited.
-      if self.confirmationStore.isConfirmed(destinationId: id) {
-        if self.needsSafetyConfirmation { self.needsSafetyConfirmation = false }
-        return
-      }
-      let recordsNowPresent =
-        !self.exportRecordStore.recordsById.isEmpty
-        || !self.collectionExportRecordStore.placements.isEmpty
-      if recordsNowPresent {
-        if self.needsSafetyConfirmation { self.needsSafetyConfirmation = false }
-        return
-      }
-      if self.needsSafetyConfirmation != hasUserFiles {
-        self.needsSafetyConfirmation = hasUserFiles
-      }
+      let recordsNowPresent = self.hasOwnRecords(for: id)
+      let isConfirmed = self.confirmationStore.isConfirmed(destinationId: id)
+      self.verdict = Verdict(
+        stableId: id, needsConfirmation: hasUserFiles && !isConfirmed && !recordsNowPresent)
     }
   }
 }

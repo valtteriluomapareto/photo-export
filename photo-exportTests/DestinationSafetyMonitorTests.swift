@@ -100,7 +100,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func emptyRecordsAndEmptyDirectoryDoesNotFlag() async {
@@ -112,7 +112,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func emptyRecordsAndNonEmptyDirectoryFlags() async {
@@ -148,7 +148,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func confirmingCurrentDestinationClearsTheFlag() async {
@@ -210,7 +210,7 @@ struct DestinationSafetyMonitorTests {
     for _ in 0..<10 { await Task.yield() }
 
     // Final state reflects fp2 (empty dir → no flag), not fp1.
-    #expect(monitor.needsSafetyConfirmation == false)
+    #expect(monitor.verdict == .init(stableId: fp2.id, needsConfirmation: false))
   }
 
   // MARK: - Stable-id keying (#127)
@@ -342,6 +342,49 @@ struct DestinationSafetyMonitorTests {
     #expect(recordStore.state == .ready)
     #expect(recordStore.recordsById.isEmpty == !hasHistory)
     #expect(monitor.needsSafetyConfirmation == !hasHistory)
+  }
+
+  /// The stores may switch to the new destination after its check has started: a switch
+  /// waits for the previous destination's pending writes. The check still reaches a verdict,
+  /// and the previous destination's history never counts as the new one's.
+  @Test(.timeLimit(.minutes(2))) func storesSwitchingDuringTheScanStillReachAVerdict()
+    async throws
+  {
+    let storeRoot = TestScratch.directory("SafetyMonitor-switch")
+    let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    await recordStore.configureAndWait(for: "dest-old")
+    await collectionStore.configureAndWait(for: "dest-old")
+    recordStore.markVariantExported(
+      assetId: "asset-1", variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    let scan = AsyncCheckpoint()
+    let fp = fingerprint(id: "dest-new")
+    let monitor = DestinationSafetyMonitor(
+      identityPublisher: CurrentValueSubject<DestinationIdentity, Never>(
+        DestinationIdentity(stableId: fp.id, fingerprint: fp)
+      ).eraseToAnyPublisher(),
+      exportRecordStore: recordStore,
+      collectionExportRecordStore: collectionStore,
+      confirmationStore: InMemoryDestinationSafetyConfirmationStore(),
+      scanDirectory: { @MainActor in
+        await scan.enter()
+        return true
+      })
+    try await withCleanup {
+      monitor.attach()
+      try #require(await scan.waitForEnter(count: 1))
+      await recordStore.configureAndWait(for: fp.id)
+      await collectionStore.configureAndWait(for: fp.id)
+      await scan.releaseAll()
+
+      #expect(await eventually("verdict for the new folder") { monitor.verdict.stableId == fp.id })
+      #expect(monitor.verdict.needsConfirmation)
+    } cleanup: {
+      await scan.releaseAll()
+      try? await recordStore.flush()
+      try? FileManager.default.removeItem(at: storeRoot)
+    }
   }
 
   @MainActor

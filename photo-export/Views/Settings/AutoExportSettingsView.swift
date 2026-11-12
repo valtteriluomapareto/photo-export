@@ -263,6 +263,8 @@ struct AutoExportSettingsView: View {
     case .waiting(.destinationUnavailable):
       return
         "The destination drive isn't connected. Export Now will queue the run for when it's reachable."
+    case .waiting(.destinationChecking):
+      return "Checking the destination folder. Export Now will run if the folder passes the check."
     case .waiting:
       return "Auto Export will run shortly."
     case .scheduled, .idle:
