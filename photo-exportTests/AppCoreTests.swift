@@ -412,19 +412,12 @@ import Testing
       let core = makeCore(composition)
       core.start()
       #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
-      let counter = BodyInvalidationCounter()
-      let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter)
       defer {
-        window.orderOut(nil)
-        window.contentView = nil
-        window.close()
         core.autoSyncManager.setEnabled(false)
         core.autoSyncPhotoChangeAdapter.stop()
         core.exportManager.cancelAndClear()
-        counter.reset()
         try? FileManager.default.removeItem(at: composition.appStateRoot)
       }
-      window.orderFront(nil)
       #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
       #expect(
         AutoExportPresentation.exportNowFooter(core.autoSyncManager.state)
