@@ -34,20 +34,24 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
         observedAt: builder.clock.now(), nextToken: token))
   }
 
-  private func completeManualRun(
-    _ builder: FakeAutoSyncEnvironmentBuilder, beforeCompletion: () -> Void = {}
+  private func completeAutoSyncRun(
+    _ manager: AutoSyncManager, _ builder: FakeAutoSyncEnvironmentBuilder,
+    beforeCompletion: () -> Void = {}
   ) {
     let context = ExportRunContext(
-      source: .manual, visibility: .userVisible, scope: .timelineFullLibrary, selection: .edited,
+      source: .autoSync, visibility: .background, scope: .timelineFullLibrary, selection: .edited,
       startedAt: builder.clock.now())
+    manager.dispatch(.exportRunStarted(context, destinationId: "ack-A"))
     builder.exportRunner.subject.send(
-      ExportRunState(activeContext: context, isManualActive: true, isAutoSyncActive: false))
+      ExportRunState(activeContext: context, isManualActive: false, isAutoSyncActive: true))
     builder.exportRunner.subject.send(.idle)
     beforeCompletion()
-    builder.exportRunner.completedRunsSubject.send(
-      ExportRunSummary(
-        context: context, endedAt: builder.clock.now(), enqueuedCount: 1, completedCount: 1,
-        failedCount: 0, skippedCount: 0, cancelReason: nil, result: .completed))
+    manager.dispatch(
+      .autoSyncRunCompleted(
+        ExportRunSummary(
+          context: context, endedAt: builder.clock.now(), enqueuedCount: 1, completedCount: 1,
+          failedCount: 0, skippedCount: 0, cancelReason: nil, result: .completed),
+        destinationId: "ack-A"))
   }
 
   @Test(arguments: [1, 2])
@@ -140,7 +144,7 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     let manager = attach(builder)
     defer { manager.setEnabled(false) }
     change(builder, ids: ["exported"], token: firstToken)
-    completeManualRun(builder) {
+    completeAutoSyncRun(manager, builder) {
       builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
     }
     #expect(
@@ -166,7 +170,7 @@ struct AutoSyncDirtyPersistenceAcknowledgementTests {
     builder.dirtyStore.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
     change(builder, ids: ["exported"], token: firstToken)
 
-    completeManualRun(builder)
+    completeAutoSyncRun(manager, builder)
     change(builder, token: secondToken)
 
     #expect(builder.dirtyStore.savedDestinationIds.contains("ack-A"))

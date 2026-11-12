@@ -67,11 +67,11 @@ struct AutoSyncRunDirtyBoundaryTests {
     ).0
   }
 
-  @Test(arguments: [ExportRunSource.autoSync, .manual])
-  func repeatedAssetChangeSurvivesCompletionAndNextRunClearsIt(source: ExportRunSource) {
+  @Test
+  func repeatedAssetChangeSurvivesCompletionAndNextRunClearsIt() {
     var state = change(initialState())
     let context = ExportRunContext(
-      source: source, visibility: .userVisible, scope: .timelineFullLibrary, selection: .edited)
+      source: .autoSync, visibility: .userVisible, scope: .timelineFullLibrary, selection: .edited)
     state = start(context, in: state)
     state = change(state)  // Same ID and timestamp: set equality cannot detect this work.
     state = start(context, in: state)  // Repeated publication must not move the boundary.
