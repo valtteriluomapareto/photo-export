@@ -42,7 +42,6 @@ import Testing
       let timeline: ExportRecordStore
       let collections: CollectionExportRecordStore
       let navigation: Navigation
-      let counter = BodyInvalidationCounter()
       let gate = AsyncCheckpoint()
       let requests = RequestLog()
       let root = TestScratch.directory("AssetDetailStatus")
@@ -70,7 +69,7 @@ import Testing
         let hosting = NSHostingView(
           rootView: Host(navigation: navigation, library: library, collections: collections)
             .environment(library).environment(timeline).environment(collections)
-            .environment(\.bodyInvalidationCounter, counter))
+            .environment(\.accessibilityEnabled, true))
         window = NSWindow(
           contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: paneSize),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -99,14 +98,25 @@ import Testing
         await gate.waitForEnter(count: 1)
       }
 
+      private func visibleRows() -> [String] {
+        let prefixes = [
+          "Original:", "Original failed:", "Live Photo video:", "Live Photo video failed:",
+          "Edited:", "Edited failed:", "Edited version", "Edited Live Photo video:",
+          "Edited Live Photo video failed:",
+        ]
+        var rows: [String] = []
+        for text in NativeViewAccess.texts(in: window)
+        where prefixes.contains(where: { text.hasPrefix($0) }) && !rows.contains(text) {
+          rows.append(text)
+        }
+        return rows
+      }
+
       func expectRows(_ expected: [String], sourceLocation: SourceLocation = #_sourceLocation) async
       {
-        _ = await eventually("asset detail rows \(expected)", sourceLocation: sourceLocation) {
-          window.contentView?.layoutSubtreeIfNeeded()
-          return counter.renderedText["asset-detail-status"] == expected
-        }
         #expect(
-          counter.renderedText["asset-detail-status"] == expected, sourceLocation: sourceLocation)
+          await observe(in: window) { visibleRows() == expected }, sourceLocation: sourceLocation)
+        #expect(visibleRows() == expected, sourceLocation: sourceLocation)
       }
 
       func close() async {
