@@ -179,6 +179,20 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Thumbnails
 
+  @Test(arguments: [ThumbnailDeliveryMode.fast, .highQuality])
+  func thumbnailReaderReturnsCuratedImage(delivery: ThumbnailDeliveryMode) async throws {
+    let service: any PhotoLibraryService = ScreenshotPhotoLibraryService()
+    let assets = await service.resolveThumbnailAssets(ids: ["family-1"])
+    let asset = try #require(assets.first)
+    #expect(assets.count == 1)
+    #expect(asset.descriptor.id == "family-1")
+    let size = delivery == .fast ? ThumbnailRequestSpec.gridSize : CGSize(width: 1024, height: 1024)
+    let image = try #require(
+      await service.thumbnailReader.image(
+        for: asset, spec: ThumbnailRequestSpec(size: size, delivery: delivery)))
+    #expect(image.width > 0 && image.height > 0)
+  }
+
   @Test func loadThumbnailReturnsImage() async {
     let svc = ScreenshotPhotoLibraryService()
     let img = await svc.loadThumbnail(for: "family-1", allowNetwork: false)
