@@ -22,8 +22,9 @@ protocol PhotoLibraryService: AnyObject, Sendable {
 
   // MARK: - Collections
 
-  /// Streams a scope's assets in batches of at most `batchSize`; a small scope may arrive as
-  /// one batch. `PhotoLibraryManager` yields them by creation date, oldest first. The stream
+  /// Streams a scope's assets in batches. `PhotoLibraryManager` limits each batch to
+  /// `batchSize` and yields assets by creation date, oldest first. Screenshot mode may emit
+  /// its entire curated scope as one batch. The stream
   /// finishes when enumeration completes, and also, silently, when the caller's task is
   /// cancelled, so a caller collecting a whole scope checks cancellation afterwards. Throws
   /// `authorizationDenied` without Photos access.
