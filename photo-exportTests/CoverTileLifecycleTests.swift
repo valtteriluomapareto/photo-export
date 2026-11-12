@@ -9,6 +9,7 @@ import Testing
 struct CoverTileLifecycleTests {
   @Observable final class Selection {
     var selected = false
+    var year = 2025
   }
 
   private struct AlbumHost: View {
@@ -21,7 +22,19 @@ struct CoverTileLifecycleTests {
     }
   }
 
-  private static func collection(_ kind: PhotoCollectionDescriptor.Kind) -> PhotoCollectionDescriptor {
+  private struct MonthHost: View {
+    let selection: Selection
+    let service: FakePhotoLibraryService
+    var body: some View {
+      MonthTileView(
+        year: selection.year, month: 1, photoCount: 1, isFullyExported: false,
+        photoLibraryService: service)
+    }
+  }
+
+  private static func collection(_ kind: PhotoCollectionDescriptor.Kind)
+    -> PhotoCollectionDescriptor
+  {
     PhotoCollectionDescriptor(
       id: "cover", localIdentifier: "cover", title: "Trip", kind: kind,
       pathComponents: [], children: [])
@@ -85,5 +98,61 @@ struct CoverTileLifecycleTests {
       })
     #expect(service.scopeFetchCalls == [.album(collectionId: "cover")])
     #expect(service.decodedThumbnailCalls.count == 1)
+  }
+
+  @Test func changingYearLoadsTheNewCoverWhileOldImagesAreHeld() async throws {
+    let service = FakePhotoLibraryService()
+    for year in [2025, 2026] {
+      service.assetsByYearMonth["\(year)-1"] = [
+        TestAssetFactory.makeAsset(
+          id: "\(year)",
+          creationDate: try #require(
+            Calendar.current.date(
+              from: DateComponents(year: year, month: 1, day: 15))))
+      ]
+    }
+    let gate = AsyncCheckpoint()
+    let red = try solidImage(.red)
+    let blue = try solidImage(.blue)
+    service.decodedThumbnailOverride = { id, _, _ in
+      if id == "2025" { await gate.enter() }
+      return id == "2025" ? red : blue
+    }
+    let selection = Selection()
+    let window = window(MonthHost(selection: selection, service: service))
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      selection.year = 2026
+      try #require(
+        await observe(in: window) {
+          guard let view = window.contentView,
+            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+          else { return false }
+          view.cacheDisplay(in: view.bounds, to: bitmap)
+          guard
+            let color = bitmap.colorAt(
+              x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+          else { return false }
+          return color.blueComponent > color.redComponent + 0.4
+        })
+      #expect(
+        service.scopeFetchCalls == [
+          .timeline(year: 2025, month: 1), .timeline(year: 2026, month: 1),
+        ])
+    } cleanup: {
+      close(window)
+      await gate.releaseAll()
+    }
+  }
+
+  private func solidImage(_ color: NSColor) throws -> CGImage {
+    let context = try #require(
+      CGContext(
+        data: nil, width: 20, height: 20, bitsPerComponent: 8, bytesPerRow: 80,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(color.cgColor)
+    context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+    return try #require(context.makeImage())
   }
 }
