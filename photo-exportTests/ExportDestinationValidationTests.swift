@@ -10,7 +10,11 @@ struct ExportDestinationValidationTests {
 
   @Test func urlForMonthThrowsNoSelectionWhenNoFolderSelected() {
     let mgr = ExportDestinationManager(
-      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
+    )
     #expect(throws: ExportDestinationManager.ExportDestinationError.noSelection) {
       try mgr.urlForMonth(year: 2025, month: 6)
     }
@@ -26,7 +30,8 @@ struct ExportDestinationValidationTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let mgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
-      bookmarkSaver: { _ in true }, validationScopeAcquirer: { _ in true },
+      bookmarkSaver: { _ in true }, storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in })
     await mgr.persistSelectionAndWait(dir)
     return (mgr, dir)
@@ -108,7 +113,10 @@ struct ExportDestinationValidationTests {
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     await writer.persistSelectionAndWait(dir)
     let bookmarkBytesBefore = defaults.data(forKey: bookmarkKey)
@@ -118,7 +126,10 @@ struct ExportDestinationValidationTests {
 
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
 
     await restored.waitForValidation()
@@ -129,11 +140,7 @@ struct ExportDestinationValidationTests {
     #expect(bookmarkBytesBefore == bookmarkBytesAfter)
   }
 
-  @Test(
-    .disabled(
-      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true (per Apple's docs) so this runs there."
-    ))
+  @Test
   func persistedBookmarkRestoresFolderAcrossManagerInstances() async throws {
     let dir = TestScratch.directory("ExportDestBookmark")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -144,16 +151,30 @@ struct ExportDestinationValidationTests {
     let bookmarkKey = "ExportDestinationBookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
+    var acquired: [URL] = []
+    var released: [URL] = []
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { url in
+        acquired.append(url)
+        return true
+      },
+      validationScopeReleaser: { released.append($0) }
     )
     await writer.persistSelectionAndWait(dir)
 
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { url in
+        acquired.append(url)
+        return true
+      },
+      validationScopeReleaser: { released.append($0) }
     )
 
     await restored.waitForValidation()
@@ -161,10 +182,8 @@ struct ExportDestinationValidationTests {
     #expect(restored.canExportNow)
     #expect(restored.destinationId == writer.destinationId)
 
-    let scopedURL = restored.beginScopedAccess()
-    #expect(scopedURL?.standardizedFileURL == dir.standardizedFileURL)
-    if let scopedURL {
-      restored.endScopedAccess(for: scopedURL)
-    }
+    #expect(acquired.count >= 2)
+    #expect(acquired == released)
+    #expect(acquired.allSatisfy { $0.standardizedFileURL == dir.standardizedFileURL })
   }
 }

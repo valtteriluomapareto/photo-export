@@ -22,7 +22,10 @@ struct ExportDestinationManagerIdentityTests {
   @Test func configureForScreenshotModeSetsAvailableWritableState() {
     let manager = ExportDestinationManager(
       skipRestore: true,
-      userDefaults: TestScratch.defaults("screenshot")
+      userDefaults: TestScratch.defaults("screenshot"),
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
 
     manager.configureForScreenshotMode()
@@ -38,7 +41,10 @@ struct ExportDestinationManagerIdentityTests {
   @Test func configureForScreenshotModeRespectsCustomDisplayName() {
     let manager = ExportDestinationManager(
       skipRestore: true,
-      userDefaults: TestScratch.defaults("screenshot")
+      userDefaults: TestScratch.defaults("screenshot"),
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
 
     manager.configureForScreenshotMode(displayName: "External Photos")
@@ -104,11 +110,7 @@ struct ExportDestinationManagerIdentityTests {
   /// unchanged `destinationId`. Save a bookmark, restore it, refresh by calling save again
   /// — the id stays the same because it derives from the volume + path, not the bookmark
   /// bytes.
-  @Test(
-    .disabled(
-      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true (per Apple's docs) so this runs there."
-    ))
+  @Test
   func destinationIdSurvivesBookmarkRefresh() async throws {
     let dir = TestScratch.directory("DestId-BookmarkRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -122,7 +124,10 @@ struct ExportDestinationManagerIdentityTests {
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     await writer.persistSelectionAndWait(dir)
     let firstId = writer.destinationId
@@ -130,7 +135,10 @@ struct ExportDestinationManagerIdentityTests {
     // "Refresh" by restoring from defaults (a fresh manager parses the bookmark again).
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     await restored.waitForValidation()
     let secondId = restored.destinationId
@@ -169,14 +177,20 @@ struct ExportDestinationManagerIdentityTests {
     let mgrEmpty = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     #expect(mgrEmpty.currentLegacyDestinationId() == nil)
 
     let mgr = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     await mgr.persistSelectionAndWait(dir)
     let legacyId = mgr.currentLegacyDestinationId()
@@ -209,7 +223,10 @@ struct ExportDestinationManagerIdentityTests {
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     await writer.persistSelectionAndWait(dir)
     let originalBytes = defaults.data(forKey: bookmarkKey)!
@@ -218,7 +235,10 @@ struct ExportDestinationManagerIdentityTests {
     // Restore: the manager snapshots the legacy id from the original bytes.
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     #expect(restored.currentLegacyDestinationId() == originalLegacyId)
 

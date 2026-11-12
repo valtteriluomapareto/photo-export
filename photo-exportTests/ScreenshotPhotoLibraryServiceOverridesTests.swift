@@ -179,43 +179,25 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Thumbnails
 
-  @Test func loadThumbnailReturnsImage() async {
-    let svc = ScreenshotPhotoLibraryService()
-    let img = await svc.loadThumbnail(for: "family-1", allowNetwork: false)
-    #expect(
-      img != nil,
-      "screenshot service must return at minimum a placeholder gradient — nil means the override fell through to production"
-    )
+  @Test(arguments: [ThumbnailDeliveryMode.fast, .highQuality])
+  func thumbnailReaderReturnsCuratedImage(delivery: ThumbnailDeliveryMode) async throws {
+    let service: any PhotoLibraryService = ScreenshotPhotoLibraryService()
+    let assets = await service.resolveThumbnailAssets(ids: ["family-1"])
+    let asset = try #require(assets.first)
+    #expect(assets.count == 1)
+    #expect(asset.descriptor.id == "family-1")
+    let size = delivery == .fast ? ThumbnailRequestSpec.gridSize : CGSize(width: 1024, height: 1024)
+    let image = try #require(
+      await service.thumbnailReader.image(
+        for: asset, spec: ThumbnailRequestSpec(size: size, delivery: delivery)))
+    #expect(image.width > 0 && image.height > 0)
   }
 
-  @Test func loadThumbnailHighQualityReturnsImage() async {
-    let svc = ScreenshotPhotoLibraryService()
-    let img = await svc.loadThumbnailHighQuality(for: "family-1", allowNetwork: false)
-    #expect(img != nil)
-  }
-
-  @Test func requestFullImageReturnsImage() async throws {
+  @Test func requestPreviewReturnsImage() async throws {
     let svc = ScreenshotPhotoLibraryService()
     let img = try await svc.requestPreview(
       for: "family-1", pixelSize: CGSize(width: 2048, height: 2048), onDegraded: { _ in })
-    _ = img  // non-throw is the pin
-  }
-
-  /// Limitation: production's `start/stopCachingThumbnails(for:)` also no-ops in unit
-  /// tests because `phAssetCache` is empty (it's populated by a prior `fetchAssets` on
-  /// the real Photos library, which never runs here). Removing the override therefore
-  /// would not fail this test — the override exists so the production path never reaches
-  /// `PHCachingImageManager.shared`, which would otherwise be poked on the real system
-  /// at runtime. The composition follow-up closes this hole structurally; until then
-  /// the assertion below pins method presence + call-shape only.
-  @Test func startStopCachingThumbnailsAreNoOps() {
-    let svc = ScreenshotPhotoLibraryService()
-    let asset = TestAssetFactory.makeAsset(id: "family-1")
-    svc.startCachingThumbnails(for: [asset])
-    svc.stopCachingThumbnails(for: [asset])
-    // Also exercise the empty path so a future override that crashes on empty input fails here.
-    svc.startCachingThumbnails(for: [])
-    svc.stopCachingThumbnails(for: [])
+    #expect(img.size.width > 0 && img.size.height > 0)
   }
 
   // MARK: - Wiring
