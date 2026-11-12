@@ -147,8 +147,8 @@ class GateResultCheckTests(unittest.TestCase):
                       "1 test case(s) passed", result.stdout)
 
     def test_real_gate_list_passes_when_every_gate_ran(self):
-        for method in ("autoSyncRunYieldsCanonicalSequence", "manualExportSupersedingAutoSyncYieldsCanonicalSequence"):
-            add_case(self.results, "AutoSyncSeamCharacterizationTests", method)
+        # Explicitly synthetic parser data shaped like recorded nodes. These additions
+        # are not recorded app-run evidence and never modify the frozen JSON fixture.
         add_suite(self.results, "AmbiguousSameFolderTests",
                   "sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds")
         add_suite(self.results, "PublisherParityTests", "destinationIdentity")
@@ -158,13 +158,40 @@ class GateResultCheckTests(unittest.TestCase):
         add_suite(self.results, "FileIOServiceTests", "existingFileAtCommitIsNeverReplaced")
         add_suite(self.results, "IdenticalFileAdoptionTests", "lostRecordIdenticalFileIsAdopted",
                   "identicalAssetsKeepDistinctFilesAfterRecordLoss", "missingFileReturnsAfterReconcile")
+        add_suite(self.results, "DestinationIdentityIntegrationTests",
+                  "remountDriftKeepsEveryKeyOnStableId")
+        add_suite(self.results, "StableDestinationIdentityTests",
+                  "differentFolderReSelectionViaRealEvidenceMintsNewId")
+        add_suite(self.results, "ExportDestinationEscapeProtectionTests",
+                  "symlinkEscapeIsRejected")
+        add_suite(self.results, "JSONLRecordFileIOFailureTests",
+                  "appendFailureIsReportedAndSnapshotRetryRetainsSkippedOperations")
+        add_suite(self.results, "RecordStorePersistenceHealthTests",
+                  "failedAppendRetainsInflightCompletionAndRetrySavesIt")
+        add_suite(self.results, "HistoricalPersistenceFixtureTests",
+                  "timelineSnapshotReplayAndReopenPreserveHistoricalSemantics")
+        add_suite(self.results, "HistoricalAuxiliaryStoreFixtureTests",
+                  "dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice")
+        add_suite(self.results, "HistoryWriteFailureTests",
+                  "importReportsMidAppendFailureWithSuccessfulControl")
         self.assert_passes(self.run_check(gates=GATE_LIST.read_text()))
 
-    def test_real_gate_list_fails_without_the_new_seam_cases(self):
+    def test_real_gate_list_rejects_older_recording_missing_new_invariants(self):
+        # The authentic older recording remains untouched; current gates absent from
+        # it must fail closed even though the recorded subset FIXTURE_GATES passes.
         self.assert_fails(self.run_check(gates=GATE_LIST.read_text()),
-                          "FAIL: gate func AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence: "
-                          "no test case with identifier "
-                          "AutoSyncSeamCharacterizationTests/autoSyncRunYieldsCanonicalSequence(…)")
+                          "FAIL: gate func DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId: "
+                          "no test case with identifier",
+                          "FAIL: gate func StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId: "
+                          "no test case with identifier",
+                          "FAIL: gate struct ExportDestinationEscapeProtectionTests: suite not found",
+                          "FAIL: gate struct JSONLRecordFileIOFailureTests: suite not found",
+                          "FAIL: gate struct RecordStorePersistenceHealthTests: suite not found",
+                          "FAIL: gate struct HistoricalPersistenceFixtureTests: suite not found",
+                          "FAIL: gate func HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice: "
+                          "no test case with identifier",
+                          "FAIL: gate func HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl: "
+                          "no test case with identifier")
 
     def test_skipped_case_under_suite_gate_fails(self):
         skipped = case(self.results, "ImportIdempotencyTests/bulkImportIsIdempotent()")

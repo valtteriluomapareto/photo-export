@@ -216,13 +216,12 @@ property or named publisher accessor AutoSync observes:
    the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a
    new X, touch these files" recipes.
 2. If your change touches the queue, AutoSync surface, record stores, the final file commit or its
-   name planning, or the screenshot photo library service, the following **regression-gate tests**
+   name planning, destination identity or root resolution, or the screenshot photo library service, the following **regression-gate tests**
    must pass *without re-recording* unless you have explicitly audited the new behavior:
-   - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence.
-   - `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence` — pins the AutoSync
-     run's state sequence.
-   - `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence` —
-     pins a manual export superseding an AutoSync run.
+   - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence, including
+     `[idle, autoSyncActive, idle]` for an automatic run and
+     `[idle, autoSyncActive, idle, manualActive, idle]` when a manual run supersedes it.
+     The superseded summary stays `.superseded` / `.supersededByManualRun`.
    - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors` — pins
      synchronous coordinator→manager mirrors.
    - `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` — pins
@@ -253,8 +252,21 @@ property or named publisher accessor AutoSync observes:
      stays reserved for its record, so Import Existing Backup drops that record and the next export
      writes the file back at its own name.
 
+   - `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` — The real destination manager, adapter, lifecycle, record stores and safety monitor keep the stable key through remount fingerprint drift.
+   - `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` — Real bookmark and file-identity evidence gives a genuinely different folder a new nonnil destination id.
+   - `ExportDestinationEscapeProtectionTests` — Real directory resolution refuses root escapes, including symlinks and reparented cached directories, while valid directories succeed.
+   - `JSONLRecordFileIOFailureTests` — JSONL I/O failures cannot be acknowledged by flush, and snapshot recovery retains queued work; a flush cannot acknowledge a newer mutation.
+   - `RecordStorePersistenceHealthTests` — Timeline and collection history must be flushed and healthy before retry acknowledgement; recovery retains pending and in-flight records.
+   - `HistoricalPersistenceFixtureTests` — Shipping record loaders replay immutable released snapshots and logs with their original history and placement semantics.
+   - `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` — Shipping dirty, retry, summary and safety loaders read released state twice, including targeted/manual summary compatibility.
+   - `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` — An import with a failed history append reports failure rather than success; the successful control reopens durable records.
+
    The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it
-   or if a gate is skipped.
+   or if a gate is skipped. A suite gate enforces its current members, including skipped or
+   failing cases; removing duplicate method rows intentionally gives up their separate symbol
+   pins. Keep the canonical AutoSync cases and expectations when editing that suite.
+   Read-only Photos access remains the separate static CI guard
+   `scripts/ci/check-read-only-photos.py` with its self-tests.
 3. For a new collaborator, follow the reference's Host pattern and state ownership
    rules. Coordinator state has one owner; synchronous sinks update the manager's
    bridged named-accessor state or plain tracked UI state so AutoSync sees consistent state.

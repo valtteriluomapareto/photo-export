@@ -177,8 +177,6 @@ jobs:
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
         timeout-minutes: 15
-        env:
-          TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"
         run: bash scripts/ci/run-unit-tests.sh
 
       - name: Check regression gates ran

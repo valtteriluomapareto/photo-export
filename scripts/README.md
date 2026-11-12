@@ -320,20 +320,13 @@ has zero required approvals; preserve its object when updating settings rather
 than replacing it with `null`, which would remove the PR requirement. For a policy
 change, record fresh before/after API evidence and rerun the routing/result tests.
 
-### Required destination scope tests
+### Destination identity invariant tests
 
-CI sets `TEST_RUNNER_REQUIRE_SCOPE_TESTS=1` on the unit-test step; xcodebuild forwards
-it to the test process as `REQUIRE_SCOPE_TESTS`. The ungated
-`RequiredDestinationScopeTests.requiredDestinationScopeTestsCanRun` fails if the
-real temporary-folder security-scope probe rejects access, which would otherwise
-skip 19 destination-identity regression tests. Local runs without the flag retain
-the existing probe-based skips on affected macOS versions. To enforce the CI
-requirement locally:
-
-```bash
-TEST_RUNNER_REQUIRE_SCOPE_TESTS=1 xcodebuild -project photo-export.xcodeproj \
-  -scheme "photo-export" -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
-```
+Destination identity tests inject security-scope acquisition and release while exercising
+real bookmarks, file identity, destination validation and record-store configuration. Their
+execution does not depend on native scope access for bare temporary URLs. Deliberate denial
+cases keep their injected failure inputs. The regression manifest names remount and
+different-folder gates; CI verifies their actual Passed results in the test bundle.
 
 ### Advisory coverage summary
 

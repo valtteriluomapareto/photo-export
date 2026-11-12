@@ -146,7 +146,7 @@ class ToolchainWorkflowTests(unittest.TestCase):
         unit = source[source.index("      - name: Run Unit Tests (Debug, with coverage)"):]
         unit = unit[:unit.index("      - name:", 10)]
         self.assertIn("id: unit-tests", unit)
-        self.assertIn('TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"', unit)
+        self.assertIn("run: bash scripts/ci/run-unit-tests.sh", unit)
         self.assertIn("timeout-minutes: 15", unit)
         self.assertIn("name: TestResults-${{ matrix.xcode }}", source)
         self.assertIn("bash scripts/ci/check-built-app.sh ${{ matrix.xcode }}", source)

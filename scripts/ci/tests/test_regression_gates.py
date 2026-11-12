@@ -123,12 +123,12 @@ class RegressionGuardTests(unittest.TestCase):
         self.assert_violation("MISSING SYMBOL: 'func autoSyncRunFilterAlreadyExportedBeforeRetryCheck'")
 
     def test_method_gate_requires_its_qualifying_suite(self):
-        path = self.tests / "AutoSyncSeamCharacterizationTests.swift"
+        path = self.tests / "ExportManagerRunExportTests.swift"
         path.write_text(path.read_text().replace(
-            "struct AutoSyncSeamCharacterizationTests {", "struct RenamedSeamTests {"))
+            "struct ExportManagerRunExportTests {", "struct RenamedRunExportTests {"))
         self.assert_violation(
-            "MISSING SYMBOL: 'struct AutoSyncSeamCharacterizationTests' (suite of "
-            "'func AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence')")
+            "MISSING SYMBOL: 'struct ExportManagerRunExportTests' (suite of "
+            "'func ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck')")
 
     def test_rows_come_from_the_gate_list(self):
         with self.gate_list.open("a") as gate_list:
