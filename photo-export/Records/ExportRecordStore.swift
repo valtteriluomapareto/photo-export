@@ -34,7 +34,7 @@ final class ExportRecordStore {
 
   @ObservationIgnored private var storedRecords: [String: ExportRecord] = [:]
   var recordsById: [String: ExportRecord] {
-    configurationPending && !applyingCancellationCleanup ? [:] : storedRecords
+    configurationPending ? [:] : storedRecords
   }
 
   /// Incrementally-maintained per-`(year, month)` counters that back the sidebar count
@@ -256,7 +256,7 @@ final class ExportRecordStore {
       do {
         try await file.flush()
         guard jsonl === file, loadGeneration == generation, recordsEpoch == epoch else { return }
-        try await file.checkpoint(recordsById)
+        try await file.checkpoint(storedRecords)
       } catch {
         logger.error("History checkpoint failed: \(error.localizedDescription, privacy: .public)")
       }
@@ -400,7 +400,7 @@ final class ExportRecordStore {
     latestLoad.advance(to: loadGeneration)
 
     if hasUnsavedChanges, let id = configuredDestinationId {
-      pendingRecovery[id] = recordsById
+      pendingRecovery[id] = storedRecords
     }
     let departingId = configuredDestinationId
     configuredDestinationId = destinationId
@@ -598,7 +598,7 @@ final class ExportRecordStore {
     let operation = mutationAdmission.requestCheckpoint { [weak self] in
       guard let self, mutationTicket == ticket else { return }
       do {
-        try await file.checkpoint(recordsById, recovering: true)
+        try await file.checkpoint(storedRecords, recovering: true)
         guard mutationTicket == ticket else { return }
         mutationAdmission.installAfterMaintenance {
           self.hasUnsavedChanges = false
@@ -766,7 +766,7 @@ final class ExportRecordStore {
 
   /// Removes a single variant from an asset record. If no variants remain, removes the record.
   func removeVariant(assetId: String, variant: ExportVariant) {
-    guard var record = recordsById[assetId] else { return }
+    guard var record = storedRecords[assetId] else { return }
     guard record.variants[variant] != nil else { return }
     record.variants.removeValue(forKey: variant)
     if record.variants.isEmpty {

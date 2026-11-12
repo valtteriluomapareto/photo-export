@@ -141,12 +141,12 @@ final class CollectionExportRecordStore {
   /// history. Deleted-album placements retain their export history.
   @ObservationIgnored private var storedPlacements: [String: ExportPlacement] = [:]
   var placements: [String: ExportPlacement] {
-    configurationPending && !applyingCancellationCleanup ? [:] : storedPlacements
+    configurationPending ? [:] : storedPlacements
   }
   /// Per-placement record bodies, keyed by `[placementId][assetId]`.
   @ObservationIgnored private var storedRecordBodies: [String: [String: RecordBody]] = [:]
   var recordBodies: [String: [String: RecordBody]] {
-    configurationPending && !applyingCancellationCleanup ? [:] : storedRecordBodies
+    configurationPending ? [:] : storedRecordBodies
   }
 
   /// A variant's folder: its placement (whose relative path is fixed at creation) plus
@@ -281,7 +281,8 @@ final class CollectionExportRecordStore {
         guard jsonl === file, loadGeneration == generation, recordsEpoch == epoch else { return }
         try await file.checkpoint(
           Snapshot(
-            version: Constants.snapshotVersion, placements: placements, records: recordBodies))
+            version: Constants.snapshotVersion, placements: storedPlacements,
+            records: storedRecordBodies))
       } catch {
         logger.error("History checkpoint failed: \(error.localizedDescription, privacy: .public)")
       }
@@ -429,7 +430,8 @@ final class CollectionExportRecordStore {
 
     if hasUnsavedChanges, let id = configuredDestinationId {
       pendingRecovery[id] = Snapshot(
-        version: Constants.snapshotVersion, placements: placements, records: recordBodies)
+        version: Constants.snapshotVersion, placements: storedPlacements,
+        records: storedRecordBodies)
     }
     let departingId = configuredDestinationId
     configuredDestinationId = destinationId
@@ -835,7 +837,8 @@ final class CollectionExportRecordStore {
       do {
         try await file.checkpoint(
           Snapshot(
-            version: Constants.snapshotVersion, placements: placements, records: recordBodies),
+            version: Constants.snapshotVersion, placements: storedPlacements,
+            records: storedRecordBodies),
           recovering: true)
         guard mutationTicket == ticket else { return }
         mutationAdmission.installAfterMaintenance {
@@ -1027,7 +1030,7 @@ final class CollectionExportRecordStore {
 
   func removeVariant(assetId: String, placement: ExportPlacement, variant: ExportVariant) {
     guard accept(placement) else { return }
-    guard var body = recordBodies[placement.id]?[assetId] else { return }
+    guard var body = storedRecordBodies[placement.id]?[assetId] else { return }
     guard body.variants[variant.rawValue] != nil else { return }
     body.variants.removeValue(forKey: variant.rawValue)
     if body.variants.isEmpty {
@@ -1039,7 +1042,7 @@ final class CollectionExportRecordStore {
 
   func remove(assetId: String, placement: ExportPlacement) {
     guard accept(placement) else { return }
-    guard recordBodies[placement.id]?[assetId] != nil else { return }
+    guard storedRecordBodies[placement.id]?[assetId] != nil else { return }
     append(.deleteRecord(placementId: placement.id, assetId: assetId))
   }
 
@@ -1682,23 +1685,23 @@ final class CollectionExportRecordStore {
   private func apply(_ op: LogOp) {
     switch op {
     case .upsertPlacement(let id, let placement):
-      let oldPlacement = placements[id]
+      let oldPlacement = storedPlacements[id]
       placementsChanged = placementsChanged || oldPlacement != placement
       Self.apply(
         op, placements: &storedPlacements, recordBodies: &storedRecordBodies, logger: logger)
       if let oldPlacement {
         placementCandidates[CollectionKey(oldPlacement)]?.removeValue(forKey: id)
       }
-      if let placement = placements[id] {
+      if let placement = storedPlacements[id] {
         placementCandidates[CollectionKey(placement), default: [:]][id] = placement
       }
     case .upsertRecord(let placementId, let assetId, _),
       .deleteRecord(let placementId, let assetId):
-      let oldBody = recordBodies[placementId]?[assetId]
+      let oldBody = storedRecordBodies[placementId]?[assetId]
       pendingTileRecords.insert(TileRecordKey(placementId: placementId, assetId: assetId))
       Self.apply(
         op, placements: &storedPlacements, recordBodies: &storedRecordBodies, logger: logger)
-      let newBody = recordBodies[placementId]?[assetId]
+      let newBody = storedRecordBodies[placementId]?[assetId]
       if let oldBody {
         Self.update(&filenameClaims, placementId: placementId, body: oldBody, adding: false)
       }
