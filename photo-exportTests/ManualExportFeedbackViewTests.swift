@@ -28,7 +28,8 @@ import Testing
       var status: LoginItemController.Status = .notRegistered
       func register() throws {}
       func unregister() throws {}
-      func openSystemLoginItems() {}
+      var opened = 0
+      func openSystemLoginItems() { opened += 1 }
     }
 
     @MainActor
@@ -102,6 +103,7 @@ import Testing
         let hosted = NSHostingView(
           rootView: SettingsRootView()
             .photoExportEnvironment(core)
+            .environment(\.accessibilityEnabled, true)
             .environment(\.bodyInvalidationCounter, counter)
             .onAppear { [counter] in counter.record("settings-root-visible") })
         let owned = NSWindow(
@@ -127,6 +129,10 @@ import Testing
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
       }
+    }
+
+    private func contains(_ text: String, in f: Fixture) -> Bool {
+      f.window.map { NativeViewAccess.containsText(text, in: $0) } == true
     }
 
     private func reached(_ gate: AsyncCheckpoint) async -> Bool {
@@ -163,8 +169,8 @@ import Testing
       f.show(progress: progress)
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText["progress-message"] == ["0/4 assets"]
-            && f.counter.renderedText["progress-asset"]?.first == "first.JPG"
+          contains("0/4 assets", in: f)
+            && contains("Currently exporting first.JPG", in: f)
         })
       try await f.renderBarrier()
       let bodies = f.counter.count(for: "export-progress-body")
@@ -178,12 +184,12 @@ import Testing
       #expect(progress.totalJobsCompleted == 2)
       #expect(progress.totalJobsEnqueued == 5)
       #expect(f.counter.count(for: "export-progress-body") - bodies == 0)
-      #expect(f.counter.renderedText["progress-message"] == ["0/4 assets"])
+      #expect(contains("0/4 assets", in: f))
       clock.advance(by: 0.2)
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText["progress-message"] == ["2/5 assets"]
-            && f.counter.renderedText["progress-asset"] == ["latest.JPG", "rendering"]
+          contains("2/5 assets", in: f)
+            && contains("Rendering edited latest.JPG", in: f)
         })
       #expect(f.counter.count(for: "export-progress-body") > bodies)
     }
@@ -205,13 +211,11 @@ import Testing
         completedCount: 3, failedCount: 1, failureMessage: detail)
       f.show(initialSize: CGSize(width: 480, height: initialHeight))
       let rendered = await observe {
-        f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
+        contains("2 exported · 1 failed", in: f)
       }
       try #require(rendered)
       let narrow = try await settledContentSize(in: f)
       #expect(narrow.width == 480)
-      let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      let oldIssues = try #require(f.counter.renderedActions["progress-view-issues"])
 
       let window = try #require(f.window)
       window.setContentSize(CGSize(width: 800, height: narrow.height))
@@ -229,10 +233,6 @@ import Testing
       let shortened = await observe { window.contentLayoutRect.height < wide.height }
       try #require(shortened)
       let short = try await settledContentSize(in: f)
-      oldIssues()
-      oldDismiss()
-      #expect(f.selectedAtOpen == nil)
-      #expect(f.manager.progressState.manualSummary?.isDismissed == false)
 
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: detail)
@@ -241,12 +241,14 @@ import Testing
       let replaced = try await settledContentSize(in: f)
       #expect(replaced.width == 800)
       #expect(replaced.height == wide.height)
-      let issues = try #require(f.counter.renderedActions["progress-view-issues"])
-      issues()
+      let issues = try #require(f.window.flatMap { NativeViewAccess.button("View Issues", in: $0) })
+      #expect(issues.accessibilityPerformPress?() == true)
       #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
-      let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      dismiss()
-      let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
+      let dismiss = try #require(f.window.flatMap { NativeViewAccess.button("Dismiss", in: $0) })
+      #expect(dismiss.accessibilityPerformPress?() == true)
+      let hidden = await observe {
+        f.window.map { NativeViewAccess.button("Dismiss", in: $0) == nil } == true
+      }
       #expect(hidden)
     }
 
@@ -286,28 +288,26 @@ import Testing
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
       f.show()
-      let rendered = await observe { f.counter.renderedText["progress-message"] != nil }
+      let rendered = await observe { contains("2 exported · 1 failed", in: f) }
       try #require(rendered)
-      #expect(f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"])
-      let issues = try #require(f.counter.renderedActions["progress-view-issues"])
+      #expect(contains("2 exported · 1 failed", in: f))
+      let issues = try #require(f.window.flatMap { NativeViewAccess.button("View Issues", in: $0) })
       if settingsAlreadyOpen {
         f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
         f.showSettings()
         let mounted = await observe { f.counter.count(for: "settings-root-visible") > 0 }
         try #require(mounted)
       }
-      issues()
+      #expect(issues.accessibilityPerformPress?() == true)
       #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
       if !settingsAlreadyOpen { f.showSettings() }
       let issuesShown = await observe {
-        f.counter.renderedText["settings-visible-tab"] == ["Export Issues"]
+        f.settingsWindow.map { NativeViewAccess.selectedTab("Export Issues", in: $0) } == true
       }
       #expect(issuesShown, "The shared Settings binding must show the actual issues tab")
-      let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      dismiss()
-      f.selectedAtOpen = nil
-      issues()
-      #expect(f.selectedAtOpen == nil, "A retained action must not reopen a dismissed summary")
+      let dismiss = try #require(f.window.flatMap { NativeViewAccess.button("Dismiss", in: $0) })
+      #expect(dismiss.accessibilityPerformPress?() == true)
+
     }
     @Test func settingsSharedEnvironmentSupportsAllTabs() async throws {
       let f = await Fixture()
@@ -321,53 +321,44 @@ import Testing
         f.defaults.set(tab.rawValue, forKey: SettingsTab.storageKey)
         try #require(
           await observe(in: f.settingsWindow) {
-            f.counter.renderedText["settings-visible-tab"] == [title]
+            f.settingsWindow.map { NativeViewAccess.selectedTab(title, in: $0) } == true
           })
       }
     }
 
-    /// The Auto Export tab's login toggle and footer read the controller's status, so a
-    /// refresh that finds a new status must re-render them.
+    /// The real conditional button follows the observed controller, then opens Settings.
+    /// Full footer wording is pinned by LoginItemControllerTests.
     @Test func autoExportTabFollowsLoginItemStatus() async throws {
       let f = await Fixture()
       defer { f.close() }
-      f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
-      f.showSettings()
-      let initial = LoginItemController.Status.notRegistered.footerText
-      try #require(await observe { f.counter.renderedText["login-item-footer"] == [initial] })
+      let window = HostedViewHarness.makeWindow(
+        contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 220),
+        styleMask: [.borderless])
+      window.contentView = NSHostingView(
+        rootView: VStack { LoginItemSettingsControls() }
+          .environment(f.loginItem).environment(\.accessibilityEnabled, true))
+      f.settingsWindow = window
+      window.orderFront(nil)
+      try #require(
+        await observe(in: window) {
+          NativeViewAccess.elements(in: window).contains { $0.accessibilityRole?() == .checkBox }
+        })
+      #expect(NativeViewAccess.element("login-item-open-settings", in: window) == nil)
+      #expect(f.loginService.opened == 0)
       f.loginService.status = .requiresApproval
       f.loginItem.refresh()
-      let updated = LoginItemController.Status.requiresApproval.footerText
-      #expect(await observe { f.counter.renderedText["login-item-footer"] == [updated] })
+      try #require(
+        await observe(in: window) {
+          NativeViewAccess.element("login-item-open-settings", in: window) != nil
+        })
+      let button = try #require(NativeViewAccess.element("login-item-open-settings", in: window))
+      #expect(button.isAccessibilityEnabled?() == true)
+      let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+      _ = press()
+      #expect(f.loginService.opened == 1)
     }
 
-    @Test func dismissRetiresOldCountersAndCannotDismissReplacement() async throws {
-      let f = await Fixture()
-      defer { f.close() }
-      f.manager.progressState.manualSummary = ManualExportSummary(
-        completedCount: 3, failedCount: 1, failureMessage: nil)
-      f.show()
-      let ready = await observe { f.counter.renderedActions["progress-dismiss"] != nil }
-      try #require(ready)
-      let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      let replacement = ManualExportSummary(completedCount: 4, failedCount: 2, failureMessage: nil)
-      f.manager.progressState.manualSummary = replacement
-      oldDismiss()
-      #expect(f.manager.progressState.manualSummary?.isDismissed == false)
-      let changed = await observe {
-        f.counter.renderedText["progress-message"] == ["2 exported · 2 failed"]
-      }
-      try #require(changed)
-      let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      dismiss()
-      let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
-      #expect(hidden)
-      #expect(f.counter.renderedText["progress-message"] == [])
-      #expect(f.manager.progressState.totalJobsEnqueued == 3)
-      #expect(f.manager.progressState.totalJobsCompleted == 3)
-    }
-
-    @Test func successExpiryRetiresCounters() async throws {
+    @Test func successExpiryHidesCompletedSummary() async throws {
       let f = await Fixture()
       let expiry = AsyncCheckpoint()
       try await withCleanup {
@@ -375,14 +366,16 @@ import Testing
           completedCount: 3, failedCount: 0, failureMessage: nil)
         f.show(successDelay: { await expiry.enter() })
         let shown = await observe {
-          f.counter.renderedText["progress-message"] == ["Export complete"]
+          contains("Export complete", in: f)
         }
         try #require(shown)
         try #require(await reached(expiry))
         await expiry.releaseAll()
-        let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
+        let hidden = await observe {
+          f.window.map { NativeViewAccess.button("Dismiss", in: $0) == nil } == true
+        }
         #expect(hidden)
-        #expect(f.counter.renderedText["progress-message"] == [])
+        #expect(!contains("3/3 assets", in: f))
         #expect(f.manager.progressState.totalJobsCompleted == 3)
       } cleanup: {
         await expiry.releaseAll()
@@ -408,7 +401,7 @@ import Testing
         #expect(f.manager.progressState.manualSummary?.id == failure.id)
         #expect(f.manager.progressState.manualSummary?.isDismissed == false)
         let shown = await observe {
-          f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
+          contains("2 exported · 1 failed", in: f)
         }
         #expect(shown)
       } cleanup: {

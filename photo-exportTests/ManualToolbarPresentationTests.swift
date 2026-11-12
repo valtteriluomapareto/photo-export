@@ -31,7 +31,10 @@ struct ManualToolbarPresentationTests {
     ])
     #expect(value.action == .timelineSelection(.init(years: [2026], months: [])))
     #expect(value.label == "Export 1 Item")
-    #expect(value.help.contains("Years cover their months"))
+    #expect(
+      value.help
+        == "Export every photo across the selected years and months. Years cover their months — selecting a year and a month inside it exports the whole year."
+    )
     let single = presentation(items: [.timelineYear(year: 2026), .favorites])
     #expect(single.action == .timelineAll)
   }
@@ -48,7 +51,10 @@ struct ManualToolbarPresentationTests {
     )
     #expect(shared.action == .sharedAlbum("S"))
     #expect(shared.label == "Export Shared Album")
-    #expect(shared.help.contains("Include originals is ignored"))
+    #expect(
+      shared.help
+        == "Export every photo in this shared album. iCloud only provides downscaled JPEGs for shared photos; Include originals is ignored."
+    )
   }
 
   @Test func collectionMultiSelectionWinsOverSharedFocusAndFiltersTimeline() {
@@ -60,7 +66,10 @@ struct ManualToolbarPresentationTests {
       focused: .sharedAlbum(collectionId: "S"))
     #expect(value.action == .collectionsSelection(items))
     #expect(value.label == "Export 3 Items")
-    #expect(value.help.contains("Selected folders are expanded"))
+    #expect(
+      value.help
+        == "Export every photo in the selected collections. Selected folders are expanded to their nested albums; Favorites and shared albums are included if selected."
+    )
   }
 
   @Test func unavailableHelpHasPriorityAndExistingCrossSectionSharedHelpIsPreserved() {
@@ -70,7 +79,10 @@ struct ManualToolbarPresentationTests {
     #expect(!unavailable.isEnabled)
     let crossSection = presentation(focused: .sharedAlbum(collectionId: "S"))
     #expect(crossSection.action == .timelineAll)
-    #expect(crossSection.help.contains("Include originals is ignored"))
+    #expect(
+      crossSection.help
+        == "Export every photo in this shared album. iCloud only provides downscaled JPEGs for shared photos; Include originals is ignored."
+    )
     #expect(presentation(availability: .loadingHistory).help == "Loading export history…")
   }
 
@@ -85,11 +97,39 @@ struct ManualToolbarPresentationTests {
   }
 
   @Test func versionHelpDistinguishesOriginalCompanionsAndGlobalScope() {
-    #expect(presentation().help.contains("in the version Photos shows"))
-    #expect(presentation(version: .editedWithOriginals).help.contains("_orig companion"))
-    #expect(presentation(section: .collections).help.contains("Shared albums are excluded"))
     #expect(
-      presentation(section: .collections, version: .editedWithOriginals).help.contains(
-        "_orig companion"))
+      presentation().help
+        == "Export every photo in the timeline (year/month) view, in the version Photos shows. Use the in-pane Export Month or Export Year button for a smaller scope."
+    )
+    #expect(
+      presentation(version: .editedWithOriginals).help
+        == "Export every photo in the timeline (year/month) view, plus a _orig companion for any photo edited in Photos. Use the in-pane Export Month or Export Year button for a smaller scope."
+    )
+    #expect(
+      presentation(section: .collections).help
+        == "Export Favorites and every user album (including albums nested in folders), in the version Photos shows. Shared albums are excluded — use the Export Shared Album button on their pane."
+    )
+    #expect(
+      presentation(section: .collections, version: .editedWithOriginals).help
+        == "Export Favorites and every user album (including albums nested in folders), plus a _orig companion for any photo edited in Photos. Shared albums are excluded — use the Export Shared Album button on their pane."
+    )
   }
+  @Test func fileMenuImportRequiresEveryAdmissionCondition() {
+    let ready = (true, true, true, false, false)
+    let unavailable = [
+      (false, true, true, false, false),
+      (true, false, true, false, false),
+      (true, true, false, false, false),
+      (true, true, true, true, false),
+      (true, true, true, false, true),
+    ]
+    for (index, flags) in ([ready] + unavailable).enumerated() {
+      let (onboarding, access, destination, work, importing) = flags
+      #expect(
+        LibraryImportAvailability.canImport(
+          onboardingComplete: onboarding, isAuthorized: access, destinationCanImport: destination,
+          hasActiveExportWork: work, isImporting: importing) == (index == 0))
+    }
+  }
+
 }

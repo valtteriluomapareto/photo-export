@@ -3,7 +3,7 @@ import AppKit
 /// Reads the host's real accessibility objects, including SwiftUI's virtual nodes.
 @MainActor
 enum NativeViewAccess {
-  static func elements(in window: NSWindow) -> [AnyObject] {
+  static func elements(in root: AnyObject) -> [AnyObject] {
     var seen: Set<ObjectIdentifier> = []
     var result: [AnyObject] = []
     func visit(_ object: AnyObject) {
@@ -14,27 +14,65 @@ enum NativeViewAccess {
       if let children = object.accessibilityChildren?() {
         for child in children { visit(child as AnyObject) }
       }
+      if let contents = object.accessibilityContents?() {
+        for child in contents { visit(child as AnyObject) }
+      }
+      if let children = object.accessibilityVisibleChildren?() {
+        for child in children { visit(child as AnyObject) }
+      }
       if let view = object as? NSView {
         for child in view.subviews { visit(child) }
       }
     }
-    visit(window)
-    if let content = window.contentView { visit(content) }
-    for item in window.toolbar?.items ?? [] {
-      if let view = item.view { visit(view) }
+    visit(root)
+    if let window = root as? NSWindow {
+      if let content = window.contentView { visit(content) }
+      for item in window.toolbar?.items ?? [] {
+        if let view = item.view { visit(view) }
+      }
     }
     return result
   }
 
-  static func containsText(_ text: String, in window: NSWindow) -> Bool {
-    elements(in: window).contains { element in
-      if element.accessibilityLabel?() == text || element.accessibilityTitle?() == text {
-        return true
+  static func texts(in root: AnyObject) -> [String] {
+    elements(in: root).flatMap { element -> [String] in
+      var result = [element.accessibilityLabel?(), element.accessibilityTitle?()].compactMap { $0 }
+      if element.accessibilityRole?() == .staticText {
+        let value: (() -> String?)? = element.accessibilityValue
+        if let text = value?() { result.append(text) }
       }
-      guard element.accessibilityRole?() == .staticText else { return false }
-      let value: (() -> String?)? = element.accessibilityValue
-      return value?() == text
+      return result
     }
+  }
+
+  static func containsText(_ text: String, in root: AnyObject) -> Bool {
+    texts(in: root).contains(text)
+  }
+
+  static func selectedTab(_ title: String, in window: NSWindow) -> Bool {
+    elements(in: window).contains { element in
+      guard element.accessibilityRole?() == .radioButton,
+        element.accessibilityTitle?() == title || element.accessibilityLabel?() == title
+      else { return false }
+      let value: (() -> NSNumber?)? = element.accessibilityValue
+      return value?()?.boolValue == true
+    }
+  }
+
+  static func element(_ identifier: String, in window: NSWindow) -> AnyObject? {
+    identifiedElements(identifier, in: window).first
+  }
+
+  static func identifiedElements(_ identifier: String, in window: NSWindow) -> [AnyObject] {
+    elements(in: window).filter {
+      guard let actual = $0.accessibilityIdentifier?() else { return false }
+      // SwiftUI combines a DisclosureGroup's repeated child identifier on its heading.
+      return actual == identifier || actual.hasPrefix(identifier + "-" + identifier)
+    }
+  }
+
+  static func texts(identifiedBy identifier: String, in window: NSWindow) -> [String] {
+    identifiedElements(identifier, in: window).flatMap { texts(in: $0) }
   }
 
   static func button(_ title: String, in window: NSWindow) -> AnyObject? {
