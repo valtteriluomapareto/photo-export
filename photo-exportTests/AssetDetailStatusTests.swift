@@ -153,14 +153,20 @@ import Testing
         await f.show(favorites)
         await f.expectRows(["Original: Exported"])
         #expect(f.timeline.exportInfo(assetId: f.navigation.asset.id) == nil)
-        f.set(f.timelinePlacement, variants: [.original: record(.done)])
+        f.set(f.timelinePlacement, variants: [.original: record(.pending)])
         f.set(favorites, variants: [.original: record(.pending)])
         f.set(album, variants: [.original: record(.failed, error: "Album disk full")])
         f.set(shared, variants: [.original: record(.inProgress)])
         f.collections.flushPendingNotifications()
         await f.expectRows(["Original: Pending"])
         f.navigation.placement = f.timelinePlacement
+        await f.expectRows(["Original: Pending"])
+        let timelineDetails = f.photos.detailsFetchCalls.count
+        #expect(timelineDetails == 1)
+        f.set(f.timelinePlacement, variants: [.original: record(.done)])
+        f.timeline.flushPendingNotifications()
         await f.expectRows(["Original: Exported"])
+        #expect(f.photos.detailsFetchCalls.count - timelineDetails == 0)
         f.navigation.placement = favorites
         await f.expectRows(["Original: Pending"])
         f.navigation.placement = album
