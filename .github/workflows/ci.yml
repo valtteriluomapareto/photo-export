@@ -13,27 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      app: ${{ steps.route.outputs.app }}
-      website: ${{ steps.route.outputs.website }}
-    steps:
-      - name: Check out comparison history
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Test CI routing and reporting tools
-        run: python3 -B -m unittest discover -s scripts/ci/tests -p 'test_ci_*.py'
-
-      - name: Select validation areas
-        id: route
-        run: python3 -B scripts/ci/ci_routing.py route
-
-  website-validation:
-    needs: changes
-    if: needs.changes.outputs.website == 'true'
+  website:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -68,9 +48,7 @@ jobs:
           npm run check:links
         working-directory: website
 
-  app-validation:
-    needs: changes
-    if: needs.changes.outputs.app == 'true'
+  build-and-test:
     runs-on: macos-26
     steps:
       - name: Check out repository
@@ -82,87 +60,18 @@ jobs:
       - name: Install SwiftLint and swift-format
         run: bash scripts/ci/install-swift-tools.sh
 
+      - name: Install actionlint and ShellCheck
+        run: bash scripts/ci/install-ci-tools.sh
+
       - name: SwiftLint
         run: |
           echo "Running SwiftLint in strict mode..."
-          echo "Config: $(cat .swiftlint.yml | head -5)"
+          echo "Config: $(head -5 .swiftlint.yml)"
           swiftlint --strict
           echo "SwiftLint passed."
 
-      - name: SwiftFormat (check)
-        run: |
-          bash scripts/ci/check-swift-format.sh
-
-      - name: Check read-only Photos access and guard self-tests
-        run: |
-          ./scripts/ci/test-guards.sh
-          python3 scripts/ci/check-read-only-photos.py
-          python3 -B scripts/ci/check-export-io-boundaries.py
-
-      - name: Check concurrency executor settings
-        run: python3 -B scripts/ci/check-concurrency-settings.py
-
-      - name: Check current source-comment reasons
-        run: |
-          echo "::group::Source-comment reference guard"
-          echo "Rejecting development phase/plan/item labels in app comments."
-          python3 -B scripts/ci/check-no-plan-refs.py
-          echo "Source-comment reference guard passed."
-          echo "::endgroup::"
-
-      - name: Check production history mutation admission
-        run: python3 -B scripts/ci/check-record-mutation-admission.py
-
-      - name: Check test waits
-        run: |
-          echo "::group::Test-wait guard"
-          echo "Rejecting wall-clock deadline waits and unbacked eventually( calls in photo-exportTests/ (#277)."
-          python3 -B scripts/ci/check-test-waits.py
-          echo "::endgroup::"
-
-      - name: Check test scratch state
-        run: |
-          echo "::group::Test-scratch guard"
-          echo "Rejecting named or app-domain preferences, system folders and default record stores in photo-exportTests/ outside TestScratch."
-          python3 -B scripts/ci/check-test-scratch.py
-          echo "::endgroup::"
-
-      - name: Check observation ratchet
-        run: |
-          echo "::group::Observation ratchet"
-          echo "Comparing ObservableObject types and external \$publisher uses per file, and @Published,"
-          echo ".environmentObject(, @EnvironmentObject, @StateObject, @ObservedObject and external"
-          echo "objectWillChange totals in photo-export/ with scripts/ci/observation-ratchet.txt."
-          python3 -B scripts/ci/check-observation-ratchet.py
-          echo "::endgroup::"
-
-      - name: Check persistence doc value sets
-        run: |
-          echo "::group::Persistence-doc guard"
-          echo "Comparing the record-store value-set table in docs/reference/persistence-store.md"
-          echo "with the enum cases and static raw values declared in photo-export/."
-          python3 -B scripts/ci/check-persistence-doc.py
-          echo "::endgroup::"
-
-      - name: Check project version consistency
-        run: python3 scripts/ci/check-version.py
-
-      - name: Check regression-gate symbols
-        run: |
-          echo "::group::Regression-gate symbol check"
-          echo "Verifying that the gates listed in scripts/ci/regression-gates.txt"
-          echo "still exist under their listed names, and that the gate lists in"
-          echo "docs/reference/architecture-conventions.md, AGENTS.md and CONTRIBUTING.md match it."
-          ./scripts/ci/check-regression-gates.sh
-          echo "::endgroup::"
-
-      - name: Check destination-identity keying
-        run: |
-          echo "::group::Destination-identity keying guard"
-          echo "Verifying per-destination state keys on the stable id, not fingerprint?.id"
-          echo "(docs/reference/architecture-conventions.md §Destination identity)."
-          ./scripts/ci/check-fingerprint-id-keying.sh
-          echo "::endgroup::"
+      - name: Run static guards
+        run: bash scripts/ci/run-guards.sh
 
       # A Swift warning fails the merge gate. The release workflows build without this switch.
       - name: Build Debug
@@ -208,14 +117,7 @@ jobs:
 
       - name: Print build and test failure diagnostics
         if: failure()
-        run: |
-          for log in debug-build.log debug-werror-build.log test.log release-build.log; do
-            if [[ -f "$log" ]]; then
-              echo "::group::Failure diagnostics: $log"
-              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
-              echo "::endgroup::"
-            fi
-          done
+        run: bash scripts/ci/print-failure-diagnostics.sh
 
       - name: Collect test process diagnostics
         if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}
@@ -239,35 +141,3 @@ jobs:
             test.log
             release-build.log
             TestDiagnostics/
-
-  # Preserve the existing check name even when its expensive validator is skipped.
-  website:
-    needs: [changes, website-validation]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out result validator
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Require the expected validation result
-        env:
-          ROUTING_RESULT: ${{ needs.changes.result }}
-          SELECTED: ${{ needs.changes.outputs.website }}
-          VALIDATION_RESULT: ${{ needs.website-validation.result }}
-        run: python3 -B scripts/ci/ci_routing.py check "$ROUTING_RESULT" "$SELECTED" "$VALIDATION_RESULT"
-
-  # Preserve the existing check name even when its expensive validator is skipped.
-  build-and-test:
-    needs: [changes, app-validation]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out result validator
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Require the expected validation result
-        env:
-          ROUTING_RESULT: ${{ needs.changes.result }}
-          SELECTED: ${{ needs.changes.outputs.app }}
-          VALIDATION_RESULT: ${{ needs.app-validation.result }}
-        run: python3 -B scripts/ci/ci_routing.py check "$ROUTING_RESULT" "$SELECTED" "$VALIDATION_RESULT"
