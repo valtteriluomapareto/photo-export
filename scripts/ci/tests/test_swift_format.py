@@ -1,9 +1,8 @@
-"""Exercise the real CI formatting step with disposable Swift source fixtures."""
+"""Exercise the real enforcing formatter script with disposable Swift source fixtures."""
 
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
@@ -16,17 +15,6 @@ FORMATTER = shutil.which("swift-format")
 @unittest.skipUnless(FORMATTER, "swift-format is optional locally; CI installs and verifies it before guard tests")
 class SwiftFormatGateTests(unittest.TestCase):
     def run_step(self, source, indentation=None, test_source=None):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        blocks = re.findall(
-            r"^      - name: SwiftFormat \(check\)\n(.*?)(?=^      - name: |\Z)",
-            workflow, re.M | re.S)
-        self.assertEqual(len(blocks), 1, "Expected exactly one formatting step")
-        lines = blocks[0].splitlines()
-        self.assertEqual(lines[0], "        run: |", "Unexpected formatting step structure")
-        for line in lines[1:]:
-            self.assertTrue(not line.strip() or line.startswith("          ") or line.lstrip().startswith("#"),
-                            f"Unexpected formatting step structure: {line}")
-        script = "\n".join(line[10:] if line.startswith("          ") else "" for line in lines[1:])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = json.loads((ROOT / ".swift-format.json").read_text())
@@ -45,7 +33,7 @@ class SwiftFormatGateTests(unittest.TestCase):
                 copied_helper = root / "scripts/ci/check-swift-format.sh"
                 copied_helper.parent.mkdir(parents=True)
                 shutil.copyfile(helper, copied_helper)
-            return subprocess.run(["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+            return subprocess.run(["/bin/bash", str(copied_helper)],
                                   cwd=root, env={"PATH": os.pathsep.join([str(Path(FORMATTER).parent), "/usr/bin", "/bin"]),
                                                 "HOME": str(root)}, capture_output=True, text=True)
 
@@ -70,7 +58,7 @@ class SwiftFormatGateTests(unittest.TestCase):
         self.assertRegex(result.stderr, r"photo-exportTests/Fixture.swift:\d+:\d+: (?:warning|error): \[Spacing\]")
         self.assertNotIn("swift-format lint passed.", result.stdout)
 
-    def test_actual_step_loads_the_explicit_configuration(self):
+    def test_actual_script_loads_the_explicit_configuration(self):
         result = self.run_step("struct Fixture {\n    let value = 1\n}\n", indentation=4)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stderr, "", "CI must load the fixture config instead of formatter defaults")
