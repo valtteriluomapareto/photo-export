@@ -285,7 +285,7 @@ struct PublisherParityTests {
     }
   }
 
-  @Test func managerIsEnqueueingAll() async {
+  @Test func managerIsPreparingExport() async {
     let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(

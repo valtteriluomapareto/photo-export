@@ -15,8 +15,11 @@ struct ExportPreparationAdmissionTests {
   private static let july2025 = Calendar.current.date(
     from: DateComponents(year: 2025, month: 7, day: 15))!
 
-  /// One asset in July 2025 whose year scan stays held until the test releases it.
-  private func makeHeldYearScan(label: String) async -> (ExportManagerHarness, AsyncCheckpoint) {
+  /// Starts a year export whose Photos scan stays held, runs `body` while it is held, then
+  /// releases the scan and checks that only the year's asset was written.
+  private func whileYearScanIsHeld(
+    label: String, _ body: (ExportManagerHarness) async throws -> Void
+  ) async throws {
     let harness = await ExportManagerHarness(label: label)
     harness.photoLib.assetsByYearMonth["2025-7"] = [
       TestAssetFactory.makeAsset(id: "a1", creationDate: Self.july2025)
@@ -26,63 +29,55 @@ struct ExportPreparationAdmissionTests {
     ]
     let scanGate = AsyncCheckpoint()
     harness.photoLib.fetchAssetsCheckpointByYear[2025] = scanGate
-    return (harness, scanGate)
-  }
+    try await withCleanup {
+      harness.manager.startExportYear(year: 2025)
+      let scanning = await scanGate.waitForEnter(count: 1)
+      try #require(scanning)
 
-  private func cleanUp(_ harness: ExportManagerHarness, _ scanGate: AsyncCheckpoint) async {
-    await scanGate.releaseAll()
-    harness.manager.cancelAndClear()
-    await harness.manager.waitForImportCompletion()
-    await harness.store.waitUntilSettled()
-    await harness.collectionStore.waitUntilSettled()
-    try? FileManager.default.removeItem(at: harness.storeRoot)
-    harness.dest.cleanup()
+      try await body(harness)
+
+      await scanGate.releaseAll()
+      await harness.manager.waitForQueueDrained()
+      #expect(harness.writer.writeCalls.map(\.assetId) == ["a1"])
+    } cleanup: {
+      await scanGate.releaseAll()
+      harness.manager.cancelAndClear()
+      await harness.manager.waitForImportCompletion()
+      await harness.store.waitUntilSettled()
+      await harness.collectionStore.waitUntilSettled()
+      try? FileManager.default.removeItem(at: harness.storeRoot)
+      harness.dest.cleanup()
+    }
   }
 
   @Test func importIsRefusedWhileSingleScopeScanRuns() async throws {
-    let (harness, scanGate) = await makeHeldYearScan(label: "ImportDuringYearScan")
-    let manager = harness.manager
-
-    manager.startExportYear(year: 2025)
-    let scanning = await scanGate.waitForEnter(count: 1)
-    try #require(scanning)
-
-    #expect(manager.hasActiveExportWork, "a running scan is active export work")
-    manager.startImport()
-    #expect(!manager.isImporting, "Import must not start while an export is scanning")
-
-    await scanGate.releaseAll()
-    await manager.waitForQueueDrained()
-    #expect(harness.writer.writeCalls.map(\.assetId) == ["a1"])
-
-    await cleanUp(harness, scanGate)
+    try await whileYearScanIsHeld(label: "ImportDuringYearScan") { harness in
+      #expect(harness.manager.hasActiveExportWork, "a running scan is active export work")
+      harness.manager.startImport()
+      #expect(!harness.manager.isImporting, "Import must not start while an export is scanning")
+    }
   }
 
   @Test func autoExportRunIsRefusedWhileSingleScopeScanRuns() async throws {
-    let (harness, scanGate) = await makeHeldYearScan(label: "AutoExportDuringYearScan")
-    let manager = harness.manager
-    harness.photoLib.favoritesAssets = [TestAssetFactory.makeAsset(id: "fav")]
-    harness.photoLib.resourcesByAssetId["fav"] = [
-      TestAssetFactory.makeResource(originalFilename: "FAV.JPG")
-    ]
-    var runStates: [ExportRunState] = []
-    let subscription = manager.exportRunStatePublisher.sink { runStates.append($0) }
-    defer { subscription.cancel() }
+    try await whileYearScanIsHeld(label: "AutoExportDuringYearScan") { harness in
+      harness.photoLib.favoritesAssets = [TestAssetFactory.makeAsset(id: "fav")]
+      harness.photoLib.resourcesByAssetId["fav"] = [
+        TestAssetFactory.makeResource(originalFilename: "FAV.JPG")
+      ]
+      var runStates: [ExportRunState] = []
+      let subscription = harness.manager.exportRunStatePublisher.sink { runStates.append($0) }
+      defer { subscription.cancel() }
+      #expect(runStates.last?.isManualActive == true, "Auto Export must see the scan as busy")
 
-    manager.startExportYear(year: 2025)
-    let scanning = await scanGate.waitForEnter(count: 1)
-    try #require(scanning)
-
-    #expect(runStates.last?.isManualActive == true, "Auto Export must see the scan as busy")
-    let autoRun = await manager.runExport(
-      context: ExportRunContext(
-        source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited))
-    #expect(autoRun.result == .failed)
-
-    await scanGate.releaseAll()
-    await manager.waitForQueueDrained()
-    #expect(harness.writer.writeCalls.map(\.assetId) == ["a1"])
-
-    await cleanUp(harness, scanGate)
+      let autoRun = Task {
+        await harness.manager.runExport(
+          context: ExportRunContext(
+            source: .autoSync, visibility: .background, scope: .favoritesFull,
+            selection: .edited))
+      }
+      let resolved = await finished(autoRun)
+      try #require(resolved)
+      #expect(await autoRun.value.result == .failed)
+    }
   }
 }

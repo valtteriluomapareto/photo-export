@@ -220,14 +220,12 @@ final class ExportManager {
   private let activeRunContextBridge = ObservableCombineBridge<ExportRunContext?>(nil)
 
   /// Composite run-state observable for AutoSync. Republishes whenever the active
-  /// context, the running flag, the queue depth, or the bulk-enqueue flag changes
+  /// context, the running flag, the queue depth, or the preparation flag changes
   /// — so the fire-and-forget `start*` methods (which never set `activeRunContext`)
-  /// still register as `isManualActive` while the queue is processing them OR
-  /// while the bulk dispatcher is mid-enqueue but hasn't appended its first job
-  /// yet. Without `isPreparingExport` in the tuple, AutoSync could observe `.idle`
-  /// during the window between `isPreparingExport = true` and the first
-  /// `pendingJobs.append`, and race to start its own background run on top of a
-  /// user-initiated bulk export.
+  /// register as `isManualActive` from the click: while their scan runs, before any job
+  /// is queued, and while the queue processes them. Without `isPreparingExport` in the
+  /// tuple, AutoSync could observe `.idle` during a scan and start its own run on top
+  /// of a user-initiated export.
   /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
   /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
@@ -507,36 +505,52 @@ final class ExportManager {
   }
 
   private func endRunActivityIfIdle() {
-    guard activeRunContext == nil, !hasActiveExportWork, currentPreparationTasks.isEmpty else {
-      return
-    }
+    guard activeRunContext == nil, !hasActiveExportWork else { return }
     endRunActivity()
   }
 
-  // Unpublished lifetime handles for deterministic preparation completion.
-  // These do not participate in UI/AutoSync admission or publications.
+  /// Export scans that have not finished queueing; `isPreparingExport` says whether any exist.
   @ObservationIgnored private var preparationTasks:
     [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+  /// Test-only accessor for awaiting the current generation's scans.
   var currentPreparationTasks: [Task<Void, Never>] {
     preparationTasks.values.filter { $0.generation == generation }.map(\.task)
   }
 
+  private enum ScanEnd { case finished, failed }
+
+  /// Runs one export scan. Its end is handled only after the preparation flag has dropped,
+  /// so AutoSync never sees a resolved run as a manual one and an empty queue finalizes
+  /// only once no scan is left. A failed scan still exports what it queued, as an
+  /// incomplete run; with nothing queued it resolves an active run as `.failed`.
   @discardableResult
   private func trackPreparation(
     generation gen: Int, priority: TaskPriority? = nil,
-    operation: @escaping @MainActor () async -> Void
+    operation: @escaping @MainActor () async -> ScanEnd
   ) -> Task<Void, Never> {
     beginRunActivityIfNeeded()
     let id = UUID()
     let task = Task(priority: priority) { [weak self] in
-      defer {
-        self?.preparationTasks[id] = nil
-        self?.finishManualFeedbackIfReady(generation: gen)
-        self?.endRunActivityIfIdle()
+      let end = await operation()
+      guard let self else { return }
+      self.preparationTasks[id] = nil
+      let preparing = !self.preparationTasks.isEmpty
+      if self.isPreparingExport != preparing { self.isPreparingExport = preparing }
+      if self.isCurrent(gen) {
+        if end == .failed, self.pendingJobs.isEmpty {
+          if self.activeRunContext != nil {
+            self.finalizeActiveRun(result: .failed, cancelReason: nil)
+          }
+        } else {
+          if end == .failed { self.activeRunBookkeeping?.incompleteScan = true }
+          self.processQueueIfNeeded()
+        }
       }
-      await operation()
+      self.finishManualFeedbackIfReady(generation: gen)
+      self.endRunActivityIfIdle()
     }
     preparationTasks[id] = (gen, task)
+    if !isPreparingExport { isPreparingExport = true }
     return task
   }
 
@@ -609,11 +623,9 @@ final class ExportManager {
   /// preserves `manager.generation` as a stable read surface for tests and
   /// in-module callers.
   var generation: Int { queueCoordinator.generation }
-  /// Published (through its bridge) so AutoSync's `exportRunStatePublisher` can include the
-  /// bulk-enqueue window (after the dispatcher flips this true but before the
-  /// first job lands in `pendingJobs`) in its idle/active decision. Without this,
-  /// AutoSync would race to start a background run
-  /// during the multi-select / Export-All dispatcher's mid-enqueue window.
+  /// True while any export scan has not finished queueing, single-scope or bulk. Part of
+  /// `hasActiveExportWork` and `exportRunStatePublisher`, so Import and Auto Export wait
+  /// from the click, not from the first queued job.
   private(set) var isPreparingExport: Bool {
     get { bridgedRead(isPreparingExportBridge, \.isPreparingExport) }
     set { bridgedWrite(isPreparingExportBridge, \.isPreparingExport, newValue) }
@@ -845,12 +857,11 @@ final class ExportManager {
 
   /// Call after entry-specific bulk/empty-input rejection, before the first await.
   private func prepareExport(
-    selectionOverride: ExportVersionSelection? = nil, bulk: Bool = false
+    selectionOverride: ExportVersionSelection? = nil
   ) -> (settings: ExportSettingsSnapshot, generation: Int) {
     let settings = ExportSettingsSnapshot(manager: self, selectionOverride: selectionOverride)
     clearEmptyRunMessage()
     clearQueueWarningMessage()
-    if bulk { isPreparingExport = true }
     // A paused queue with pending jobs must accumulate progress instead of resetting.
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     return (settings, generation)
@@ -871,22 +882,23 @@ final class ExportManager {
     }
     let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await enqueueMonth(
           year: year, month: month, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         switch outcome {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("This month is already exported.")
         }
-        processQueueIfNeeded()
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         handleScanFailure(
           "Could not scan this month. Try exporting again.", scope: "month", error: error)
+        return .failed
       }
     }
   }
@@ -895,22 +907,23 @@ final class ExportManager {
     guard canStartExport(in: .timeline, logTag: "startExportYear") else { return }
     let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await enqueueYear(
           year: year, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         switch outcome {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("This year is already exported.")
         }
-        processQueueIfNeeded()
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         handleScanFailure(
           "Could not scan this year. Try exporting again.", scope: "year", error: error)
+        return .failed
       }
     }
   }
@@ -921,7 +934,7 @@ final class ExportManager {
   func startExportAll(selectionOverride: ExportVersionSelection? = nil) -> Task<Void, Never>? {
     guard canStartExport(in: .timeline, logTag: "startExportAll") else { return nil }
     guard !isPreparingExport else { return nil }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     return runBulkExportTask(
       generation: gen,
       logTag: "startExportAll",
@@ -967,7 +980,7 @@ final class ExportManager {
       setEmptyRunMessage("No timeline items selected.")
       return
     }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     runBulkExportTask(
       generation: gen,
       logTag: "startExportTimelineSelection",
@@ -1003,22 +1016,23 @@ final class ExportManager {
     guard canStartExport(in: .collection, logTag: "startExportFavorites") else { return }
     let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await enqueueCollection(
           selection: .favorites, scope: .favorites, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         switch outcome {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("Favorites are already exported.")
         }
-        processQueueIfNeeded()
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         handleScanFailure(
           "Could not scan Favorites. Try exporting again.", scope: "favorites", error: error)
+        return .failed
       }
     }
   }
@@ -1114,7 +1128,7 @@ final class ExportManager {
       setEmptyRunMessage("No collections selected.")
       return
     }
-    let (settings, gen) = prepareExport(bulk: true)
+    let (settings, gen) = prepareExport()
     runBulkExportTask(
       generation: gen,
       logTag: "startExportCollectionsSelection",
@@ -1185,14 +1199,11 @@ final class ExportManager {
     var sawUnauthorized: Bool = false
   }
 
-  /// Outcome of a bulk-export body. `.completed(totals)` triggers the helper's
-  /// empty/done message dispatch on zero-enqueue, then `processQueueIfNeeded()`.
-  /// `.completedWithCustomMessage` is for bodies that have set their own user
-  /// message (e.g. `enqueueBulkAlbumExport`'s "folder no longer exists" branch)
-  /// — the helper skips the message dispatch but still runs the queue. `.stale`
-  /// short-circuits without finalizing because a generation check failed
-  /// mid-body and a `cancelAndClear` (or equivalent) has already finalized
-  /// whatever run was in flight.
+  /// Outcome of a bulk-export body. `.completed(totals)` shows the helper's empty/done
+  /// message when nothing was enqueued. `.completedWithCustomMessage` is for bodies that set
+  /// their own message (e.g. `enqueueBulkAlbumExport`'s "folder no longer exists" branch).
+  /// `.stale` means a generation check failed mid-body. `trackPreparation` starts the queue
+  /// after any of them, for the current generation only.
   private enum BulkExportOutcome {
     case completed(BulkExportTotals)
     case completedWithCustomMessage
@@ -1202,11 +1213,9 @@ final class ExportManager {
   /// Owns the bulk-export Task scaffolding every multi-item dispatcher
   /// (`startExportAll`, `startExportTimelineSelection`,
   /// `startExportCollectionsSelection`, `enqueueBulkAlbumExport`) was
-  /// duplicating: the `Task { [weak self] in }` wrapper, the
-  /// `isPreparingExport = false` teardown for the owning generation, the success
-  /// finalize (empty/done message + `processQueueIfNeeded()`), and the
-  /// partial-failure recovery on throw (queue warning + `incompleteScan` +
-  /// drain if any jobs already queued; otherwise finalize as failed). An
+  /// duplicating: the preparation task, the empty/done message, and the failure
+  /// handling on throw (a queue warning when jobs already landed; `trackPreparation`
+  /// then drains them as an incomplete run, or resolves an empty run as failed). An
   /// unauthorized item does not throw; its scan sets `incompleteScan` itself,
   /// so the drain after a `.completed(totals)` body still resolves `.failed`.
   ///
@@ -1228,42 +1237,25 @@ final class ExportManager {
     body: @escaping @MainActor () async throws -> BulkExportOutcome
   ) -> Task<Void, Never> {
     trackPreparation(generation: gen, priority: .utility) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await body()
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .stale:
-          return
-        case .completed(let totals):
-          self.isPreparingExport = false
-          if totals.totalEnqueued == 0 && !totals.sawUnauthorized {
-            self.setEmptyRunMessage(emptyDoneMessage())
-          }
-          self.processQueueIfNeeded()
-        case .completedWithCustomMessage:
-          self.isPreparingExport = false
-          self.processQueueIfNeeded()
+        if self.isCurrent(gen), case .completed(let totals) = outcome,
+          totals.totalEnqueued == 0 && !totals.sawUnauthorized
+        {
+          self.setEmptyRunMessage(emptyDoneMessage())
         }
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
-        self.isPreparingExport = false
+        guard self.isCurrent(gen) else { return .finished }
         self.logger.error(
           "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
         )
         self.noteManualPreparationFailure(
           "Some requested photos could not be scanned. Try exporting again.")
-        // Partial-failure recovery: if any jobs already landed in the queue,
-        // drain them and surface a warning + flag the run as `incompleteScan`
-        // so AutoSync's dirty-flag bookkeeping survives the partial scan.
-        // Otherwise finalize the active run (if any) as failed.
-        if !self.pendingJobs.isEmpty {
-          self.setQueueWarningMessage(partialScanWarning())
-          self.activeRunBookkeeping?.incompleteScan = true
-          self.processQueueIfNeeded()
-        } else {
-          self.finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
+        // Jobs already queued still export, under a warning.
+        if !self.pendingJobs.isEmpty { self.setQueueWarningMessage(partialScanWarning()) }
+        return .failed
       }
     }
   }
@@ -1353,7 +1345,7 @@ final class ExportManager {
   ) {
     guard canStartExport(in: .collection, logTag: logTag) else { return }
     guard !isPreparingExport else { return }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     runBulkExportTask(
       generation: gen,
       logTag: logTag,
@@ -1385,7 +1377,7 @@ final class ExportManager {
             // dedicated message and signal the helper to skip its empty/done
             // dispatch. Symmetric with the other body exits: any future
             // awaitable `runExport(context:)` wiring for folder runs still
-            // gets the `processQueueIfNeeded()` finalize via the helper.
+            // gets the queue start from `trackPreparation`.
             self.setEmptyRunMessage("That folder no longer exists.")
             return .completedWithCustomMessage
           }
@@ -1418,7 +1410,7 @@ final class ExportManager {
     guard canStartExport(in: .collection, logTag: "startExportSharedAlbum") else { return }
     let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await enqueueCollection(
           selection: .sharedAlbum(collectionId: collectionId),
@@ -1426,19 +1418,20 @@ final class ExportManager {
           settings: settings,
           generation: gen
         )
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         switch outcome {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("This shared album is already exported.")
         }
-        processQueueIfNeeded()
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         handleScanFailure(
           "Could not scan this shared album. Try exporting again.", scope: "shared-album",
           error: error)
+        return .failed
       }
     }
   }
@@ -1448,7 +1441,7 @@ final class ExportManager {
     guard canStartExport(in: .collection, logTag: "startExportAlbum") else { return }
     let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await enqueueCollection(
           selection: .album(collectionId: collectionId),
@@ -1456,18 +1449,19 @@ final class ExportManager {
           settings: settings,
           generation: gen
         )
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         switch outcome {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("This album is already exported.")
         }
-        processQueueIfNeeded()
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
+        guard self.isCurrent(gen) else { return .finished }
         handleScanFailure(
           "Could not scan this album. Try exporting again.", scope: "album", error: error)
+        return .failed
       }
     }
   }
@@ -1594,9 +1588,7 @@ final class ExportManager {
     progressState.beginSourceUpdates()
     defer { progressState.endSourceUpdates() }
     logger.info("Interrupting current export — destination unavailable")
-    let isIdle =
-      activeRunContext == nil && !hasActiveExportWork && currentPreparationTasks.isEmpty
-      && manualRunFeedback == nil
+    let isIdle = activeRunContext == nil && !hasActiveExportWork && manualRunFeedback == nil
     let keptSummary = isIdle ? progressState.manualSummary : nil
     teardownActiveWork()
     progressState.manualSummary = keptSummary
@@ -1968,7 +1960,7 @@ final class ExportManager {
     progressState.manualSummary = nil
     if activeRunContext?.source == .autoSync {
       manualRunFeedback = nil
-    } else if manualRunFeedback?.generation != generation || currentPreparationTasks.isEmpty {
+    } else if manualRunFeedback?.generation != generation || !isPreparingExport {
       // A temporarily empty queue can still have another accepted scan outstanding.
       // Keep feedback totals across those scans without changing legacy counters.
       manualRunFeedback = ManualRunFeedback(generation: generation)
@@ -1978,19 +1970,13 @@ final class ExportManager {
   }
 
   /// Scan failure in a single-scope `start*` (month, year, Favorites, album, shared album).
-  /// Notes the failure for manual feedback and, when the start runs under `runExport` with
-  /// nothing queued, resolves that run as `.failed` so its awaiter never hangs. Only
-  /// Favorites runs under a run context today; the rule keeps every path safe if more do.
-  /// Legacy `start*` calls from the UI have no run context, so they neither flush nor
-  /// finalize here; their feedback flushes when the preparation ends.
+  /// Notes the failure for manual feedback and logs it. The scan then returns `.failed`, and
+  /// `trackPreparation` resolves an active run once the scan has ended.
   private func handleScanFailure(_ message: String, scope: String, error: Error) {
     noteManualPreparationFailure(message)
     logger.error(
       "Failed to enqueue \(scope, privacy: .public) export: \(String(describing: error), privacy: .public)"
     )
-    if activeRunContext != nil, pendingJobs.isEmpty {
-      finalizeActiveRun(result: .failed, cancelReason: nil)
-    }
   }
 
   private func noteManualPreparationFailure(_ message: String) {
@@ -1999,13 +1985,12 @@ final class ExportManager {
   }
 
   private func finishManualFeedbackIfReady(generation gen: Int) {
-    guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
-      manualRunFeedback?.generation == gen
+    guard isCurrent(gen), !hasActiveExportWork, manualRunFeedback?.generation == gen
     else { return }
     flushRecordNotifications()
     // Notification subscribers can synchronously start another preparation.
-    guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
-      let feedback = manualRunFeedback, feedback.generation == gen
+    guard isCurrent(gen), !hasActiveExportWork, let feedback = manualRunFeedback,
+      feedback.generation == gen
     else { return }
     manualRunFeedback = nil
     guard feedback.completedCount > 0 || feedback.failureMessage != nil else { return }

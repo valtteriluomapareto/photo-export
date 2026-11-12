@@ -712,8 +712,12 @@ struct ExportManagerRunExportTests {
     try await withCleanup {
       harness.photoLib.fetchAssetsError = CocoaError(.fileReadUnknown)
       var completions: [ExportRunSummary] = []
-      let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
-      defer { subscription.cancel() }
+      var runStates: [ExportRunState] = []
+      let subscriptions = [
+        harness.manager.completedRunsPublisher.sink { completions.append($0) },
+        harness.manager.exportRunStatePublisher.sink { runStates.append($0) },
+      ]
+      defer { subscriptions.forEach { $0.cancel() } }
       let context = ExportRunContext(
         source: source, visibility: source == .manual ? .userVisible : .background,
         scope: .favoritesFull, selection: .edited)
@@ -732,6 +736,11 @@ struct ExportManagerRunExportTests {
       #expect(completions.map(\.context) == [context])
       #expect(completions.map(\.result) == [.failed])
       #expect(harness.manager.activeRunContext == nil)
+      // The failed scan has ended before its run resolves, so an AutoSync run never reads
+      // as a manual one on its way to idle.
+      #expect(runStates.last == .idle)
+      let readAsManual = runStates.contains { $0.isManualActive }
+      #expect(readAsManual == (source == .manual))
       #expect(
         harness.manager.progressState.manualSummary?.failureMessage
           == (source == .manual ? "Could not scan Favorites. Try exporting again." : nil))
@@ -743,17 +752,21 @@ struct ExportManagerRunExportTests {
   // MARK: - Full-scope run characterization (issue #153)
 
   /// Every supported full scope must resolve an empty scan once. This also pins
-  /// the zero-count baseline captured after synchronous start* dispatch.
+  /// the zero-count baseline captured after synchronous start* dispatch. Awaits the run
+  /// through `finished(_:)`, so a run that never resolves fails at the time limit.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
-  func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async {
+  func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async throws {
     let harness = await makeHarness()
-    await withCleanup {
+    try await withCleanup {
       let context = makeContext(scope: scope.runScope)
       var completions: [ExportRunSummary] = []
       let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
       defer { subscription.cancel() }
 
-      let summary = await harness.manager.runExport(context: context)
+      let run = Task { await harness.manager.runExport(context: context) }
+      let resolved = await finished(run)
+      try #require(resolved)
+      let summary = await run.value
 
       #expect(summary.context == context)
       #expect(summary.result == .completed)

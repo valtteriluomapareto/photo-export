@@ -229,8 +229,8 @@ struct AutoSyncSeamCharacterizationTests {
   }
 
   /// A manual export that supersedes an AutoSync run: the AutoSync run resolves as
-  /// superseded, the state passes through `idle` while the manual scan runs (AutoSync's
-  /// debounce covers that window), and the manual export reads as `manualActive`.
+  /// superseded, the state reads `idle` until the manual export starts, and the manual export
+  /// reads as `manualActive` from its scan onwards.
   @Test func manualExportSupersedingAutoSyncYieldsCanonicalSequence() async throws {
     try await withHarness { harness in
       harness.photoLib.favoritesAssets = [TestAssetFactory.makeAsset(id: "auto")]

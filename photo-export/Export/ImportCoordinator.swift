@@ -35,8 +35,8 @@ final class ImportCoordinator: ObservableObject {
     var collectionExportRecordStore: CollectionExportRecordStore { get }
 
     /// Returns true if there is any active export work that should block an import
-    /// from starting. ExportManager's existing `hasActiveExportWork` already covers
-    /// the full set (run loop, enqueueing-all bulk-album task, pending jobs).
+    /// from starting. ExportManager's `hasActiveExportWork` covers the full set (run loop,
+    /// pending jobs, and any export scan that has not finished queueing).
     var hasActiveExportWork: Bool { get }
   }
 
