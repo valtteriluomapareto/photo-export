@@ -103,7 +103,9 @@ source-comment plan references, test waits, test scratch state, the observation 
 persistence value sets, project versions, regression-gate symbols/documentation,
 destination-identity keying and strict app-and-test formatting (using the pinned Swift tools described below).
 It names each check, continues after independent failures and reports all failed checks
-before returning nonzero. CI keeps invoking these guards individually. SwiftLint,
+before returning nonzero. CI invokes this one entry point; each guard has its own
+GitHub log group, including on failure. Native workflow and shell validators are part of
+the same list. SwiftLint,
 Xcode selection, built-app checks, result-bundle gate audits and release credential checks
 use their own commands and prerequisites.
 
@@ -224,18 +226,19 @@ find -E "$CONTAINER/tmp" -mindepth 1 -maxdepth 1 -mmin +60 -regex ".*/([^/]*-)?$
 argument) and fails rather than falling back: it rejects a set `DEVELOPER_DIR`, requires
 `xcode-select -p` to be the resolved app and `xcodebuild -version` to report exactly that
 version, and lists the installed Xcodes. `ci.yml`, both release workflows and the canary
-call it before any Xcode tool; `test_ci_toolchain_workflows.py` rejects a hard-coded Xcode
-path, `xcode-select -s`, `XCODE_PATH` or `DEVELOPER_DIR` in any workflow. Changing the file
+call it before any Xcode tool. Physical-script tests retain selected-toolchain and
+project-warning-setting contracts; native actionlint checks workflow syntax. Workflow
+selection/order policy is reviewed directly. Changing the file
 or the script changes the shipped toolchain, so `validation_rows.py` requires the full
 release matrix for both.
 
 `build-app.sh <Debug|Release>` and `run-unit-tests.sh` are the build and test commands that
-`app-validation` and the canary share. They write `debug-build.log`, `release-build.log`,
+`build-and-test` and the canary share. They write `debug-build.log`, `release-build.log`,
 `test.log`, `test-start.marker` and `TestResults.xcresult` to the current directory, where the
 diagnostics, coverage and regression-gate steps read them.
 
 `SWIFT_WARNINGS_AS_ERRORS=1` makes `build-app.sh` fail on any Swift warning in the app target
-(the test target is not compiled there) and log to `debug-werror-build.log`. `app-validation`
+(the test target is not compiled there) and log to `debug-werror-build.log`. `build-and-test`
 turns it on for its Debug build on the Xcode named in `.xcode-version`; the canary runs it as a
 last step; releases never set it. Locally: `SWIFT_WARNINGS_AS_ERRORS=1 bash scripts/ci/build-app.sh Debug`.
 
@@ -251,52 +254,40 @@ the script and its embedded Python parse and runs its `--folder` mode on a tempo
 `LSMinimumSystemVersion` and `ITSAppUsesNonExemptEncryption` values. It fails if the app is
 missing, was built by another Xcode than `.xcode-version` (or the canary's lane version), or lacks
 `ITSAppUsesNonExemptEncryption = false`, without which App Store Connect asks the encryption
-question for every build. It runs after the Release build in `app-validation`, on the exported app
+question for every build. It runs after the Release build in `build-and-test`, on the exported app
 before the DMG in `release-direct`, and on the archived app before packaging and upload in
 `release-app-store`. The canary is not part of the merge gate, so a red lane reports what
 a bump would break without blocking work. A lane that stays queued means no runner has its
 label; GitHub cancels it after 24 hours, and that is not a toolchain result.
 
-### CI area routing
+### CI validators
 
-`ci/ci_routing.py` selects validation using complete local Git history, without an API
-file-list limit. Pull requests compare their merge base to the event's head commit;
-main pushes compare event `before` to `after` (including all pushed commits). Moves
-are treated as a deletion plus addition so both owners are considered. Comparison
-history missing from a fork checkout, new/deleted refs, unrelated histories, or an
-unknown event select both areas. Malformed events and Git errors fail routing.
+Every PR and main push runs the actual `website` job on Linux and `build-and-test` on
+macOS. Their required check names are unchanged. There is no path routing or intermediate
+skipped-result gate. Website formatting/lint/build/link checks and the app's strict lint,
+guards, warning check, full tests, result audit and Release checks keep their existing roles.
+Release triggers and the advisory canary remain separate.
 
-| Changed paths | Validation |
-| --- | --- |
-| `website/**` | Linux website checks |
-| App sources/tests/project, `test-fixtures/**`, Swift lint/format config, non-CI `scripts/**` | macOS app checks |
-| `.github/**`, `scripts/ci/**`, unknown/shared paths (including root/maintainer docs) | Both |
-| Mixed changes | Union of the affected areas |
-| Empty comparison | Neither expensive validator |
+[`install-ci-tools.sh`](ci/install-ci-tools.sh) installs actionlint 1.7.12 and ShellCheck
+0.11.0 from pinned upstream archives, verifying SHA256 and versions before publishing
+either path. [`check-workflows.sh`](ci/check-workflows.sh) validates all workflows with
+native actionlint and embedded-shell checking. Its config admits the exact existing
+preview runner `xcode-27`. [`check-shell-scripts.sh`](ci/check-shell-scripts.sh) checks
+all tracked shell scripts with filename boundaries preserved. Missing tools fail closed.
+See [local installation](../CONTRIBUTING.md#workflow-and-shell-checks).
 
-The workflow itself has no path filter. `website-validation` and `app-validation`
-run conditionally; the existing `website` and `build-and-test` check names are Linux
-result gates that require successful routing plus exactly selected/success or
-unselected/skipped. Missing outputs, failed/cancelled validators, and unexpectedly
-skipped selected validators cannot pass. An overall cancelled run may cancel the gate
-before it executes; it remains non-green. Release workflows, including the weekly scheduled
-direct-distribution dry run, are separate and unchanged. No branch-protection settings are
-changed by routing.
-
-Run the real-Git routing matrix and result-gate truth table locally:
-
-```bash
-python3 -B -m unittest discover -s scripts/ci/tests -p test_ci_routing.py
-```
-
-These tests also run in the Linux routing job on every CI run, even website-only work.
+Fixture tests execute actual scripts or the real native validators with disposable inputs.
+They do not read repository workflow YAML or simulate GitHub expressions. Invalid YAML,
+unknown expression context, embedded shell errors, standalone shell errors and missing
+tools must fail. New script entry points keep literal output/argument/status fixtures.
+Native syntax checking does not prove release trigger or publication policy; review
+those conditions, permissions, environments, safe defaults and concurrency directly.
 
 ### Main branch protection
 
 The repository setting requires the conclusive `build-and-test` and `website`
-checks from GitHub Actions (app ID `15368`). Require these final gates rather than
-the conditional `app-validation` / `website-validation` jobs: an unrelated area
-must finish with a successful final gate after its validator is skipped. Pending,
+checks from GitHub Actions (app ID `15368`). These are the actual unconditional
+validators. Pending,
 failed and cancelled required results block the normal protected merge path.
 
 The configured freshness policy is `strict=false` (an older base is allowed;
@@ -318,7 +309,8 @@ Verify `required_status_checks.checks` contains both names bound to `app_id: 153
 and unrelated protection/rulesets are preserved. The existing review requirement
 has zero required approvals; preserve its object when updating settings rather
 than replacing it with `null`, which would remove the PR requirement. For a policy
-change, record fresh before/after API evidence and rerun the routing/result tests.
+change, record fresh before/after API evidence and verify the actual required checks. No
+workflow edit changes branch protection by itself.
 
 ### Destination identity invariant tests
 
@@ -350,7 +342,7 @@ python3 -B -m unittest discover -s scripts/ci/tests -p 'test_ci_*.py'
 
 For offline reproduction, use `--report-json` with the recorded fixture described in
 [`ci/tests/fixtures/README.md`](ci/tests/fixtures/README.md). CI-tool tests run in the
-Linux routing job as well as the existing guard test runner.
+same guard runner as the other executable fixtures.
 
 The Photos guard rejects exact PhotoKit change/creation request and `performChanges` identifiers in production Swift sources. It ignores nested comments and ordinary/raw/multiline string literals (including interpolation bodies), preserves source line numbers, and fails on missing/empty input. It has no inline bypass marker. This is a lexical tripwire: aliases, dynamic calls, and code inside string interpolation need review; it does not replace Swift compilation or behavioral tests. Python 3 is required; only its standard library is used. Self-tests invoke the real scanners against temporary fixtures and preserve the existing destination-keying self-test.
 
@@ -363,10 +355,20 @@ The regression gates are listed once, in `ci/regression-gates.txt`. Each row is 
 
 The version validator checks every `MARKETING_VERSION` assignment line in `project.pbxproj` for syntax, supported stable/prerelease format, and consistency. Empty/malformed assignments are errors even when other entries are valid. Both release workflows run it before signing; version-tag refs (including manual build-only dispatches) supply `--expected <full-version>`. Direct-distribution branch dry runs keep their `0.0.0-dev` context without comparing it to the app version. The validator never edits versions or creates tags; `bump-version.sh` remains the version mutation entry point. Its fixture tests run through `test-guards.sh`.
 
-The release-safety fixtures also run through `test-guards.sh`. They extract the actual workflow context, version-check, duplicate-check and publication steps, then execute only those selected steps in disposable directories. A restricted command path stubs `gh release` and the App Store upload helper; no signing, credentials or network access is used. The event/ref/input matrix covers safe manual tag builds, explicit publication, beta versions, version mismatch and existing releases. Unexpected selected-step structure or expressions fail the test. Build-only workflow semantics are documented in [Release Process](../docs/project/release-process.md#dry-run).
+The channel context fixtures execute `release-context-direct.sh` and
+`release-context-appstore.sh` in disposable directories with explicit event/ref/build-only
+inputs. They pin actual output keys, versions, build numbers and prerelease suppression,
+not GitHub's complete publication routing. The homemade workflow-expression evaluator is
+removed. Workflow publication conditions and safe defaults remain directly reviewed.
+Keychain fixtures use only whitelisted offline commands and fake inputs; they check whole
+search-list paths (including spaces and an empty original list) and generated-password
+masking before use/export. Archive/sanitizer fixtures retain complete sanitized logs,
+argument boundaries, failure status and success-only epilogues. No signing or publication
+runs in these fixtures. Build-only workflow semantics and required branch dry runs are
+in [Release Process](../docs/project/release-process.md#dry-run).
 
-The formatter fixtures execute the actual CI format-check block and copied
-`ci/check-swift-format.sh` helper against disposable app and unit-test sources. They
+The formatter fixtures execute the copied
+`ci/check-swift-format.sh` helper directly against disposable app and unit-test sources. They
 verify a warning in either tree fails before the success message and that explicit
 configuration overrides conflicting auto-discovery for both trees. SwiftLint's
 real-config fixtures likewise require app and test violations to fail, while keeping
@@ -376,7 +378,9 @@ CI installs and verifies both tools before running the guard suite. See the [mat
 
 | Script | Used by workflow |
 | --- | --- |
-| `archive-appstore.sh` | `release-app-store.yml` |
+| `release-context-direct.sh`, `archive-direct.sh`, `setup-keychain-direct.sh` | `release-direct.yml` |
+| `release-context-appstore.sh`, `archive-appstore.sh` | `release-app-store.yml` |
+| `print-failure-diagnostics.sh` | `ci.yml`, `toolchain-canary.yml` |
 | `export-appstore.sh` | `release-app-store.yml` |
 | `prepare-pkg.sh` | `release-app-store.yml` |
 | `setup-keychain-appstore.sh` | `release-app-store.yml` |
