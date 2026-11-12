@@ -121,14 +121,7 @@ struct AutoSyncGeneratedSequenceTests {
         state = AutoSyncReducer.reduce(event, in: state, now: now).0
       }
       func start(_ run: ExportRunContext) {
-        if source == .autoSync {
-          apply(.exportRunStarted(run, destinationId: "A"), "start A \(run.runId)")
-        } else {
-          apply(
-            .exportRunStateChanged(
-              ExportRunState(activeContext: run, isManualActive: true, isAutoSyncActive: false)),
-            "manual start A \(run.runId)")
-        }
+        apply(.exportRunStarted(run, destinationId: "A"), "start A \(run.runId)")
       }
       apply(
         .photosChanged(
@@ -201,9 +194,7 @@ struct AutoSyncGeneratedSequenceTests {
           ? .userCancelled : stoppedBy == .destinationUnavailable ? .destinationUnavailable : nil,
         result: outcome, stoppedBy: stoppedBy)
       apply(
-        source == .autoSync
-          ? .autoSyncRunCompleted(summary, destinationId: "A")
-          : .manualFullExportCompleted(summary),
+        .autoSyncRunCompleted(summary, destinationId: "A"),
         "finish original A \(context.runId): \(outcome) \(stoppedBy?.rawValue ?? "")")
       if mode == 0 {
         let pending = state.dirtyStateByDestination["A"]?.scope(scope)

@@ -4,11 +4,11 @@ import Testing
 
 @testable import Photo_Export
 
-/// Phase 4b prep regression-gate test. Records the queue-state tuple
+/// Queue-state regression gate. Records the queue-state tuple
 /// `(isRunning, isPaused, queueCount, hasCurrentTask)` at each transition during a
-/// multi-job run with `pause` → `resume` → `cancel`. The Phase 4b extraction moves
-/// `pendingJobs`, `isProcessing`, `isPaused`, `queueCount`, and the drain loop into
-/// `ExportQueueCoordinator`; the manager's published mirrors must keep emitting the
+/// multi-job run with `pause` → `resume` → `cancel`. `ExportQueueCoordinator` owns
+/// `pendingJobs`, `isProcessing`, `isPaused`, `queueCount`, and the drain loop;
+/// the manager's published mirrors must keep emitting the
 /// same canonical sequence so UI bindings and the AutoSync seam don't drift.
 ///
 /// The existing pause-resume tests assert on outcomes (counters, drain completion).
@@ -38,8 +38,8 @@ struct ExportQueueStateSnapshotTests {
     await Harness(label: "ExportQueueSnapshot")
   }
 
-  /// Canonical queue-state at a single instant. The Phase 4b extraction must preserve
-  /// the sequence of these tuples observed at the same transition points.
+  /// Canonical queue-state at a single instant. Preserve the sequence of these tuples
+  /// observed at the same transition points.
   private struct Snapshot: Equatable, CustomStringConvertible {
     let isRunning: Bool
     let isPaused: Bool
@@ -77,8 +77,7 @@ struct ExportQueueStateSnapshotTests {
   // MARK: - Test
 
   /// Three-asset run with: gate-suspended start → pause mid-run → resume one ticket →
-  /// pause again → cancel. The canonical transition sequence must end identically
-  /// after the Phase 4b extraction.
+  /// pause again → cancel. The canonical transition sequence must remain stable.
   @Test func pauseResumeCancelStateSnapshot_canonicalTransitions() async throws {
     let h = await makeHarness()
     defer { cleanupHarness(h) }

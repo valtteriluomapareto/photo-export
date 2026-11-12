@@ -39,19 +39,6 @@ final class ExportManager {
       self.settings = settings
     }
 
-    init(
-      assetLocalIdentifier: String,
-      placement: ExportPlacement,
-      selection: ExportVersionSelection,
-      livePhotosPaired: Bool = false,
-      videoLayout: ExportVideoLayout = .flat
-    ) {
-      self.init(
-        assetLocalIdentifier: assetLocalIdentifier, placement: placement,
-        settings: .init(
-          selection: selection, livePhotosPaired: livePhotosPaired, videoLayout: videoLayout))
-    }
-
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
     /// `.favorites`/`.album`/`.sharedAlbum` placements where year/month is not part of
     /// the on-disk path (the destination uses `placement.relativePath` directly).
@@ -190,11 +177,7 @@ final class ExportManager {
     set { bridgedWrite(isImportingBridge, \.isImporting, newValue) }
   }
   private let isImportingBridge = ObservableCombineBridge<Bool>(false)
-  private(set) var importStage: BackupScanner.ImportStage? {
-    get { bridgedRead(importStageBridge, \.importStage) }
-    set { bridgedWrite(importStageBridge, \.importStage, newValue) }
-  }
-  private let importStageBridge = ObservableCombineBridge<BackupScanner.ImportStage?>(nil)
+  private(set) var importStage: BackupScanner.ImportStage?
   private(set) var importError: String?
   private(set) var previousBackupMissing: Bool {
     get { bridgedRead(previousBackupMissingBridge, \.previousBackupMissing) }
@@ -286,26 +269,10 @@ final class ExportManager {
       .eraseToAnyPublisher()
   }
 
-  // The accessors below expose single properties to subscribers outside this type with
+  // The diagnostic accessors below expose run inputs with
   // `$property` semantics: synchronous, delivered before the value is stored, and replaying
   // the current value (pinned by `PublisherParityTests`), from the contract bridges.
-
-  /// The import activity flag alone. `isImportingPublisher` is AutoSync's hold, which also covers a
-  /// missing previous backup and drops repeats.
-  /// Test-only accessor for synchronous delivery characterization.
-  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
-  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
-  var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
-    isImportingBridge.publisher
-  }
-
-  /// `$importStage`.
-  /// Test-only accessor for synchronous delivery characterization.
-  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
-  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
-  var importStagePublisher: AnyPublisher<BackupScanner.ImportStage?, Never> {
-    importStageBridge.publisher
-  }
+  // Keep them raw: the deduplicated composite has different nested-subscriber delivery.
 
   /// `activeRunContext`, from its bridge.
   /// Test-only accessor for synchronous delivery characterization.
@@ -324,8 +291,8 @@ final class ExportManager {
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
-  /// terminal state. AutoSync uses manual-source summaries to clear compatible
-  /// dirty state. Fire-and-forget manual UI actions do not build a run context
+  /// terminal state. Retained for completion-seam characterization. Fire-and-forget
+  /// manual UI actions do not build a run context
   /// or summary and therefore do not emit through this publisher. Their terminal
   /// feedback is published separately through `ExportProgressState.manualSummary`.
   private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
@@ -510,13 +477,8 @@ final class ExportManager {
   }
 
   /// Export scans that have not finished queueing; `isPreparingExport` says whether any exist.
-  @ObservationIgnored private var preparationTasks:
+  @ObservationIgnored private(set) var preparationTasks:
     [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
-  /// Test-only accessor for awaiting the current generation's scans.
-  var currentPreparationTasks: [Task<Void, Never>] {
-    preparationTasks.values.filter { $0.generation == generation }.map(\.task)
-  }
-
   private enum ScanEnd { case finished, failed }
 
   /// Runs one export scan. Its end is handled only after the preparation flag has dropped,
@@ -559,7 +521,7 @@ final class ExportManager {
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
   /// counters, and the drain loop. ExportManager forwards reads via computed properties
   /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
-  /// `clearPending`, `processQueueIfNeeded`). Synchronous sinks in `init` update the
+  /// `processQueueIfNeeded`). Synchronous sinks in `init` update the
   /// manager's bridged running/depth values, tracked pause flag and progress-state
   /// counters, preserving the UI reads and AutoSync's named publisher contract.
   ///
@@ -576,29 +538,8 @@ final class ExportManager {
   @ObservationIgnored private var importCancellables: Set<AnyCancellable> = []
   @ObservationIgnored private var queueCancellables: Set<AnyCancellable> = []
 
-  // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
-  // test reads (`manager.pendingJobs`, `manager.currentTask`,
-  // `manager.queuedCountsByPlacementId`) and the "fresh-start condition" check in the
-  // `start*` methods (`!isProcessing`) don't have to thread through `queueCoordinator`.
-  var pendingJobs: ArraySlice<ExportJob> {
-    _ = queueMutationCounter
-    return queueCoordinator.pendingJobs
-  }
-  var currentTask: Task<Void, Never>? {
-    _ = queueMutationCounter
-    return queueCoordinator.currentTask
-  }
-  var queuedCountsByPlacementId: [String: Int] {
-    _ = queueMutationCounter
-    return queueCoordinator.queuedCountsByPlacementId
-  }
-  var isProcessing: Bool {
-    _ = queueMutationCounter
-    return queueCoordinator.isProcessing
-  }
-
-  /// Tracks the coordinator's unpublished values without extra manager publications.
-  private(set) var queueMutationCounter = 0
+  /// Pending work remains owned by the queue coordinator.
+  var pendingJobs: ArraySlice<ExportJob> { queueCoordinator.pendingJobs }
 
   @ObservationIgnored private(set) var currentJobAssetId: String?
   @ObservationIgnored private(set) var currentJobVariant: ExportVariant?
@@ -631,11 +572,6 @@ final class ExportManager {
     set { bridgedWrite(isPreparingExportBridge, \.isPreparingExport, newValue) }
   }
   private let isPreparingExportBridge = ObservableCombineBridge(false)
-  /// Forwarder to the import coordinator's task handle so existing test reads
-  /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
-  /// resolve against the same in-flight Task.
-  var importTask: Task<Void, Never>? { importCoordinator?.importTask }
-
   /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
   /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
   /// instance and stop sharing `UserDefaults.standard` across concurrently-running
@@ -863,7 +799,9 @@ final class ExportManager {
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     // A paused queue with pending jobs must accumulate progress instead of resetting.
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    if !isRunning && !queueCoordinator.isProcessing && pendingJobs.isEmpty {
+      resetProgressCounters()
+    }
     return (settings, generation)
   }
 
@@ -872,7 +810,8 @@ final class ExportManager {
     if isPaused, photoLibraryService.isAuthorized {
       let placement = ExportPlacement.timeline(year: year, month: month)
       let hasMatchingInFlightJob =
-        isProcessing && currentJobAssetId != nil && currentJobPlacement?.id == placement.id
+        queueCoordinator.isProcessing && currentJobAssetId != nil
+        && currentJobPlacement?.id == placement.id
       if queuedCount(year: year, month: month) > 0 || hasMatchingInFlightJob {
         // Continue the existing FIFO queue with its captured settings and counters.
         // Rescanning here would append unfinished assets a second time.
@@ -1093,18 +1032,6 @@ final class ExportManager {
     )
   }
 
-  /// Multi-select bulk export across a mixed Collections sidebar selection. Caller
-  /// supplies the normalized buckets from `CollectionsSelectionBuckets`. Each kind
-  /// (favorites, user albums, shared albums) is enqueued by calling the same
-  /// `enqueueCollection` helper the per-kind start methods use — but all three
-  /// loops run in a *single* Task so the user sees one merged enqueue lifecycle
-  /// and one final `emptyRunMessage` instead of three fire-and-forget Tasks
-  /// racing on the message slot. Partial-failure recovery and generation
-  /// tracking match `enqueueBulkAlbumExport`.
-  func startExportCollectionsSelection(_ buckets: CollectionsSelectionBuckets) {
-    startExportCollections(source: .buckets(buckets))
-  }
-
   /// Resolves folder membership inside the owned preparation, independently of display caches.
   func startExportCollectionsSelection(items: Set<LibrarySelection>) {
     startExportCollections(source: .selection(items))
@@ -1116,7 +1043,6 @@ final class ExportManager {
   }
 
   private enum CollectionsExportSource {
-    case buckets(CollectionsSelectionBuckets)
     case selection(Set<LibrarySelection>)
     case allUserCollections
   }
@@ -1124,10 +1050,6 @@ final class ExportManager {
   private func startExportCollections(source: CollectionsExportSource) {
     guard canStartExport(in: .collection, logTag: "startExportCollectionsSelection") else { return }
     guard !isPreparingExport else { return }
-    if case .buckets(let buckets) = source, buckets.isEmpty {
-      setEmptyRunMessage("No collections selected.")
-      return
-    }
     let (settings, gen) = prepareExport()
     runBulkExportTask(
       generation: gen,
@@ -1140,7 +1062,6 @@ final class ExportManager {
         guard let self else { return .stale }
         let buckets: CollectionsSelectionBuckets
         switch source {
-        case .buckets(let resolved): buckets = resolved
         case .selection(let items):
           let tree = try await self.photoLibraryService.loadCollectionTree()
           try self.throwIfCancelledOrStale(gen)
@@ -1685,16 +1606,6 @@ final class ExportManager {
     queueCoordinator.resume()
   }
 
-  func clearPending() {
-    progressState.beginSourceUpdates()
-    defer { progressState.endSourceUpdates() }
-    if queueCoordinator.clearPending() > 0 {
-      noteManualPreparationFailure("Pending exports were cleared before they finished.")
-      finishManualFeedbackIfReady(generation: generation)
-      endRunActivityIfIdle()
-    }
-  }
-
   // MARK: - Queue Handling
 
   /// Shared by the enqueue scans when Photos access is missing. The scan covers nothing,
@@ -1922,15 +1833,8 @@ final class ExportManager {
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
-    // Order matters: send the summary on `completedRunsSubject` *before*
-    // resuming the awaiter. AutoSync's manager subscribes to
-    // `completedRunsPublisher` and filters to `source == .manual`, so its
-    // own AutoSync-sourced runs never reach the manual-clear path either
-    // way. But the awaiter dispatches `.autoSyncRunCompleted(summary)`
-    // which is also queued behind the in-flight reducer event — and we
-    // want the subject emission to land first so that any reordering
-    // future-us applies stays self-consistent rather than relying on the
-    // continuation-resume / subject-send order to bend a specific way.
+    // Keep completion-seam subscribers ahead of the awaiter, which dispatches the
+    // AutoSync completion event after the terminal run state has been published.
     completedRunsSubject.send(summary)
     bookkeeping.continuation.resume(returning: summary)
   }
@@ -2005,9 +1909,7 @@ final class ExportManager {
   /// captured generation is still the active one, i.e. the work has not been superseded
   /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`,
   /// `interruptForDestinationUnavailable`, `supersedeForManualRun`, `cancelImport`).
-  /// Note: `clearPending()` only drops queued jobs and does NOT bump generation —
-  /// in-flight work that started before `clearPending` keeps its `gen` and finishes
-  /// normally. The path that *does* cancel mid-flight is `cancelAndClear`. Use this
+  /// Use this
   /// helper at non-throwing checkpoints — typically inside escaping closures that
   /// `return` early when the run is stale. Per
   /// docs/reference/architecture-conventions.md#1-cancellation-contract, these helpers
@@ -2500,10 +2402,6 @@ final class ExportManager {
 
   func beginProgressUpdates() { progressState.beginSourceUpdates() }
   func endProgressUpdates() { progressState.endSourceUpdates() }
-
-  func queueContentsDidChange() {
-    queueMutationCounter &+= 1
-  }
 
   /// Internal observation seam for deterministic tests of final-commit admission.
   @ObservationIgnored var finalCommitWaitObserver: (() -> Void)?

@@ -31,13 +31,9 @@ struct ExportManagerObservationTests {
         userDefaults: TestScratch.defaults("ExportManagerObservation"))
     }
 
-    func queueReadThroughProbes() -> [ObservationProbe] {
+    func monthQueueProbes() -> [ObservationProbe] {
       [
-        ObservationProbe { _ = self.manager.queuedCount(year: 2001, month: 1) },
-        ObservationProbe { _ = self.manager.queuedCountsByPlacementId },
-        ObservationProbe { _ = self.manager.pendingJobs },
-        ObservationProbe { _ = self.manager.currentTask },
-        ObservationProbe { _ = self.manager.isProcessing },
+        ObservationProbe { _ = self.manager.queuedCount(year: 2001, month: 1) }
       ]
     }
 
@@ -227,18 +223,18 @@ struct ExportManagerObservationTests {
   }
 
   /// Without a dependency on queue contents, every probe remains at zero.
-  @Test func queueReadThroughsRegisterDependencies() async {
+  @Test func monthQueueReadsRegisterDependencies() async {
     let f = await Fixture()
     await withCleanup {
-      let probes = f.queueReadThroughProbes()
+      let probes = f.monthQueueProbes()
       f.enqueueOne()
-      #expect(probes.map(\.changeCount) == [1, 1, 1, 1, 1])
+      #expect(probes.map(\.changeCount) == [1])
       f.manager.queueCoordinator.enqueue([])
-      #expect(probes.map(\.changeCount) == [1, 1, 1, 1, 1])
+      #expect(probes.map(\.changeCount) == [1])
       f.manager.queueCoordinator.processQueueIfNeeded()
-      #expect(probes.map(\.changeCount) == [2, 2, 2, 2, 2])
+      #expect(probes.map(\.changeCount) == [2])
       f.manager.cancelAndClear()
-      #expect(probes.map(\.changeCount) == [3, 3, 3, 3, 3])
+      #expect(probes.map(\.changeCount) == [3])
     } cleanup: {
       await f.close()
     }
@@ -246,23 +242,21 @@ struct ExportManagerObservationTests {
 
   /// Unrelated writes are silent even without queue dependencies; the final enqueue
   /// proves the probes are active once those dependencies are registered.
-  @Test func queueReadThroughsStaySilentWithoutQueueChanges() async {
+  @Test func monthQueueReadsStaySilentWithoutQueueChanges() async {
     let f = await Fixture()
     await withCleanup {
-      let probes = f.queueReadThroughProbes()
+      let probes = f.monthQueueProbes()
       f.manager.cancelAndClear()
-      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
-      f.manager.clearPending()
-      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      #expect(probes.map(\.changeCount) == [0])
       f.manager.queueCoordinator.pause()
       #expect(f.manager.isPaused)
-      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      #expect(probes.map(\.changeCount) == [0])
       f.manager.versionSelection = .editedWithOriginals
-      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      #expect(probes.map(\.changeCount) == [0])
       f.manager.progressState.currentAssetFilename = "UNRELATED.HEIC"
-      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      #expect(probes.map(\.changeCount) == [0])
       f.enqueueOne()
-      #expect(probes.map(\.changeCount) == [1, 1, 1, 1, 1])
+      #expect(probes.map(\.changeCount) == [1])
     } cleanup: {
       await f.close()
     }
@@ -454,7 +448,7 @@ struct ExportManagerObservationTests {
         window.contentView?.layoutSubtreeIfNeeded()
         #expect(counter.count(for: "queued:2") > 0)
 
-        f.manager.clearPending()
+        f.manager.cancelAndClear()
         try #require(
           await observe(in: window) {
             counter.count(for: "queue-publication:0") > publicationZero

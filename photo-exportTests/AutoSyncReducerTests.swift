@@ -1227,12 +1227,11 @@ struct AutoSyncReducerTests {
   private func autoSyncFullSummary(
     scope: ExportRunScope,
     selection: ExportVersionSelection = .edited,
-    result: ExportRunResult = .completed,
-    source: ExportRunSource = .autoSync
+    result: ExportRunResult = .completed
   ) -> ExportRunSummary {
     ExportRunSummary(
       context: ExportRunContext(
-        source: source, visibility: .userVisible,
+        source: .autoSync, visibility: .background,
         scope: scope, selection: selection),
       endedAt: now,
       enqueuedCount: 1, completedCount: 1,
@@ -1322,22 +1321,6 @@ struct AutoSyncReducerTests {
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
     #expect(effects.contains(.pruneDoneRetryEntries(destinationId: state.destination.id!)))
-  }
-
-  @Test func manualFullExportFromAutoSyncSourceDoesNotClearDirty() {
-    // .manualFullExportCompleted carrying an autoSync-sourced summary is a misroute
-    // — should not clear dirty state. (autoSyncRunCompleted is the right path.)
-    let state = stateWithDirty(
-      in: .timeline, selectedScopes: AutoExportScopeSelection(timeline: true))
-    let summary = autoSyncFullSummary(scope: .timelineFullLibrary, source: .autoSync)
-
-    let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
-      now: now)
-
-    let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
-    #expect(untouched?.pendingFullReconciliation == true)
-    #expect(effects.isEmpty)
   }
 
   @Test func autoSyncFullExportSelectionMismatchDoesNotClearDirty() {

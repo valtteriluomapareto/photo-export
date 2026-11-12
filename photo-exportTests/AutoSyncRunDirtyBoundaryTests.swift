@@ -60,9 +60,7 @@ struct AutoSyncRunDirtyBoundaryTests {
       context: context, endedAt: now, enqueuedCount: 0, completedCount: 0,
       failedCount: 0, skippedCount: 0, cancelReason: nil, result: result)
     return AutoSyncReducer.reduce(
-      context.source == .manual
-        ? .manualFullExportCompleted(summary)
-        : .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
       in: idle, now: now
     ).0
   }

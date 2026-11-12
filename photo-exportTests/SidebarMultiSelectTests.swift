@@ -159,7 +159,8 @@ struct SidebarMultiSelectTests {
 
   @Test func collectionsNormalizeEmptyInputIsEmpty() {
     let buckets = CollectionsSelectionBuckets.normalize([] as [LibrarySelection]) { _ in [] }
-    #expect(buckets.isEmpty)
+    #expect(
+      !buckets.includesFavorites && buckets.albumIds.isEmpty && buckets.sharedAlbumIds.isEmpty)
     #expect(buckets.count == 0)
   }
 
@@ -388,16 +389,9 @@ struct SidebarMultiSelectTests {
     // Select A explicitly AND the folder (which contains B). Dedup keeps each
     // album once; the queue should have exactly two album jobs (one for A, one
     // for B), not three.
-    let buckets = CollectionsSelectionBuckets.normalize(
-      [.album(collectionId: "A"), .folder(collectionId: "F1")]
-    ) { folderId in
-      switch folderId {
-      case "F1": return PhotoCollectionDescriptor.albumLocalIds(under: folder)
-      default: return []
-      }
-    }
+    let items: Set<LibrarySelection> = [.album(collectionId: "A"), .folder(collectionId: "F1")]
     h.manager.queueCoordinator.pause()
-    h.manager.startExportCollectionsSelection(buckets)
+    h.manager.startExportCollectionsSelection(items: items)
 
     let preparations = h.manager.currentPreparationTasks
     try #require(!preparations.isEmpty)
@@ -407,19 +401,6 @@ struct SidebarMultiSelectTests {
     #expect(h.manager.pendingJobs.count == 2)
     #expect(Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["a1", "b1"])
     #expect(Set(h.manager.pendingJobs.map { $0.placement.kind }) == [.album])
-  }
-
-  /// Empty buckets must not enqueue any work and must surface the empty-selection
-  /// message.
-  @Test func collectionsSelectionEmptyBucketsSurfacesMessage() async throws {
-    let h = await makeHarness()
-    defer { cleanupHarness(h) }
-
-    h.manager.startExportCollectionsSelection(.empty)
-    await waitUntil(h.manager.emptyRunMessage != nil)
-
-    #expect(h.manager.emptyRunMessage == "No collections selected.")
-    #expect(h.manager.totalJobsEnqueued == 0)
   }
 
   // MARK: - Issue #67 item 4 follow-ups
@@ -446,10 +427,8 @@ struct SidebarMultiSelectTests {
 
     let genBefore = h.manager.generation
 
-    let buckets = CollectionsSelectionBuckets.normalize(
-      [.favorites, .album(collectionId: "A")]
-    ) { _ in [] }
-    h.manager.startExportCollectionsSelection(buckets)
+    let items: Set<LibrarySelection> = [.favorites, .album(collectionId: "A")]
+    h.manager.startExportCollectionsSelection(items: items)
 
     // Wait until the loop is suspended on album A's asset fetch — favorites
     // already enqueued. After this point the next `isCurrent(gen)` check
@@ -518,10 +497,10 @@ struct SidebarMultiSelectTests {
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
 
-    let buckets = CollectionsSelectionBuckets.normalize(
-      [.favorites, .album(collectionId: "A"), .sharedAlbum(collectionId: "S")]
-    ) { _ in [] }
-    h.manager.startExportCollectionsSelection(buckets)
+    let items: Set<LibrarySelection> = [
+      .favorites, .album(collectionId: "A"), .sharedAlbum(collectionId: "S"),
+    ]
+    h.manager.startExportCollectionsSelection(items: items)
 
     await writeGate.waitForEnter(count: 1)
 

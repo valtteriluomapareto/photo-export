@@ -26,11 +26,6 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
     convertHEICToJPEGSubject.eraseToAnyPublisher()
   }
 
-  let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
-  var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
-    completedRunsSubject.eraseToAnyPublisher()
-  }
-
   /// If set, the next `runExport` returns this summary. Otherwise a default
   /// `.completed` summary is constructed from the requested context.
   var nextRunSummary: ExportRunSummary?

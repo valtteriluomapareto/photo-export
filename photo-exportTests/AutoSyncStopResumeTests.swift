@@ -355,74 +355,16 @@ struct AutoSyncStopResumeTests {
     #expect(idle.pendingTriggerReason == nil)
   }
 
-  // MARK: - Manual runs
-
-  private func manualRun(_ dirty: Bool = true) -> (ExportRunContext, AutoSyncReducer.State) {
-    let run = ExportRunContext(
-      source: .manual, visibility: .userVisible, scope: .timelineFullLibrary,
-      selection: .edited, startedAt: now)
-    let state = reduce(
-      .exportRunStateChanged(
-        ExportRunState(activeContext: run, isManualActive: true, isAutoSyncActive: false)),
-      idle(dirty: dirty)
-    ).0
-    return (run, state)
-  }
-
-  /// A manual export that stopped on a destination-wide failure does not leave an Auto
-  /// Export run scheduled 30 seconds later to stop the same way.
-  @Test(arguments: [false, true])
-  func manualStopDoesNotScheduleAnAutoExportRun(summaryFirst: Bool) {
-    let (run, active) = manualRun()
-    #expect(active.current == .waiting(.manualExportActive))
-    let stop = summary(run, stoppedBy: .destinationUnavailable)
-    let next: AutoSyncReducer.State
-    if summaryFirst {
-      let first = reduce(.manualFullExportCompleted(stop), active)
-      let second = reduce(.exportRunStateChanged(.idle), first.0)
-      #expect(schedules(first.1 + second.1).isEmpty)
-      next = second.0
-    } else {
-      let first = reduce(.exportRunStateChanged(.idle), active)
-      #expect(
-        first.0.current == .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
-      let second = reduce(.manualFullExportCompleted(stop), first.0)
-      #expect(second.1.contains(.cancelDebounce(.photosChanged)))
-      next = second.0
-    }
-    #expect(next.current == .idle)
-    #expect(pendingAssets(next) == ["pending"])
-  }
-
-  /// Guard: a manual run that ends without a stop keeps the follow-up for pending work.
-  @Test func manualRunWithoutAStopKeepsTheFollowUp() {
-    let (run, active) = manualRun()
-    let idle = reduce(.exportRunStateChanged(.idle), active).0
-    let (next, effects) = reduce(.manualFullExportCompleted(summary(run, stoppedBy: nil)), idle)
-    #expect(next.current == .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
-    #expect(!effects.contains(.cancelDebounce(.photosChanged)))
-  }
-
   // MARK: - Export Now precedence
 
-  enum RunKind: String, CaseIterable, Sendable { case autoExport, manualExport }
-
-  /// The run in progress, its stop summary, and the event that delivers that summary.
-  private func inProgress(
-    _ kind: RunKind
-  ) -> (state: AutoSyncReducer.State, completion: AutoSyncEvent) {
-    switch kind {
-    case .autoExport:
-      let run = context()
-      return (
-        running(run),
-        .autoSyncRunCompleted(
-          summary(run, stoppedBy: .destinationUnavailable), destinationId: destinationId)
-      )
-    case .manualExport:
-      let (run, state) = manualRun()
-      return (state, .manualFullExportCompleted(summary(run, stoppedBy: .destinationUnavailable)))
-    }
+  /// The automatic run in progress, its stop summary, and its completion event.
+  private func inProgress() -> (state: AutoSyncReducer.State, completion: AutoSyncEvent) {
+    let run = context()
+    return (
+      running(run),
+      .autoSyncRunCompleted(
+        summary(run, stoppedBy: .destinationUnavailable), destinationId: destinationId)
+    )
   }
 
   private func finish(
@@ -435,9 +377,9 @@ struct AutoSyncStopResumeTests {
   }
 
   /// A trigger after Export Now during a run that stops does not swallow Export Now.
-  @Test(arguments: RunKind.allCases, [false, true])
-  func exportNowFollowedByAnotherTriggerStillRunsAfterTheStop(kind: RunKind, summaryFirst: Bool) {
-    let (active, completion) = inProgress(kind)
+  @Test(arguments: [false, true])
+  func exportNowFollowedByAnotherTriggerStillRunsAfterTheStop(summaryFirst: Bool) {
+    let (active, completion) = inProgress()
     let requested = reduce(.runNowRequested, active).0
     let changed = reduce(
       .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)), requested

@@ -40,12 +40,4 @@ protocol AutoSyncExportRunning: AnyObject {
     scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant
   ) -> Bool
 
-  /// Stream of every run that finished through `runExport(context:)`, regardless
-  /// of source. AutoSync filters to `.manual` and dispatches
-  /// `manualFullExportCompleted` to acknowledge compatible dirty work.
-  /// `.autoSync` runs are still routed through the
-  /// `runExport`-await return path; this publisher exists specifically to give
-  /// the manager a hook into manual-run completion without polling
-  /// `exportRunStatePublisher` transitions.
-  var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> { get }
 }

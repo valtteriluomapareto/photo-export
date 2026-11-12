@@ -281,27 +281,6 @@ struct ManualExportSummaryTests {
     }
   }
 
-  @Test func clearPendingReportsIncompleteInsteadOfComplete() async throws {
-    let f = await Fixture()
-    let gate = AsyncCheckpoint()
-    try await withCleanup {
-      f.seed(["first", "second", "third"])
-      f.writer.checkpoint = gate
-      f.manager.startExportMonth(year: 2026, month: 9)
-      try #require(await reached(gate))
-      f.manager.clearPending()
-      await gate.releaseAll()
-      await f.manager.waitForQueueDrained()
-      let summary = try #require(f.manager.progressState.manualSummary)
-      #expect(summary.completedCount == 1 && summary.result == .failed)
-      #expect(summary.failureMessage?.isEmpty == false)
-      f.close()
-    } cleanup: {
-      await gate.releaseAll()
-      await f.manager.waitForQueueDrained()
-      f.close()
-    }
-  }
   @Test func bulkScanFailureStaysIncompleteWhenManualWorkIsAppended() async throws {
     let f = await Fixture()
     let scan = AsyncCheckpoint()

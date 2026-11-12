@@ -40,9 +40,6 @@ final class ExportQueueCoordinator: ObservableObject {
     func beginProgressUpdates()
     func endProgressUpdates()
 
-    /// Reports changed pending or in-flight contents after their synchronous updates.
-    func queueContentsDidChange()
-
     /// Sets the manager's `currentJobPlacement`, `currentJobAssetId`, and resets
     /// `currentJobVariant` to nil before the export Task starts. Placement BEFORE
     /// assetId is the load-bearing ordering rule — any cancellation cleanup that
@@ -96,9 +93,6 @@ final class ExportQueueCoordinator: ObservableObject {
   /// `cancelImport`). Async work captures `let gen = generation` synchronously before
   /// the first `await` and re-checks `isCurrent(gen)` after every hop; a mid-flight
   /// bump returns false and the work bails out cooperatively.
-  ///
-  /// `clearPending()` (queue-only drop) does NOT bump generation — in-flight work
-  /// keeps its `gen` and finishes normally.
   private(set) var generation: Int = 0
 
   /// Returns `true` if `gen` matches the current generation — i.e. the run that
@@ -186,25 +180,11 @@ final class ExportQueueCoordinator: ObservableObject {
   private(set) var currentTask: Task<Void, Never>?
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
 
-  /// Compares the pending count, processing task and per-placement revision without
-  /// retaining the dictionary across its next mutation.
-  private struct QueueFingerprint: Equatable {
-    let pendingJobCount: Int
-    let isProcessing: Bool
-    let currentTask: Task<Void, Never>?
-    let placementRevision: Int
-  }
-
-  private var queueFingerprint: QueueFingerprint {
-    QueueFingerprint(
-      pendingJobCount: pendingJobs.count, isProcessing: isProcessing, currentTask: currentTask,
-      placementRevision: placementRevision)
-  }
-
-  private func notifyQueueContentsChanged(since previous: QueueFingerprint) {
-    guard queueFingerprint != previous else { return }
+  /// Refresh only when per-placement queue counts changed. Active-placement changes
+  /// refresh their old and new month states directly.
+  private func refreshMonthStates(since previous: Int) {
+    guard placementRevision != previous else { return }
     for id in monthStates.keys { refreshMonthState(id) }
-    host?.queueContentsDidChange()
   }
 
   // MARK: - Dependencies
@@ -262,7 +242,7 @@ final class ExportQueueCoordinator: ObservableObject {
   func enqueue(_ jobs: [ExportManager.ExportJob]) {
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
-    let previous = queueFingerprint
+    let previous = placementRevision
     jobStorage.append(contentsOf: jobs)
     if !jobs.isEmpty { placementRevision &+= 1 }
     totalJobsEnqueued += jobs.count
@@ -270,7 +250,7 @@ final class ExportQueueCoordinator: ObservableObject {
       queuedCountsByPlacementId[job.placement.id, default: 0] += 1
     }
     updateQueueCount()
-    notifyQueueContentsChanged(since: previous)
+    refreshMonthStates(since: previous)
   }
 
   /// Reads the per-placement queue depth. Existing callers query `(year, month)` via the
@@ -279,38 +259,16 @@ final class ExportQueueCoordinator: ObservableObject {
     monthState(placementId: placementId).snapshot.queued
   }
 
-  // MARK: - Clear
-
-  /// Empties `pendingJobs`, decrements `totalJobsEnqueued` by the cleared count, clears
-  /// the per-placement counters, and updates `queueCount`. Used by the `clearPending`
-  /// ExportManager API and by the cancellation path.
-  func clearPending() -> Int {
-    host?.beginProgressUpdates()
-    defer { host?.endProgressUpdates() }
-    let previous = queueFingerprint
-    let removed = pendingJobs.count
-    removePendingJobs()
-    if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
-    queuedCountsByPlacementId.removeAll()
-    totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
-    updateQueueCount()
-    notifyQueueContentsChanged(since: previous)
-    logger.info("Cleared \(removed) pending export jobs")
-    return removed
-  }
-
   // MARK: - Teardown (called by ExportManager.cancelAndClear / supersedeForManualRun /
   //         interruptForDestinationUnavailable)
 
   /// Cancels the in-flight `currentTask`, clears every queue counter, drops the queue,
   /// resets running/paused/processing flags. Does NOT bump generation — callers that
-  /// also want the cancellation seam to fire call `bumpGeneration()` separately. This
-  /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
-  /// share the queue teardown logic.
+  /// also want the cancellation seam to fire call `bumpGeneration()` separately.
   func teardownQueue() {
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
-    let previous = queueFingerprint
+    let previous = placementRevision
     currentTask?.cancel()
     currentTask = nil
     removePendingJobs()
@@ -321,7 +279,7 @@ final class ExportQueueCoordinator: ObservableObject {
     isPaused = false
     setActivePlacement(nil)
     queueCount = 0
-    notifyQueueContentsChanged(since: previous)
+    refreshMonthStates(since: previous)
   }
 
   /// Resets the published progress counters. ExportManager calls this before a fresh run
@@ -329,12 +287,12 @@ final class ExportQueueCoordinator: ObservableObject {
   func resetProgressCounters() {
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
-    let previous = queueFingerprint
+    let previous = placementRevision
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
     if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
-    notifyQueueContentsChanged(since: previous)
+    refreshMonthStates(since: previous)
   }
 
   // MARK: - Drain loop
@@ -369,13 +327,13 @@ final class ExportQueueCoordinator: ObservableObject {
   private func processNext() {
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
-    let previous = queueFingerprint
+    let previous = placementRevision
     if isPaused {
       isProcessing = false
       isRunning = false
       host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
-      notifyQueueContentsChanged(since: previous)
+      refreshMonthStates(since: previous)
       logger.info("Queue paused; not starting next job")
       return
     }
@@ -384,7 +342,7 @@ final class ExportQueueCoordinator: ObservableObject {
       isRunning = false
       host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
-      notifyQueueContentsChanged(since: previous)
+      refreshMonthStates(since: previous)
       logger.info("Export queue drained")
       host?.didDrainQueue()
       return
@@ -417,7 +375,7 @@ final class ExportQueueCoordinator: ObservableObject {
         self.processNext()
       }
     }
-    notifyQueueContentsChanged(since: previous)
+    refreshMonthStates(since: previous)
   }
 
   // MARK: - Queue depth
