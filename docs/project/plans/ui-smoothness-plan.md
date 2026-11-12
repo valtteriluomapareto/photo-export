@@ -312,7 +312,7 @@ Definition of done:
 Before migrating `ExportManager`, prove the Combine bridge works.
 
 AutoSync currently depends on a synchronous Combine publisher composed from
-`activeRunContext`, `isRunning`, `queueCount`, and `isEnqueueingAll`. Plain
+`activeRunContext`, `isRunning`, `queueCount`, and `isPreparingExport`. Plain
 `@Observable` does not provide `$property` publishers, and
 `withObservationTracking` is one-shot, so the bridge must be explicit.
 

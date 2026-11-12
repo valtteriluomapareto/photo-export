@@ -49,7 +49,7 @@ struct VariantExporterTests {
 
     // ExportQueueCoordinator.Host — only required so the coordinator can be
     // constructed; the tests in this file never drive the queue.
-    var isEnqueueingAll: Bool { false }
+    var isPreparingExport: Bool { false }
     func performExport(job: ExportManager.ExportJob, generation: Int) async {}
     func didDrainQueue() {}
     func beginProgressUpdates() {}

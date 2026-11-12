@@ -92,7 +92,7 @@ struct ExportManagerPauseResumeTests {
 
     // Queue parked: run loop has exited but jobs remain. (`hasActiveExportWork`
     // is intentionally NOT in this predicate — it's `isRunning || queueCount > 0
-    // || isEnqueueingAll`, so it's still true here, and that's correct.)
+    // || isPreparingExport`, so it's still true here, and that's correct.)
     await waitUntil {
       !h.manager.isRunning && h.manager.queueCount > 0
     }

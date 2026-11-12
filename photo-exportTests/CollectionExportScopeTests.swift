@@ -104,9 +104,9 @@ import Testing
         f.counter.renderedActions[key]?()
         try #require(
           await eventually("owned tree load or completed preparation") {
-            await f.gate.enteredSoFar > before || !f.h.manager.isEnqueueingAll
+            await f.gate.enteredSoFar > before || !f.h.manager.isPreparingExport
           })
-        #expect(f.h.manager.isEnqueueingAll)
+        #expect(f.h.manager.isPreparingExport)
         #expect(f.h.manager.pendingJobs.isEmpty)
         let tasks = f.h.manager.currentPreparationTasks
         await f.gate.releaseAll()
@@ -132,7 +132,7 @@ import Testing
         await f.gate.releaseAll()
         for task in tasks { await task.value }
         #expect(f.h.manager.pendingJobs.isEmpty)
-        #expect(!f.h.manager.isEnqueueingAll)
+        #expect(!f.h.manager.isPreparingExport)
         #expect(f.h.manager.progressState.manualSummary?.failureMessage != nil)
       } cleanup: {
         await f.close()
@@ -151,7 +151,7 @@ import Testing
         f.counter.renderedActions["toolbar-export"]?()
         try #require(
           await eventually("held action or completed preparation") {
-            await f.gate.enteredSoFar > before || !f.h.manager.isEnqueueingAll
+            await f.gate.enteredSoFar > before || !f.h.manager.isPreparingExport
           })
         #expect(f.h.manager.pendingJobs.isEmpty)
         let oldTasks = f.h.manager.currentPreparationTasks

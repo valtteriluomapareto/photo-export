@@ -18,7 +18,7 @@ import Testing
 /// The tests assert on the canonical sequence (after de-duplicating adjacent
 /// identical states) rather than raw frame count, because
 /// `exportRunStatePublisher` is a `CombineLatest4` over `activeRunContext`,
-/// `isRunning`, `queueCount` and `isEnqueueingAll`, and intermediate tuples land in
+/// `isRunning`, `queueCount` and `isPreparingExport`, and intermediate tuples land in
 /// unobservable order across `await` hops. Asserting raw counts or exact emission timing would flake under future
 /// refactors that reorder property mutation; asserting canonical transitions
 /// captures the invariant AutoSync actually depends on.
@@ -290,17 +290,17 @@ struct AutoSyncSeamCharacterizationTests {
     }
   }
 
-  /// Issue #67 item 4a: `isEnqueueingAll` participates in the AutoSync
+  /// Issue #67 item 4a: `isPreparingExport` participates in the AutoSync
   /// `CombineLatest4`. The bulk-enqueue window — after the dispatcher flips
-  /// `isEnqueueingAll = true` but before the first job lands in `pendingJobs`
+  /// `isPreparingExport = true` but before the first job lands in `pendingJobs`
   /// — must register as `manualActive` so AutoSync does not race to start its
   /// own background run on top of a user-initiated multi-select bulk export.
   ///
   /// The test gates the *enqueue-time PhotoKit fetch* (not the writer) so
   /// when the assertion runs, `pendingJobs.isEmpty`, `isRunning == false`,
-  /// `queueCount == 0`, and `isEnqueueingAll == true`. The publisher must
-  /// have emitted `.manualActive` *purely* on `isEnqueueingAll`. If a future
-  /// regression dropped `isEnqueueingAll` from the CombineLatest tuple, the
+  /// `queueCount == 0`, and `isPreparingExport == true`. The publisher must
+  /// have emitted `.manualActive` *purely* on `isPreparingExport`. If a future
+  /// regression dropped `isPreparingExport` from the CombineLatest tuple, the
   /// publisher would still be `.idle` here — no other observable property
   /// has flipped yet — and the assertion below fails. Gating the writer
   /// instead would not catch the regression (the coordinator's `isRunning`
@@ -330,9 +330,9 @@ struct AutoSyncSeamCharacterizationTests {
       harness.manager.startExportTimelineSelection(years: [2026], months: [])
       await fetchGate.waitForEnter(count: 1)
 
-      // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isEnqueueingAll=true.
+      // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isPreparingExport=true.
       // The publisher must already have emitted `.manualActive` from
-      // `isEnqueueingAll` alone — no other input has flipped.
+      // `isPreparingExport` alone — no other input has flipped.
       #expect(
         harness.manager.pendingJobs.isEmpty,
         "test sanity: dispatcher must be suspended before any job lands")
@@ -340,7 +340,7 @@ struct AutoSyncSeamCharacterizationTests {
         !harness.manager.isRunning,
         "test sanity: queue must not yet be running")
       #expect(
-        harness.manager.isEnqueueingAll,
+        harness.manager.isPreparingExport,
         "test sanity: the dispatcher's mid-enqueue flag must be set")
       let midGate = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
       #expect(
@@ -349,8 +349,8 @@ struct AutoSyncSeamCharacterizationTests {
         AutoSync seam contract violation: while the multi-select timeline \
         dispatcher is suspended inside the enqueue fetch (pending=0, \
         isRunning=false, queueCount=0), the publisher must already be in \
-        `manualActive` because `isEnqueueingAll` participates in \
-        CombineLatest4. Got: \(midGate). If `isEnqueueingAll` is no longer in \
+        `manualActive` because `isPreparingExport` participates in \
+        CombineLatest4. Got: \(midGate). If `isPreparingExport` is no longer in \
         `exportRunStatePublisher`'s tuple, restore it (issue #67 item 4a).
         """
       )
@@ -359,7 +359,7 @@ struct AutoSyncSeamCharacterizationTests {
       await fetchGate.releaseAll()
       // Not a `#require`: a stalled drain must still reach the canonical-sequence diff below.
       _ = await eventually("queue drained") {
-        !(harness.manager.isRunning || harness.manager.isEnqueueingAll
+        !(harness.manager.isRunning || harness.manager.isPreparingExport
           || harness.manager.queueCount > 0)
       }
 

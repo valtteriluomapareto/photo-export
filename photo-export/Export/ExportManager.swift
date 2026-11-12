@@ -60,7 +60,7 @@ final class ExportManager {
   }
 
   // MARK: - Export state
-  // `isRunning`, `queueCount`, `activeRunContext` and `isEnqueueingAll` feed
+  // `isRunning`, `queueCount`, `activeRunContext` and `isPreparingExport` feed
   // `exportRunStatePublisher`. Each is held in an `ObservableCombineBridge` so views track
   // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
   private(set) var isRunning: Bool {
@@ -224,8 +224,8 @@ final class ExportManager {
   /// — so the fire-and-forget `start*` methods (which never set `activeRunContext`)
   /// still register as `isManualActive` while the queue is processing them OR
   /// while the bulk dispatcher is mid-enqueue but hasn't appended its first job
-  /// yet. Without `isEnqueueingAll` in the tuple, AutoSync could observe `.idle`
-  /// during the window between `isEnqueueingAll = true` and the first
+  /// yet. Without `isPreparingExport` in the tuple, AutoSync could observe `.idle`
+  /// during the window between `isPreparingExport = true` and the first
   /// `pendingJobs.append`, and race to start its own background run on top of a
   /// user-initiated bulk export.
   /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
@@ -233,11 +233,11 @@ final class ExportManager {
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
     Publishers.CombineLatest4(
       activeRunContextBridge.publisher, isRunningBridge.publisher,
-      queueCountBridge.publisher, isEnqueueingAllBridge.publisher
+      queueCountBridge.publisher, isPreparingExportBridge.publisher
     )
-    .map { context, isRunning, queueCount, isEnqueueingAll in
+    .map { context, isRunning, queueCount, isPreparingExport in
       let manualFireAndForget =
-        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
+        context == nil && (isRunning || queueCount > 0 || isPreparingExport)
       return ExportRunState(
         activeContext: context,
         isManualActive: context?.source == .manual || manualFireAndForget,
@@ -317,12 +317,12 @@ final class ExportManager {
     activeRunContextBridge.publisher
   }
 
-  /// `isEnqueueingAll`, from its bridge.
+  /// `isPreparingExport`, from its bridge.
   /// Test-only accessor for synchronous delivery characterization.
   /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
   /// or `flatMap` can otherwise trap in the actor-isolated bridge.
-  var isEnqueueingAllPublisher: AnyPublisher<Bool, Never> {
-    isEnqueueingAllBridge.publisher
+  var isPreparingExportPublisher: AnyPublisher<Bool, Never> {
+    isPreparingExportBridge.publisher
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
@@ -398,7 +398,7 @@ final class ExportManager {
 
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
-    isRunning || queueCount > 0 || isEnqueueingAll
+    isRunning || queueCount > 0 || isPreparingExport
   }
 
   /// Whether the pause/resume toolbar control should accept clicks. Pausing is meaningful
@@ -614,11 +614,11 @@ final class ExportManager {
   /// first job lands in `pendingJobs`) in its idle/active decision. Without this,
   /// AutoSync would race to start a background run
   /// during the multi-select / Export-All dispatcher's mid-enqueue window.
-  private(set) var isEnqueueingAll: Bool {
-    get { bridgedRead(isEnqueueingAllBridge, \.isEnqueueingAll) }
-    set { bridgedWrite(isEnqueueingAllBridge, \.isEnqueueingAll, newValue) }
+  private(set) var isPreparingExport: Bool {
+    get { bridgedRead(isPreparingExportBridge, \.isPreparingExport) }
+    set { bridgedWrite(isPreparingExportBridge, \.isPreparingExport, newValue) }
   }
-  private let isEnqueueingAllBridge = ObservableCombineBridge(false)
+  private let isPreparingExportBridge = ObservableCombineBridge(false)
   /// Forwarder to the import coordinator's task handle so existing test reads
   /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
   /// resolve against the same in-flight Task.
@@ -850,7 +850,7 @@ final class ExportManager {
     let settings = ExportSettingsSnapshot(manager: self, selectionOverride: selectionOverride)
     clearEmptyRunMessage()
     clearQueueWarningMessage()
-    if bulk { isEnqueueingAll = true }
+    if bulk { isPreparingExport = true }
     // A paused queue with pending jobs must accumulate progress instead of resetting.
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     return (settings, generation)
@@ -920,7 +920,7 @@ final class ExportManager {
   @discardableResult
   func startExportAll(selectionOverride: ExportVersionSelection? = nil) -> Task<Void, Never>? {
     guard canStartExport(in: .timeline, logTag: "startExportAll") else { return nil }
-    guard !isEnqueueingAll else { return nil }
+    guard !isPreparingExport else { return nil }
     let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
     return runBulkExportTask(
       generation: gen,
@@ -962,7 +962,7 @@ final class ExportManager {
     selectionOverride: ExportVersionSelection? = nil
   ) {
     guard canStartExport(in: .timeline, logTag: "startExportTimelineSelection") else { return }
-    guard !isEnqueueingAll else { return }
+    guard !isPreparingExport else { return }
     if years.isEmpty && months.isEmpty {
       setEmptyRunMessage("No timeline items selected.")
       return
@@ -1109,7 +1109,7 @@ final class ExportManager {
 
   private func startExportCollections(source: CollectionsExportSource) {
     guard canStartExport(in: .collection, logTag: "startExportCollectionsSelection") else { return }
-    guard !isEnqueueingAll else { return }
+    guard !isPreparingExport else { return }
     if case .buckets(let buckets) = source, buckets.isEmpty {
       setEmptyRunMessage("No collections selected.")
       return
@@ -1203,7 +1203,7 @@ final class ExportManager {
   /// (`startExportAll`, `startExportTimelineSelection`,
   /// `startExportCollectionsSelection`, `enqueueBulkAlbumExport`) was
   /// duplicating: the `Task { [weak self] in }` wrapper, the
-  /// `isEnqueueingAll = false` teardown for the owning generation, the success
+  /// `isPreparingExport = false` teardown for the owning generation, the success
   /// finalize (empty/done message + `processQueueIfNeeded()`), and the
   /// partial-failure recovery on throw (queue warning + `incompleteScan` +
   /// drain if any jobs already queued; otherwise finalize as failed). An
@@ -1236,18 +1236,18 @@ final class ExportManager {
         case .stale:
           return
         case .completed(let totals):
-          self.isEnqueueingAll = false
+          self.isPreparingExport = false
           if totals.totalEnqueued == 0 && !totals.sawUnauthorized {
             self.setEmptyRunMessage(emptyDoneMessage())
           }
           self.processQueueIfNeeded()
         case .completedWithCustomMessage:
-          self.isEnqueueingAll = false
+          self.isPreparingExport = false
           self.processQueueIfNeeded()
         }
       } catch {
         guard self.isCurrent(gen) else { return }
-        self.isEnqueueingAll = false
+        self.isPreparingExport = false
         self.logger.error(
           "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
         )
@@ -1352,7 +1352,7 @@ final class ExportManager {
     selectionOverride: ExportVersionSelection? = nil
   ) {
     guard canStartExport(in: .collection, logTag: logTag) else { return }
-    guard !isEnqueueingAll else { return }
+    guard !isPreparingExport else { return }
     let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
     runBulkExportTask(
       generation: gen,
@@ -1626,7 +1626,7 @@ final class ExportManager {
     preparationTasks.removeAll()
     queueCoordinator.teardownQueue()
     queueCoordinator.resetProgressCounters()
-    isEnqueueingAll = false
+    isPreparingExport = false
     setCurrentAssetFilename(nil)
     clearRenderActivity()
     clearEmptyRunMessage()
@@ -2511,7 +2511,7 @@ final class ExportManager {
 
   // MARK: - ExportQueueCoordinator.Host conformance
 
-  // `isEnqueueingAll` supplies the coordinator's preparation guard.
+  // `isPreparingExport` supplies the coordinator's preparation guard.
 
   func beginProgressUpdates() { progressState.beginSourceUpdates() }
   func endProgressUpdates() { progressState.endSourceUpdates() }

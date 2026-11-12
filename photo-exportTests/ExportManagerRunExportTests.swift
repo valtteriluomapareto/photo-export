@@ -253,7 +253,7 @@ struct ExportManagerRunExportTests {
       return true
     }
     let finished = AsyncStream<Void>.makeStream()
-    let observation = harness.manager.isEnqueueingAllPublisher.dropFirst().filter { !$0 }
+    let observation = harness.manager.isPreparingExportPublisher.dropFirst().filter { !$0 }
       .sink { _ in finished.continuation.yield(()) }
     harness.manager.livePhotosPairedExport = true
     harness.manager.videoLayout = .subfolder
@@ -443,14 +443,14 @@ struct ExportManagerRunExportTests {
       let pendingJobs = manager.pendingJobs
       let generation = manager.generation
       #expect(pendingJobs.count == (hasQueuedJobs ? 1 : 0))
-      #expect(manager.isEnqueueingAll)
+      #expect(manager.isPreparingExport)
       #expect(manager.activeRunContext == context)
       await oldFetch.releaseAll()
       await oldTask.value
 
       #expect(manager.generation == generation)
       #expect(manager.currentPreparationTasks.count == 1, "A must leave B preparation registered")
-      #expect(manager.isEnqueueingAll)
+      #expect(manager.isPreparingExport)
       #expect(manager.activeRunContext == context)
       #expect(manager.pendingJobs == pendingJobs)
       #expect(manager.queueCount == pendingJobs.count)
@@ -499,13 +499,13 @@ struct ExportManagerRunExportTests {
       }
       let replacementTask = try #require(harness.manager.startExportAll())
       await oldTask.value
-      #expect(harness.manager.isEnqueueingAll)
+      #expect(harness.manager.isPreparingExport)
       await gate.waitForEnter(count: 1)
       #expect(harness.photoLib.fetchAssetsCalls.count == 1, "Only B should fetch")
-      #expect(harness.manager.isEnqueueingAll)
+      #expect(harness.manager.isPreparingExport)
       await gate.releaseAll()
       await replacementTask.value
-      #expect(!harness.manager.isEnqueueingAll)
+      #expect(!harness.manager.isPreparingExport)
       #expect(!harness.manager.hasActiveExportWork)
     } cleanup: {
       await gate.releaseAll()
@@ -2065,7 +2065,7 @@ struct ExportManagerRunExportTests {
 
   @MainActor
   private final class PriorityQueueHost: ExportQueueCoordinator.Host {
-    var isEnqueueingAll = false
+    var isPreparingExport = false
     let observed = AsyncStream<TaskPriority>.makeStream()
     let gate = AsyncCheckpoint()
     func performExport(job: ExportManager.ExportJob, generation: Int) async {

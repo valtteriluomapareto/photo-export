@@ -232,7 +232,7 @@ delivery; an equal write delivered without an Observation notification; and, whi
 ### `ExportManager`: the contract bridges
 
 The four inputs of `exportRunStatePublisher` (`activeRunContext`, `isRunning`, `queueCount`,
-`isEnqueueingAll`) use the macro-backed bridge shape above. `ExportManagerObservationTests`
+`isPreparingExport`) use the macro-backed bridge shape above. `ExportManagerObservationTests`
 shows that each property, and each input of the derived reads views make
 (`hasActiveExportWork`, `canTogglePause`, `manualExportShouldConfirmSupersede`), registers a
 dependency, and that a view holding the manager as a plain `let` refreshes for queued work. An
