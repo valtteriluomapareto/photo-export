@@ -31,9 +31,12 @@ enum NativeViewAccess {
 
   static func containsText(_ text: String, in window: NSWindow) -> Bool {
     elements(in: window).contains { element in
+      if element.accessibilityLabel?() == text || element.accessibilityTitle?() == text {
+        return true
+      }
+      guard element.accessibilityRole?() == .staticText else { return false }
       let value: (() -> String?)? = element.accessibilityValue
       return value?() == text
-        || element.accessibilityLabel?() == text || element.accessibilityTitle?() == text
     }
   }
 

@@ -80,8 +80,8 @@ struct ExportProgressBar: View {
       #if DEBUG
         counter?.record("progress-expiry-finished:\(summary.id)")
       #endif
-      guard !Task.isCancelled, progressState.manualSummary?.id == summary.id else { return }
-      progressState.manualSummary?.isDismissed = true
+      guard !Task.isCancelled else { return }
+      progressState.dismissManualSummary(id: summary.id)
     }
   }
 
@@ -101,13 +101,10 @@ struct ExportProgressBar: View {
 
   private func terminalSummary(_ summary: ManualExportSummary) -> some View {
     let dismiss = {
-      guard progressState.manualSummary?.id == summary.id else { return }
-      progressState.manualSummary?.isDismissed = true
+      progressState.dismissManualSummary(id: summary.id)
     }
     let showIssues = {
-      guard progressState.manualSummary?.id == summary.id,
-        progressState.manualSummary?.isDismissed == false
-      else { return }
+      guard progressState.canShowIssues(for: summary.id) else { return }
       selectedSettingsTab = .exportIssues
       if let settingsOpener { settingsOpener() } else { openSettings() }
     }
