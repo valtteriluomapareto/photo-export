@@ -819,49 +819,44 @@ final class ExportManager {
         return
       }
     }
-    let (settings, gen) = prepareExport()
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return .finished }
-      do {
-        let outcome = try await enqueueMonth(
-          year: year, month: month, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return .finished }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This month is already exported.")
-        }
-        return .finished
-      } catch {
-        guard self.isCurrent(gen) else { return .finished }
-        handleScanFailure(
-          "Could not scan this month. Try exporting again.", scope: "month", error: error)
-        return .failed
-      }
+    startSingleScopeExport(
+      scope: "month", alreadyDoneMessage: "This month is already exported.",
+      failureMessage: "Could not scan this month. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueMonth(year: year, month: month, settings: settings, generation: gen)
     }
   }
 
   func startExportYear(year: Int) {
     guard canStartExport(in: .timeline, logTag: "startExportYear") else { return }
-    let (settings, gen) = prepareExport()
+    startSingleScopeExport(
+      scope: "year", alreadyDoneMessage: "This year is already exported.",
+      failureMessage: "Could not scan this year. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueYear(year: year, settings: settings, generation: gen)
+    }
+  }
+
+  /// Admission and Month's queued-resume path run before this shared preparation.
+  /// Wrapper closures capture scope identifiers; only the owned task promotes the manager.
+  private func startSingleScopeExport(
+    selectionOverride: ExportVersionSelection? = nil,
+    scope: String, alreadyDoneMessage: String, failureMessage: String,
+    enqueue:
+      @escaping @MainActor (ExportManager, ExportSettingsSnapshot, Int) async throws
+      -> EnqueueOutcome
+  ) {
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return .finished }
       do {
-        let outcome = try await enqueueYear(
-          year: year, settings: settings, generation: gen)
+        let outcome = try await enqueue(self, settings, gen)
         guard self.isCurrent(gen) else { return .finished }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This year is already exported.")
-        }
+        if outcome == .alreadyComplete { self.setEmptyRunMessage(alreadyDoneMessage) }
         return .finished
       } catch {
         guard self.isCurrent(gen) else { return .finished }
-        handleScanFailure(
-          "Could not scan this year. Try exporting again.", scope: "year", error: error)
+        self.handleScanFailure(failureMessage, scope: scope, error: error)
         return .failed
       }
     }
@@ -877,7 +872,6 @@ final class ExportManager {
     return runBulkExportTask(
       generation: gen,
       logTag: "startExportAll",
-      emptyDoneMessage: { "Everything in this destination is already exported." },
       partialScanWarning: {
         "Couldn't list every year. Continuing with the photos already queued."
       },
@@ -888,7 +882,11 @@ final class ExportManager {
           try await self.enqueueYear(
             year: year, settings: settings, generation: gen)
         }
-        return result.completed ? .completed(result.totals) : .stale
+        return result.completed
+          ? .completed(
+            result.totals, zeroEnqueueMessage: "Everything in this destination is already exported."
+          )
+          : .stale
       }
     )
   }
@@ -923,7 +921,6 @@ final class ExportManager {
     runBulkExportTask(
       generation: gen,
       logTag: "startExportTimelineSelection",
-      emptyDoneMessage: { "Everything in the selection is already exported." },
       partialScanWarning: {
         "Couldn't scan every item in the selection. Continuing with the photos already queued."
       },
@@ -940,7 +937,11 @@ final class ExportManager {
           try await self.enqueueMonth(
             year: m.year, month: m.month, settings: settings, generation: gen)
         }
-        return monthsResult.completed ? .completed(monthsResult.totals) : .stale
+        return monthsResult.completed
+          ? .completed(
+            monthsResult.totals,
+            zeroEnqueueMessage: "Everything in the selection is already exported.")
+          : .stale
       }
     )
   }
@@ -953,39 +954,20 @@ final class ExportManager {
   /// timeline exports are independent under the disjoint-key-spaces rationale).
   func startExportFavorites(selectionOverride: ExportVersionSelection? = nil) {
     guard canStartExport(in: .collection, logTag: "startExportFavorites") else { return }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return .finished }
-      do {
-        let outcome = try await enqueueCollection(
-          selection: .favorites, scope: .favorites, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return .finished }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("Favorites are already exported.")
-        }
-        return .finished
-      } catch {
-        guard self.isCurrent(gen) else { return .finished }
-        handleScanFailure(
-          "Could not scan Favorites. Try exporting again.", scope: "favorites", error: error)
-        return .failed
-      }
+    startSingleScopeExport(
+      selectionOverride: selectionOverride,
+      scope: "favorites", alreadyDoneMessage: "Favorites are already exported.",
+      failureMessage: "Could not scan Favorites. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueCollection(
+        selection: .favorites, settings: settings, generation: gen)
     }
   }
 
   /// Collections sidebar surfaces. AutoSync passes `selectionOverride` so a scheduled
   /// run honours the AutoSync version selection regardless of the current UI toggle.
   func startExportAllAlbums(selectionOverride: ExportVersionSelection? = nil) {
-    enqueueBulkAlbumExport(
-      source: .allAlbums,
-      logTag: "startExportAllAlbums",
-      emptyMessage: "No albums to export.",
-      allDoneMessage: "All albums in this destination are already exported.",
-      selectionOverride: selectionOverride
-    )
+    startCollectionBulkExport(source: .allAlbums, selectionOverride: selectionOverride)
   }
 
   /// Batch action for every iCloud shared album. Used by Auto Export's
@@ -994,13 +976,7 @@ final class ExportManager {
   /// kind so each batch member writes to `Collections/Shared Albums/<title>/` at
   /// reduced fidelity (one downscaled JPEG per asset).
   func startExportAllSharedAlbums(selectionOverride: ExportVersionSelection? = nil) {
-    enqueueBulkAlbumExport(
-      source: .allSharedAlbums,
-      logTag: "startExportAllSharedAlbums",
-      emptyMessage: "No shared albums to export.",
-      allDoneMessage: "All shared albums in this destination are already exported.",
-      selectionOverride: selectionOverride
-    )
+    startCollectionBulkExport(source: .allSharedAlbums, selectionOverride: selectionOverride)
   }
 
   /// Starts an export of every user album under a single folder, recursively. Each
@@ -1009,12 +985,7 @@ final class ExportManager {
   /// placements, they only group children, and `pathComponents` on each album already
   /// encodes the parent folder hierarchy in the on-disk path.
   func startExportFolder(folderId: String) {
-    enqueueBulkAlbumExport(
-      source: .folder(folderId: folderId),
-      logTag: "startExportFolder",
-      emptyMessage: "This folder has no albums to export.",
-      allDoneMessage: "All albums in this folder are already exported."
-    )
+    startCollectionBulkExport(source: .folder(folderId: folderId))
   }
 
   /// Starts an export of an explicit list of user albums by `collectionLocalIdentifier`.
@@ -1024,90 +995,17 @@ final class ExportManager {
   func startExportAlbums(collectionIds: [String]) {
     var seen = Set<String>()
     let deduped = collectionIds.filter { seen.insert($0).inserted }
-    enqueueBulkAlbumExport(
-      source: .explicitIds(deduped),
-      logTag: "startExportAlbums",
-      emptyMessage: "No albums in selection.",
-      allDoneMessage: "All selected albums are already exported."
-    )
+    startCollectionBulkExport(source: .explicitIds(deduped))
   }
 
   /// Resolves folder membership inside the owned preparation, independently of display caches.
   func startExportCollectionsSelection(items: Set<LibrarySelection>) {
-    startExportCollections(source: .selection(items))
+    startCollectionBulkExport(source: .selection(items))
   }
 
   /// Includes Favorites and every current user album, leaving shared albums explicit.
   func startExportAllUserCollections() {
-    startExportCollections(source: .allUserCollections)
-  }
-
-  private enum CollectionsExportSource {
-    case selection(Set<LibrarySelection>)
-    case allUserCollections
-  }
-
-  private func startExportCollections(source: CollectionsExportSource) {
-    guard canStartExport(in: .collection, logTag: "startExportCollectionsSelection") else { return }
-    guard !isPreparingExport else { return }
-    let (settings, gen) = prepareExport()
-    runBulkExportTask(
-      generation: gen,
-      logTag: "startExportCollectionsSelection",
-      emptyDoneMessage: { "Everything in the selection is already exported." },
-      partialScanWarning: {
-        "Couldn't scan every item in the selection. Continuing with the photos already queued."
-      },
-      body: { [weak self] in
-        guard let self else { return .stale }
-        let buckets: CollectionsSelectionBuckets
-        switch source {
-        case .selection(let items):
-          let tree = try await self.photoLibraryService.loadCollectionTree()
-          try self.throwIfCancelledOrStale(gen)
-          buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
-            guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
-            else { return [] }
-            return PhotoCollectionDescriptor.albumLocalIds(under: folder)
-          }
-        case .allUserCollections:
-          let tree = try await self.photoLibraryService.loadCollectionTree()
-          try self.throwIfCancelledOrStale(gen)
-          buckets = CollectionsSelectionBuckets(
-            includesFavorites: true,
-            albumIds: PhotoCollectionDescriptor.albumLocalIds(in: tree), sharedAlbumIds: [])
-        }
-        // Favorites — modelled as a 0-or-1 element pass so the helper handles
-        // the cancellation check + outcome merge identically to the other passes.
-        let favorites: [Bool] = buckets.includesFavorites ? [true] : []
-        let favResult = try await self.runBulkEnqueueLoop(
-          items: favorites, generation: gen
-        ) { _ in
-          try await self.enqueueCollection(
-            selection: .favorites, scope: .favorites,
-            settings: settings, generation: gen)
-        }
-        guard favResult.completed else { return .stale }
-        let albumsResult = try await self.runBulkEnqueueLoop(
-          items: buckets.albumIds, generation: gen, startingFrom: favResult.totals
-        ) { albumId in
-          try await self.enqueueCollection(
-            selection: .album(collectionId: albumId),
-            scope: .album(collectionId: albumId),
-            settings: settings, generation: gen)
-        }
-        guard albumsResult.completed else { return .stale }
-        let sharedResult = try await self.runBulkEnqueueLoop(
-          items: buckets.sharedAlbumIds, generation: gen, startingFrom: albumsResult.totals
-        ) { sharedId in
-          try await self.enqueueCollection(
-            selection: .sharedAlbum(collectionId: sharedId),
-            scope: .sharedAlbum(collectionId: sharedId),
-            settings: settings, generation: gen)
-        }
-        return sharedResult.completed ? .completed(sharedResult.totals) : .stale
-      }
-    )
+    startCollectionBulkExport(source: .allUserCollections)
   }
 
   /// Accumulates the result of one or more `runBulkEnqueueLoop` passes so the
@@ -1120,29 +1018,23 @@ final class ExportManager {
     var sawUnauthorized: Bool = false
   }
 
-  /// Outcome of a bulk-export body. `.completed(totals)` shows the helper's empty/done
-  /// message when nothing was enqueued. `.completedWithCustomMessage` is for bodies that set
-  /// their own message (e.g. `enqueueBulkAlbumExport`'s "folder no longer exists" branch).
-  /// `.stale` means a generation check failed mid-body. `trackPreparation` starts the queue
-  /// after any of them, for the current generation only.
+  /// A completed body carries its zero-work feedback; the shared task publishes it
+  /// only when no jobs were enqueued and no scope was unauthorized. Stale bodies do
+  /// not publish. `trackPreparation` retains queue/finalization ownership.
   private enum BulkExportOutcome {
-    case completed(BulkExportTotals)
-    case completedWithCustomMessage
+    case completed(BulkExportTotals, zeroEnqueueMessage: String)
     case stale
   }
 
-  /// Owns the bulk-export Task scaffolding every multi-item dispatcher
-  /// (`startExportAll`, `startExportTimelineSelection`,
-  /// `startExportCollectionsSelection`, `enqueueBulkAlbumExport`) was
-  /// duplicating: the preparation task, the empty/done message, and the failure
+  /// Owns task scaffolding for timeline bulk starts and the collection bulk driver:
+  /// the preparation task, the zero-work message, and the failure
   /// handling on throw (a queue warning when jobs already landed; `trackPreparation`
   /// then drains them as an incomplete run, or resolves an empty run as failed). An
   /// unauthorized item does not throw; its scan sets `incompleteScan` itself,
-  /// so the drain after a `.completed(totals)` body still resolves `.failed`.
+  /// so the drain after a completed body still resolves `.failed`.
   ///
   /// Callers supply just (a) the bulk-loop body that does the enqueue work
-  /// and returns `BulkExportOutcome`, (b) the empty/done message factory used
-  /// when nothing was enqueued, and (c) the partial-scan warning factory used
+  /// and returns `BulkExportOutcome`, and (b) the partial-scan warning factory used
   /// when the body throws after partial progress.
   ///
   /// The body checks `gen` after each await to protect its enqueue work.
@@ -1153,7 +1045,6 @@ final class ExportManager {
   private func runBulkExportTask(
     generation gen: Int,
     logTag: String,
-    emptyDoneMessage: @escaping @MainActor () -> String,
     partialScanWarning: @escaping @MainActor () -> String,
     body: @escaping @MainActor () async throws -> BulkExportOutcome
   ) -> Task<Void, Never> {
@@ -1161,10 +1052,10 @@ final class ExportManager {
       guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await body()
-        if self.isCurrent(gen), case .completed(let totals) = outcome,
+        if self.isCurrent(gen), case .completed(let totals, let zeroEnqueueMessage) = outcome,
           totals.totalEnqueued == 0 && !totals.sawUnauthorized
         {
-          self.setEmptyRunMessage(emptyDoneMessage())
+          self.setEmptyRunMessage(zeroEnqueueMessage)
         }
         return .finished
       } catch {
@@ -1213,177 +1104,144 @@ final class ExportManager {
     return (totals, true)
   }
 
-  /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
-  /// whole tree; `.allSharedAlbums` walks the flat top-level shared-album list;
-  /// `.folder` walks one folder's subtree (and short-circuits with a "folder no
-  /// longer exists" message if the id can't be found); `.explicitIds` uses the
-  /// caller-supplied list as-is.
-  ///
-  /// `placementKind` controls which placement family each batch member resolves
-  /// to. Only `.allSharedAlbums` produces `.sharedAlbum`; folder and explicit-id
-  /// sources are user-album-only by design (folders don't contain shared albums;
-  /// the multi-select UI for shared albums isn't a feature today).
-  private enum BulkAlbumSource {
+  /// All collection bulk entry points resolve into the same ordered target loop.
+  private enum CollectionBulkSource {
+    case selection(Set<LibrarySelection>)
+    case allUserCollections
     case allAlbums
     case allSharedAlbums
     case folder(folderId: String)
     case explicitIds([String])
 
-    var placementKind: ExportPlacement.Kind {
+    var logTag: String {
       switch self {
-      case .allSharedAlbums: return .sharedAlbum
-      case .allAlbums, .folder, .explicitIds: return .album
+      case .selection, .allUserCollections: "startExportCollectionsSelection"
+      case .allAlbums: "startExportAllAlbums"
+      case .allSharedAlbums: "startExportAllSharedAlbums"
+      case .folder: "startExportFolder"
+      case .explicitIds: "startExportAlbums"
       }
     }
 
-    func selection(for collectionId: String) -> LibrarySelection {
-      switch placementKind {
-      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
-      default: return .album(collectionId: collectionId)
+    var emptyMessage: String {
+      switch self {
+      case .selection, .allUserCollections: "Everything in the selection is already exported."
+      case .allAlbums: "No albums to export."
+      case .allSharedAlbums: "No shared albums to export."
+      case .folder: "This folder has no albums to export."
+      case .explicitIds: "No albums in selection."
       }
     }
 
-    func scope(for collectionId: String) -> PhotoFetchScope {
-      switch placementKind {
-      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
-      default: return .album(collectionId: collectionId)
+    var allDoneMessage: String {
+      switch self {
+      case .selection, .allUserCollections: "Everything in the selection is already exported."
+      case .allAlbums: "All albums in this destination are already exported."
+      case .allSharedAlbums: "All shared albums in this destination are already exported."
+      case .folder: "All albums in this folder are already exported."
+      case .explicitIds: "All selected albums are already exported."
+      }
+    }
+
+    var partialScanWarning: String {
+      switch self {
+      case .selection, .allUserCollections:
+        "Couldn't scan every item in the selection. Continuing with the photos already queued."
+      default:
+        "Couldn't list every album. Continuing with the photos already queued."
       }
     }
   }
 
-  /// Shared driver for the three bulk-album export entry points
-  /// (`startExportAllAlbums`, `startExportFolder`, `startExportAlbums`). Owns the
-  /// guards, generation tracking, partial-failure recovery, and the messaging
-  /// matrix. Album-id resolution is deferred into the run Task — every source
-  /// dereferences `self.photoLibraryService` from main-actor context, so no
-  /// non-Sendable closure capture crosses an actor boundary.
-  private func enqueueBulkAlbumExport(
-    source: BulkAlbumSource,
-    logTag: String,
-    emptyMessage: String,
-    allDoneMessage: String,
-    selectionOverride: ExportVersionSelection? = nil
+  private func startCollectionBulkExport(
+    source: CollectionBulkSource, selectionOverride: ExportVersionSelection? = nil
   ) {
+    let logTag = source.logTag
     guard canStartExport(in: .collection, logTag: logTag) else { return }
     guard !isPreparingExport else { return }
     let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     runBulkExportTask(
-      generation: gen,
-      logTag: logTag,
-      // Body owns the empty/done message because the variant depends on whether
-      // any albums were *resolved* (`emptyMessage`) vs all resolved are already
-      // done (`allDoneMessage`) — a distinction the helper can't see from
-      // `BulkExportTotals` alone.
-      emptyDoneMessage: { "" },
-      partialScanWarning: {
-        "Couldn't list every album. Continuing with the photos already queued."
-      },
+      generation: gen, logTag: logTag,
+      partialScanWarning: { source.partialScanWarning },
       body: { [weak self] in
         guard let self else { return .stale }
-        let albumIds: [String]
+        let tree: [PhotoCollectionDescriptor]
+        if case .explicitIds = source {
+          tree = []
+        } else {
+          tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
+        }
+        let targets: [LibrarySelection]
         switch source {
-        case .allAlbums:
-          let tree = try await self.photoLibraryService.loadCollectionTree()
-          try self.throwIfCancelledOrStale(gen)
-          albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
-        case .allSharedAlbums:
-          let tree = try await self.photoLibraryService.loadCollectionTree()
-          try self.throwIfCancelledOrStale(gen)
-          albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
-        case .folder(let folderId):
-          let tree = try await self.photoLibraryService.loadCollectionTree()
-          try self.throwIfCancelledOrStale(gen)
-          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
-            // Folder vanished between guard-pass and lookup. Surface the
-            // dedicated message and signal the helper to skip its empty/done
-            // dispatch. Symmetric with the other body exits: any future
-            // awaitable `runExport(context:)` wiring for folder runs still
-            // gets the queue start from `trackPreparation`.
-            self.setEmptyRunMessage("That folder no longer exists.")
-            return .completedWithCustomMessage
+        case .selection(let items):
+          let buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
+            guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
+            else { return [] }
+            return PhotoCollectionDescriptor.albumLocalIds(under: folder)
           }
-          albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
+          targets =
+            (buckets.includesFavorites ? [.favorites] : [])
+            + buckets.albumIds.map { .album(collectionId: $0) }
+            + buckets.sharedAlbumIds.map { .sharedAlbum(collectionId: $0) }
+        case .allUserCollections:
+          targets =
+            [.favorites]
+            + PhotoCollectionDescriptor.albumLocalIds(in: tree).map { .album(collectionId: $0) }
+        case .allAlbums:
+          targets = PhotoCollectionDescriptor.albumLocalIds(in: tree).map {
+            .album(collectionId: $0)
+          }
+        case .allSharedAlbums:
+          targets = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree).map {
+            .sharedAlbum(collectionId: $0)
+          }
+        case .folder(let folderId):
+          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
+            return .completed(.init(), zeroEnqueueMessage: "That folder no longer exists.")
+          }
+          targets = PhotoCollectionDescriptor.albumLocalIds(under: folder).map {
+            .album(collectionId: $0)
+          }
         case .explicitIds(let ids):
-          albumIds = ids
+          targets = ids.map { .album(collectionId: $0) }
         }
-        let result = try await self.runBulkEnqueueLoop(items: albumIds, generation: gen) { id in
-          try await self.enqueueCollection(
-            selection: source.selection(for: id),
-            scope: source.scope(for: id),
-            settings: settings,
-            generation: gen
-          )
+        let result = try await self.runBulkEnqueueLoop(items: targets, generation: gen) { target in
+          try await self.enqueueCollection(selection: target, settings: settings, generation: gen)
         }
-        guard result.completed else { return .stale }
-        if result.totals.totalEnqueued == 0 && !result.totals.sawUnauthorized {
-          self.setEmptyRunMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage)
-        }
-        return .completedWithCustomMessage
+        return result.completed
+          ? .completed(
+            result.totals,
+            zeroEnqueueMessage: targets.isEmpty ? source.emptyMessage : source.allDoneMessage)
+          : .stale
       }
     )
   }
 
   /// Starts an export of a single iCloud shared album. Mirrors `startExportAlbum` but
   /// drives the `.sharedAlbum` enqueue branch so the resolved placement lands under
-  /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums";
-  /// users export them one at a time.
+  /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums"
+  /// and have their own single and batch entry points.
   func startExportSharedAlbum(collectionId: String) {
     guard canStartExport(in: .collection, logTag: "startExportSharedAlbum") else { return }
-    let (settings, gen) = prepareExport()
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return .finished }
-      do {
-        let outcome = try await enqueueCollection(
-          selection: .sharedAlbum(collectionId: collectionId),
-          scope: .sharedAlbum(collectionId: collectionId),
-          settings: settings,
-          generation: gen
-        )
-        guard self.isCurrent(gen) else { return .finished }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This shared album is already exported.")
-        }
-        return .finished
-      } catch {
-        guard self.isCurrent(gen) else { return .finished }
-        handleScanFailure(
-          "Could not scan this shared album. Try exporting again.", scope: "shared-album",
-          error: error)
-        return .failed
-      }
+    startSingleScopeExport(
+      scope: "shared-album", alreadyDoneMessage: "This shared album is already exported.",
+      failureMessage: "Could not scan this shared album. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueCollection(
+        selection: .sharedAlbum(collectionId: collectionId), settings: settings, generation: gen)
     }
   }
 
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
     guard canStartExport(in: .collection, logTag: "startExportAlbum") else { return }
-    let (settings, gen) = prepareExport()
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return .finished }
-      do {
-        let outcome = try await enqueueCollection(
-          selection: .album(collectionId: collectionId),
-          scope: .album(collectionId: collectionId),
-          settings: settings,
-          generation: gen
-        )
-        guard self.isCurrent(gen) else { return .finished }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This album is already exported.")
-        }
-        return .finished
-      } catch {
-        guard self.isCurrent(gen) else { return .finished }
-        handleScanFailure(
-          "Could not scan this album. Try exporting again.", scope: "album", error: error)
-        return .failed
-      }
+    startSingleScopeExport(
+      scope: "album", alreadyDoneMessage: "This album is already exported.",
+      failureMessage: "Could not scan this album. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueCollection(
+        selection: .album(collectionId: collectionId), settings: settings, generation: gen)
     }
   }
 
@@ -1395,7 +1253,6 @@ final class ExportManager {
   @discardableResult
   private func enqueueCollection(
     selection: LibrarySelection,
-    scope: PhotoFetchScope,
     settings: ExportSettingsSnapshot,
     generation gen: Int
   ) async throws -> EnqueueOutcome {
@@ -1421,6 +1278,17 @@ final class ExportManager {
       collections: collections,
       existingPlacements: Array(existingPlacements)
     )
+    let scope: PhotoFetchScope
+    switch selection {
+    case .favorites: scope = .favorites
+    case .album(let id): scope = .album(collectionId: id)
+    case .sharedAlbum(let id): scope = .sharedAlbum(collectionId: id)
+    case .timelineMonth(let year, let month): scope = .timeline(year: year, month: month)
+    case .timelineYear(let year):
+      throw ExportPlacementResolver.ResolutionError.timelineYearNotResolvable(year: year)
+    case .folder(let id):
+      throw ExportPlacementResolver.ResolutionError.folderNotResolvable(collectionId: id)
+    }
 
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(in: scope, generation: gen) { assets in

@@ -899,23 +899,24 @@ Rules:
 
 ## Canonical `start*` entry-point shape
 
-Every fire-and-forget export entry point on `ExportManager` uses `canStartExport(in:logTag:)` for import/store admission and `prepareExport(selectionOverride:)` for shared synchronous preparation. Keep entry-specific exclusive-bulk and empty-input checks between them; rejected starts must preserve their existing message and counter behavior.
+Every fire-and-forget export entry point uses `canStartExport(in:logTag:)` for import/store
+admission. Keep entry-specific checks before preparation: a rejected bulk/empty start must
+preserve messages and counters, and Month's authorized paused-queue resume fast path runs
+immediately after admission so it resumes the existing FIFO rather than scanning again.
 
-```text
-func startExportX(...) {
-  // 1. canStartExport: import conflict, then the correct timeline/collection store.
-  // 2. Entry-specific exclusive-bulk and empty-input checks, in their existing order.
-  // 3. prepareExport: capture settings, clear messages, reset counters only when truly
-  //    idle, then capture generation synchronously.
-  let (settings, gen) = prepareExport(...)
-  // 4. trackPreparation sets isPreparingExport; pass settings intact to
-  //    enqueueX(... generation:). Re-check isCurrent(gen) after every await.
-  //    An .unauthorized scan marks the active run incomplete, so its drain resolves .failed.
-  //    On throw, single-scope starts call handleScanFailure (record and log) and return
-  //    .failed. When the scan ends, trackPreparation drops the flag first, then starts the
-  //    queue, or resolves an active run as .failed when a failed scan queued nothing.
-}
-```
+Single-scope wrappers then call `startSingleScopeExport` with scope identifiers, exact
+already-done/failure messages and an enqueue closure. The helper calls `prepareExport`
+synchronously, then `trackPreparation`; the closure receives the promoted manager plus
+captured settings and generation, so wrappers do not retain the manager through their
+closure captures. The owned task retains the existing weak-self entry and cancellation
+checks. An already-complete scan shows its scope's message; an unauthorized scan marks the
+run incomplete without claiming it is already done. Throws record/log the scope failure.
+
+`trackPreparation` remains the lifecycle owner: register preparation immediately, drop its
+flag before queue start/finalization, then drain queued work or resolve a failed empty run.
+A stale task cannot mutate or finalize a replacement run. New single-scope entry points
+should use this helper after their admission and any special synchronous rejection/resume
+checks rather than copying task/failure scaffolding.
 
 Favorites is the only single-scope start AutoSync runs through `runExport`; the shared failure rule keeps the others safe if one is ever routed there.
 
@@ -923,7 +924,28 @@ Favorites is the only single-scope start AutoSync runs through `runExport`; the 
 
 Preparation has no awaits. Capture settings before publishing messages, and capture generation before dispatching any asynchronous work. The idle check is `!isRunning && !isProcessing && pendingJobs.isEmpty`: paused pending work accumulates counters. Never move preparation ahead of entry-specific rejection checks or combine timeline and collection readiness.
 
-Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls, and refuse to start while another scan is preparing. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the empty/done message and the partial-failure warning on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`. An item whose scan returns `.unauthorized`, including one reached after Photos access is lost mid-loop, marks the active run incomplete, so the bulk drain resolves `.failed` even though the jobs already queued still export.
+Timeline bulk dispatchers (`startExportAll`, `startExportTimelineSelection`) and the one
+collection driver (`startCollectionBulkExport`) refuse another bulk start while preparation
+is active. `CollectionBulkSource` resolves selection, all-user collections, album/shared-album
+inventories, folders and explicit IDs into one ordered target loop: Favorites, user albums,
+then shared albums. Explicit IDs preserve caller dedup/order and do not load an inventory
+before their per-album resolver. Folder and explicit sources remain user-album-only.
+
+`runBulkExportTask` owns utility-priority preparation, zero-work feedback and thrown-scan
+warnings. A completed body returns its totals and intended zero-work message as data;
+missing-folder feedback uses the same path, without a custom-message sentinel or empty
+message placeholder. The helper publishes only for a current generation with no queued
+jobs and no unauthorized scopes. `runBulkEnqueueLoop` preserves cache release/yield per
+item, cancellation checks and sticky totals; Timeline selection still chains year/month
+passes. An unauthorized item marks the active run incomplete, so the drain resolves failed
+while any already-queued jobs still export.
+
+The three typed enqueue planners share `planAssetsProgressively` without hiding their
+placement rules. Month uses one fixed timeline placement; Year assigns a month per dated
+asset; collections resolve one placement from their selection and derive its fetch scope.
+Only nonempty collection work admits placement metadata, after the complete scan under
+mutation admission. Completion is checked before retry eligibility, and a partial scope
+never appends jobs or commits its skip count/metadata.
 
 ## Manual export feedback
 
