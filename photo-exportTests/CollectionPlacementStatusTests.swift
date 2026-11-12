@@ -22,6 +22,7 @@ import Testing
       let folderId: String?
       var showsSidebar = true
       var showsFolderPane = true
+      var showsCollectionPane = true
       let tick: RenderTick
       let records: CollectionExportRecordStore
       let counter: BodyInvalidationCounter
@@ -35,11 +36,13 @@ import Testing
             CollectionsSidebarView(selectionSet: $sidebarSelection, exportManager: manager)
               .frame(width: 260)
           }
-          CollectionContentView(
-            selection: selection, title: "Current album", versionSelection: .edited,
-            livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
-            photoLibraryService: service
-          ).equatable().frame(width: 350)
+          if showsCollectionPane {
+            CollectionContentView(
+              selection: selection, title: "Current album", versionSelection: .edited,
+              livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
+              photoLibraryService: service
+            ).equatable().frame(width: 350)
+          }
           if let folderId, showsFolderPane {
             FolderContentView(
               folderId: folderId, title: "Current folder", selection: $folderSelection,
@@ -174,13 +177,15 @@ import Testing
       }
 
       func show(
-        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true
+        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true,
+        collectionPane: Bool = true
       ) {
         let hosted = NSHostingView(
           rootView:
             Host(
               service: service, manager: manager, selection: selectionOverride ?? selection,
               folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane,
+              showsCollectionPane: collectionPane,
               tick: tick, records: records, counter: counter
             )
             .environment(library).environment(timeline).environment(records)
@@ -189,7 +194,8 @@ import Testing
             .environment(\.bodyInvalidationCounter, counter)
             .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults))
         let hostWindow = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 1000, height: 800),
+          contentRect: NSRect(
+            x: -10000, y: -10000, width: collectionPane ? 1000 : 350, height: 800),
           styleMask: [.borderless], backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
@@ -706,6 +712,101 @@ import Testing
       }
       try #require(pruned)
       #expect(NativeViewAccess.containsText("1 selected · 1 album · 0/2 exported", in: window))
+    }
+
+    /// The caller must pass current-placement status to each real tile, independently.
+    @Test(.timeLimit(.minutes(1)))
+    func mountedFolderBadgesFollowCurrentPlacementAndKeepTheCompletedSibling() async throws {
+      let f = try await Fixture(change: .ancestorRename)
+      let images = AsyncCheckpoint()
+      f.service.decodedThumbnailOverride = { _, _, _ in
+        await images.enter()
+        return nil
+      }
+      try await withCleanup {
+        f.set(f.old, .done)
+        f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
+        f.records.flushPendingNotifications()
+        f.show(sidebar: false, collectionPane: false)
+        try #require(
+          await observe(in: f.window) {
+            folderSummary("1/2", in: f)
+              && [f.asset.id, f.unchangedAsset.id].allSatisfy { id in
+                f.service.decodedThumbnailCalls.contains {
+                  $0.assetId == id && $0.deliveryMode == .highQuality
+                }
+              }
+          })
+        try await f.barrier()
+        let view = try #require(f.window?.contentView)
+        func bitmap() throws -> NSBitmapImageRep {
+          view.layoutSubtreeIfNeeded()
+          let raw = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+          view.cacheDisplay(in: view.bounds, to: raw)
+          // PNG decoding normalizes extended-range host pixels before examining the real glyph.
+          return try #require(
+            raw.representation(using: .png, properties: [:]).flatMap(NSBitmapImageRep.init(data:)))
+        }
+        func pixels(_ image: NSBitmapImageRep, _ region: CGRect) throws -> Data {
+          let crop = try #require(image.cgImage?.cropping(to: region))
+          return try #require(
+            NSBitmapImageRep(cgImage: crop).representation(using: .png, properties: [:]))
+        }
+        let initial = try bitmap()
+        var points: [CGPoint] = []
+        for y in 0..<initial.pixelsHigh {
+          for x in (initial.pixelsWide / 2)..<initial.pixelsWide {
+            guard let color = initial.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            if color.greenComponent > 0.35 && color.greenComponent > color.redComponent + 0.15
+              && color.greenComponent > color.blueComponent + 0.15
+            {
+              points.append(CGPoint(x: x, y: y))
+            }
+          }
+        }
+        let left = try #require(points.map(\.x).min()), top = try #require(points.map(\.y).min())
+        let right = try #require(points.map(\.x).max()),
+          bottom = try #require(points.map(\.y).max())
+        let stableRegion = CGRect(
+          x: left - 6, y: top - 6, width: right - left + 13, height: bottom - top + 13)
+        // Two 144pt covers share the 350pt pane's 16pt outer padding and inter-column gap.
+        let columnStep = (view.bounds.width - 32 - 16) / 2 + 16
+        let changedRegion = stableRegion.offsetBy(
+          dx: -columnStep * CGFloat(initial.pixelsWide) / view.bounds.width, dy: 0)
+        let stable = try pixels(initial, stableRegion), missing = try pixels(initial, changedRegion)
+        try #require(
+          missing != stable, "Only the unchanged album starts with a real completed badge")
+        f.set(f.current, .done)
+        f.records.flushPendingNotifications()
+        try #require(await observe(in: f.window) { folderSummary("2/2", in: f) })
+        try await f.barrier()
+        let completed = try bitmap()
+        #expect(try pixels(completed, changedRegion) == stable)
+        #expect(try pixels(completed, stableRegion) == stable)
+        let folder = try #require(f.currentTree.first)
+        f.service.collectionTree = [
+          PhotoCollectionDescriptor(
+            id: folder.id, localIdentifier: folder.localIdentifier, title: folder.title,
+            kind: .folder,
+            pathComponents: folder.pathComponents,
+            children: folder.children.map { child in
+              guard child.localIdentifier == "target" else { return child }
+              return PhotoCollectionDescriptor(
+                id: child.id, localIdentifier: child.localIdentifier,
+                title: "Renamed", kind: .album, pathComponents: child.pathComponents, children: [])
+            })
+        ]
+        f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
+        try #require(await observe(in: f.window) { folderSummary("1/2", in: f) })
+        try await f.barrier()
+        let renamed = try bitmap()
+        #expect(try pixels(renamed, changedRegion) == missing)
+        #expect(try pixels(renamed, stableRegion) == stable)
+      } cleanup: {
+        f.close()
+        await images.releaseAll()
+      }
     }
 
     enum FolderCountSurface: CaseIterable { case folderPane, sidebarBadge }
