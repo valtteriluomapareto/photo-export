@@ -100,7 +100,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func emptyRecordsAndEmptyDirectoryDoesNotFlag() async {
@@ -112,7 +112,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func emptyRecordsAndNonEmptyDirectoryFlags() async {
@@ -148,7 +148,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func confirmingCurrentDestinationClearsTheFlag() async {
@@ -210,7 +210,7 @@ struct DestinationSafetyMonitorTests {
     for _ in 0..<10 { await Task.yield() }
 
     // Final state reflects fp2 (empty dir → no flag), not fp1.
-    #expect(monitor.needsSafetyConfirmation == false)
+    #expect(monitor.verdict == .init(stableId: fp2.id, needsConfirmation: false))
   }
 
   // MARK: - Stable-id keying (#127)

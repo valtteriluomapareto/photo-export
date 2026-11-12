@@ -398,8 +398,8 @@ struct PublisherParityTests {
       destinationManager: manager, lifecycleCoordinator: lifecycle, safetyMonitor: monitor)
     // The rows below start from a checked destination.
     monitor.attach()
-    await withCleanup {
-      #expect(
+    try await withCleanup {
+      try #require(
         await eventually("destination checked") {
           monitor.verdict.stableId == manager.identity.stableId
         })

@@ -89,9 +89,10 @@ struct NewDestinationSafetyHoldTests {
       safetyMonitor.attach()
       #expect(
         await eventually("launch run scheduled") {
-          if case .scheduled(.appLaunch, _) = autoSync.state { return true }
+          if case .scheduled = autoSync.state { return true }
           return false
         })
+      if case .scheduled(let reason, _) = autoSync.state { #expect(reason == .appLaunch) }
       builder.clock.advance(by: AutoSyncReducer.debounceDelay(for: .appLaunch))
       #expect(await eventually("launch run") { runner.receivedContexts.count == 1 })
       #expect(runner.receivedContexts.first?.reason == .appLaunch)
@@ -109,13 +110,15 @@ struct NewDestinationSafetyHoldTests {
       let scanning = await scanGate.waitForEnter(count: 1)
       try #require(scanning)
 
-      // Nothing is scheduled while the listing is held, even past the destination debounce or
-      // after Export Now.
+      // Nothing is scheduled while the listing is held, not even after Export Now.
+      #expect(
+        await eventually("waiting for the check") {
+          autoSync.state == .waiting(.destinationChecking)
+        })
       #expect(builder.clock.pendingCount == 0)
-      builder.clock.advance(by: 60)
       autoSync.runNow()
-      builder.clock.advance(by: 60)
-      for _ in 0..<10 { await Task.yield() }
+      #expect(builder.clock.pendingCount == 0)
+      #expect(autoSync.state == .waiting(.destinationChecking))
       #expect(runner.receivedContexts.count == 1, "no run before the new folder is checked")
 
       // The listing finds files: the folder needs the user's confirmation.

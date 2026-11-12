@@ -60,7 +60,7 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
       let safety: DestinationSafetyState
       if conflict != nil {
         safety = .unsafeMigrationConflict
-      } else if identity.stableId != nil, verdict.stableId != identity.stableId {
+      } else if verdict.stableId != identity.stableId {
         safety = .checking
       } else if verdict.needsConfirmation {
         safety = .unsafeNeedsConfirmation

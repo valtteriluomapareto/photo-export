@@ -30,11 +30,7 @@ final class DestinationSafetyMonitor: ObservableObject {
   }
 
   @Published private(set) var verdict = Verdict(stableId: nil, needsConfirmation: false)
-  /// Whether the current destination needs the user's confirmation. False while it is still
-  /// being checked, so confirming never covers a folder nobody has looked at.
-  var needsSafetyConfirmation: Bool {
-    verdict.needsConfirmation && verdict.stableId == currentIdentity.stableId
-  }
+  var needsSafetyConfirmation: Bool { verdict.needsConfirmation }
   /// `$verdict` for subscribers outside this type: synchronous, delivered before the value is
   /// stored, and replaying the current value (pinned by `PublisherParityTests`).
   var verdictPublisher: AnyPublisher<Verdict, Never> {
@@ -141,7 +137,8 @@ final class DestinationSafetyMonitor: ObservableObject {
   /// User confirmed the destination's existing contents are theirs. Persist
   /// the confirmation and clear the flag.
   func confirmCurrentDestination() {
-    guard let id = currentIdentity.stableId else { return }
+    // Only a destination that has been checked can be confirmed.
+    guard let id = currentIdentity.stableId, verdict.stableId == id else { return }
     do {
       try confirmationStore.confirm(destinationId: id)
       log.info("User confirmed destination \(id, privacy: .public)")

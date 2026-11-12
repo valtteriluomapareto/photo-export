@@ -106,7 +106,7 @@ When retry-history access returns, Auto Export combines saved history with failu
 
 Photo Export will **never delete or overwrite** files at your destination. This holds for both manual and Auto Export runs.
 
-If you point Photo Export at a folder that already contains user-visible files (an existing backup, a folder with unrelated content), the app pauses and asks you to **confirm this destination** before it adds anything. Hidden system files like `.DS_Store` don't trigger the prompt. The confirmation persists for that destination — switching to it again later won't re-prompt. If you cancel, Auto Export stays blocked until you confirm or pick a different folder. Until a newly picked folder has been checked, Auto Export waits (_checking the destination_); on a slow network share or a sleeping disk this can take a few seconds.
+If you point Photo Export at a folder that already contains user-visible files (an existing backup, a folder with unrelated content), the app pauses and asks you to **confirm this destination** before it adds anything. Hidden system files like `.DS_Store` don't trigger the prompt. The confirmation persists for that destination — switching to it again later won't re-prompt. If you cancel, Auto Export stays blocked until you confirm or pick a different folder. Until a newly picked folder has been checked, Auto Export waits (_checking the destination_).
 
 For folders the app has been writing to before, no prompt appears — its export records identify the destination as one of its own.
 
