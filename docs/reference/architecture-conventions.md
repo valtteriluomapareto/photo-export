@@ -266,7 +266,17 @@ focused year shows a summary, while months and collections show grids sharing
 `MonthViewModel`. `ThumbnailView` and `AssetDetailView` own previews;
 `ExportToolbarView` exposes actions and progress. `RecordStoreAlertHost` presents
 history recovery for either store, and `ImportView` presents import progress/results.
-See [`Views/`](../../photo-export/Views/) for the feature-specific views.
+Small value policies own captions, eligibility and typed action choices. Actual Buttons
+retain side effects, and small production control children can be hosted directly for
+native wiring tests. Timeline/collection summaries and tiles keep their own store reads;
+presentation helpers do not own stores, tasks or broad snapshots. Month and album/folder
+cover adapters share rendering and bounded image loading while keeping their distinct
+reset, query and cancellation lifetimes.
+
+DEBUG view instrumentation measures body/summary-scan budgets plus the finite lifecycle
+completion witnesses needed to await obsolete work. It records no text or action callbacks.
+See [`Views/`](../../photo-export/Views/) for the feature-specific views and the
+[UI test strategy](../../CONTRIBUTING.md#ui-behavior-test-strategy) for coverage boundaries.
 
 ## Design rationale
 

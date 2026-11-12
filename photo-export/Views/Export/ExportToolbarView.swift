@@ -73,10 +73,6 @@ struct ExportToolbarView: ToolbarContent {
   @ViewBuilder
   private var destinationIndicator: some View {
     let destinationHelp = exportDestinationManager.destinationHelp
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([destinationHelp], for: "destination-help")
-    #endif
     if let url = exportDestinationManager.selectedFolderURL {
       Button {
         exportDestinationManager.selectFolder()
@@ -125,8 +121,6 @@ struct ExportToolbarView: ToolbarContent {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("export-toolbar-actions")
-      bodyCounter?.recordText([exportHelp], for: "toolbar-export-help")
-      bodyCounter?.recordAction("toolbar-export", action: handlePrimaryAction)
     #endif
     // Internal spacing 12pt rather than 8pt — closer to macOS's default
     // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt
@@ -140,9 +134,7 @@ struct ExportToolbarView: ToolbarContent {
       .controlSize(.large)
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
-      #if DEBUG
-        .background { ExportControlProbe(key: "toolbar-export-control", help: exportHelp) }
-      #endif
+      .accessibilityIdentifier("manual-export-primary")
       .disabled(!isPrimaryActionEnabled)
       .help(exportHelp)
       .confirmationDialog(
@@ -181,10 +173,6 @@ struct ExportToolbarView: ToolbarContent {
           }
         } label: {
           let pauseLabel = exportManager.isPaused ? "Resume" : "Pause"
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordText([pauseLabel], for: "toolbar-pause-label")
-          #endif
           Label(
             pauseLabel,
             systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
@@ -219,29 +207,21 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
-  /// The primary action exports into the section's history.
-  private var primaryAvailability: ManualExportAvailability {
-    ManualExportAvailability(
-      destinationCanExport: exportDestinationManager.canExportNow,
-      history: historyState)
+  private var presentation: ManualToolbarPresentation {
+    ManualToolbarPresentation(
+      section: section, selectionSet: selectionSet, focusedSelection: focusedSelection,
+      versionSelection: exportManager.versionSelection,
+      availability: ManualExportAvailability(
+        destinationCanExport: exportDestinationManager.canExportNow, history: historyState),
+      destinationHelp: exportDestinationManager.exportUnavailableHelp,
+      isImporting: exportManager.isImporting,
+      hasActiveExportWork: exportManager.hasActiveExportWork,
+      activeRunSource: exportManager.activeRunContext?.source)
   }
 
-  /// Manual actions remain available during Auto Export so the user can confirm
-  /// superseding it. Manual work, import, or unavailable destination/history disables
-  /// the action. See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
-  private var isPrimaryActionEnabled: Bool {
-    guard primaryAvailability.canStart, !exportManager.isImporting else {
-      return false
-    }
-    // hasActiveExportWork = true && activeRunContext?.source == .autoSync
-    // means AutoSync is running — we WANT the button clickable so the
-    // confirmation sheet can fire. Disable only when a non-autoSync run
-    // (fire-and-forget manual or .manual-sourced runExport) is in flight.
-    let manualOrUnknownInFlight =
-      exportManager.hasActiveExportWork
-      && exportManager.activeRunContext?.source != .autoSync
-    return !manualOrUnknownInFlight
-  }
+  private var isPrimaryActionEnabled: Bool { presentation.isEnabled }
+  private var primaryActionLabel: String { presentation.label }
+  private var primaryActionHelpText: String { presentation.help }
 
   private func handlePrimaryAction() {
     if exportManager.manualExportShouldConfirmSupersede {
@@ -252,128 +232,17 @@ struct ExportToolbarView: ToolbarContent {
   }
 
   private func startManualExport() {
-    switch section {
-    case .timeline:
-      let timelineItems = selectionSet.filter(\.isTimeline)
-      if timelineItems.count >= 2 {
-        let buckets = TimelineSelectionBuckets.normalize(timelineItems)
-        exportManager.startExportTimelineSelection(
-          years: buckets.years, months: buckets.months)
-        return
-      }
-      // With 0 OR 1 sidebar items selected, the toolbar's primary
-      // action is the global "Export All". Single-item dispatch (Export
-      // Month, Export Year) remains available via the per-pane button inside
-      // `MonthContentView` / `YearContentView`. Without this, selecting any
-      // sidebar row hid "Export All" entirely — the original report.
+    switch presentation.action {
+    case .timelineAll:
       exportManager.startExportAll()
-    case .collections:
-      let collectionItems = selectionSet.filter(\.isCollection)
-      if collectionItems.count >= 2 {
-        exportManager.startExportCollectionsSelection(items: collectionItems)
-        return
-      }
-      // Shared albums are the one single-select case that keeps its per-item
-      // dispatch: they're excluded from the "Export All Albums" scope (per
-      // the iCloud reduced-fidelity caveat), so flipping the toolbar button
-      // to a global action that silently skips the user's selection is
-      // actively worse than just routing to the single-album call.
-      if case .sharedAlbum(let id) = focusedSelection {
-        exportManager.startExportSharedAlbum(collectionId: id)
-        return
-      }
-      // Everything else (album, folder, favorites, no selection) routes to a
-      // synthesized buckets dispatch that includes Favorites + every user
-      // album, skipping shared albums. Per-pane buttons in
-      // `CollectionContentView` / `FolderContentView` still expose the
-      // single-item action.
+    case .timelineSelection(let buckets):
+      exportManager.startExportTimelineSelection(years: buckets.years, months: buckets.months)
+    case .userCollections:
       exportManager.startExportAllUserCollections()
+    case .collectionsSelection(let items):
+      exportManager.startExportCollectionsSelection(items: items)
+    case .sharedAlbum(let id):
+      exportManager.startExportSharedAlbum(collectionId: id)
     }
   }
-
-  private var primaryActionLabel: String {
-    switch section {
-    case .timeline:
-      let timelineItems = selectionSet.filter(\.isTimeline)
-      if timelineItems.count >= 2 {
-        let buckets = TimelineSelectionBuckets.normalize(timelineItems)
-        return "Export \(buckets.count) \(buckets.count == 1 ? "Item" : "Items")"
-      }
-      // The toolbar's primary action is the global "Export All"
-      // when 0 or 1 sidebar items are selected. Per-pane "Export Month" /
-      // "Export Year" buttons handle the single-item action.
-      return "Export All"
-    case .collections:
-      let collectionItems = selectionSet.filter(\.isCollection)
-      if collectionItems.count >= 2 {
-        // Multi-select wins over the per-kind label so the toolbar advertises the
-        // batch action. Folder expansion is deferred to dispatch time.
-        return "Export \(collectionItems.count) Items"
-      }
-      // Shared albums are excluded from the global "Export All Albums" scope;
-      // keep the per-item label so a user staring at a shared-album pane
-      // doesn't see the toolbar advertise an action that would skip it.
-      // Per-pane "Export Album" / "Export Folder" / "Export Favorites"
-      // buttons in `CollectionContentView` / `FolderContentView` handle the
-      // other single-item actions.
-      if case .sharedAlbum = focusedSelection { return "Export Shared Album" }
-      return "Export All Albums"
-    }
-  }
-
-  private var primaryActionHelpText: String {
-    if let unavailable = primaryAvailability.unavailableHelp(
-      destinationHelp: exportDestinationManager.exportUnavailableHelp)
-    {
-      return unavailable
-    }
-    let multiCount: Int = {
-      switch section {
-      case .timeline: return selectionSet.filter(\.isTimeline).count
-      case .collections: return selectionSet.filter(\.isCollection).count
-      }
-    }()
-    if multiCount >= 2 {
-      switch section {
-      case .timeline:
-        return
-          "Export every photo across the selected years and months. Years cover their months — selecting a year and a month inside it exports the whole year."
-      case .collections:
-        return
-          "Export every photo in the selected collections. Selected folders are expanded to their nested albums; Favorites and shared albums are included if selected."
-      }
-    }
-    // Shared album single-select keeps its per-item dispatch (and label).
-    if case .sharedAlbum = focusedSelection {
-      // The "Include originals" toggle is a no-op for shared albums; surface that
-      // here so the version-selection state doesn't read as a contradiction.
-      return
-        "Export every photo in this shared album. iCloud only provides downscaled "
-        + "JPEGs for shared photos; Include originals is ignored."
-    }
-    switch (section, exportManager.versionSelection) {
-    case (.timeline, .edited):
-      return
-        "Export every photo in the timeline (year/month) view, in the version "
-        + "Photos shows. Use the in-pane Export Month or Export Year button "
-        + "for a smaller scope."
-    case (.timeline, .editedWithOriginals):
-      return
-        "Export every photo in the timeline (year/month) view, plus a _orig "
-        + "companion for any photo edited in Photos. Use the in-pane Export "
-        + "Month or Export Year button for a smaller scope."
-    case (.collections, .edited):
-      return
-        "Export Favorites and every user album (including albums nested in "
-        + "folders), in the version Photos shows. Shared albums are excluded "
-        + "— use the Export Shared Album button on their pane."
-    case (.collections, .editedWithOriginals):
-      return
-        "Export Favorites and every user album (including albums nested in "
-        + "folders), plus a _orig companion for any photo edited in Photos. "
-        + "Shared albums are excluded — use the Export Shared Album button "
-        + "on their pane."
-    }
-  }
-
 }

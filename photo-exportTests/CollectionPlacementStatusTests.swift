@@ -22,6 +22,7 @@ import Testing
       let folderId: String?
       var showsSidebar = true
       var showsFolderPane = true
+      var showsCollectionPane = true
       let tick: RenderTick
       let records: CollectionExportRecordStore
       let counter: BodyInvalidationCounter
@@ -35,11 +36,13 @@ import Testing
             CollectionsSidebarView(selectionSet: $sidebarSelection, exportManager: manager)
               .frame(width: 260)
           }
-          CollectionContentView(
-            selection: selection, title: "Current album", versionSelection: .edited,
-            livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
-            photoLibraryService: service
-          ).equatable().frame(width: 350)
+          if showsCollectionPane {
+            CollectionContentView(
+              selection: selection, title: "Current album", versionSelection: .edited,
+              livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
+              photoLibraryService: service
+            ).equatable().frame(width: 350)
+          }
           if let folderId, showsFolderPane {
             FolderContentView(
               folderId: folderId, title: "Current folder", selection: $folderSelection,
@@ -174,21 +177,25 @@ import Testing
       }
 
       func show(
-        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true
+        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true,
+        collectionPane: Bool = true
       ) {
         let hosted = NSHostingView(
           rootView:
             Host(
               service: service, manager: manager, selection: selectionOverride ?? selection,
               folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane,
+              showsCollectionPane: collectionPane,
               tick: tick, records: records, counter: counter
             )
             .environment(library).environment(timeline).environment(records)
             .environment(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
+            .environment(\.bodyInvalidationCounter, counter)
+            .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults))
         let hostWindow = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 1000, height: 800),
+          contentRect: NSRect(
+            x: -10000, y: -10000, width: collectionPane ? 1000 : 350, height: 800),
           styleMask: [.borderless], backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
@@ -255,11 +262,10 @@ import Testing
       if let stable = f.unchanged { f.set(stable, .done, assetId: "unchanged-asset") }
       f.records.flushPendingNotifications()
       f.show(folderPane: false)
-      let changedKey = folder ? "folder-sidebar:folder:folder" : "collection-sidebar:album:target"
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText["collection-sidebar:album:other"] == ["notStarted(total: 1)"]
-            && f.counter.renderedText[changedKey] != nil
+          badge("1", id: "album:other", in: f)
+            && badge(folder ? "1/2" : "1", id: folder ? "folder:folder" : "album:target", in: f)
         })
       try await f.barrier()
       let otherBodies = f.counter.count(for: "collection-row-body:album:other")
@@ -271,7 +277,7 @@ import Testing
       let revisionKey = "sidebar-publication:\(f.records.mutationCounter)"
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText[changedKey] == ["complete"]
+          badge("Fully exported", id: folder ? "folder:folder" : "album:target", in: f)
             && f.counter.count(for: revisionKey) > 0
         })
       try await f.barrier()
@@ -426,56 +432,55 @@ import Testing
       #expect(released == nil)
     }
 
-    private func loaded(_ f: Fixture) async throws {
-      let ready = await observe {
-        guard f.counter.renderedText["thumbnail-exported:changed-asset"] != nil else {
-          return false
-        }
-        if let id = f.sidebarFolderId {
-          return f.counter.renderedText["folder-summary"]?.first?.hasSuffix("/2") == true
-            && f.counter.renderedText["folder-sidebar:\(id)"] != nil
-        }
-        let id = f.current.kind == .sharedAlbum ? "shared:target" : "album:target"
-        return f.counter.renderedText["collection-sidebar:\(id)"] != nil
+    private func summary(_ value: String, in f: Fixture) -> Bool {
+      f.window.map { NativeViewAccess.containsText(value + " exported", in: $0) } == true
+    }
+
+    private func badge(_ text: String, id: String, in f: Fixture) -> Bool {
+      guard let window = f.window else { return false }
+      return NativeViewAccess.identifiedElements("collection-row:" + id, in: window).contains {
+        element in
+        NativeViewAccess.texts(in: element).contains { $0 == text || $0.hasSuffix(", " + text) }
       }
-      try #require(ready, "Wait for actual asset/count rendering before checking status")
+    }
+
+    private func folderSummary(_ value: String, albums: Int = 2, in f: Fixture) -> Bool {
+      guard let window = f.window else { return false }
+      return NativeViewAccess.containsText("\(albums) albums · " + value + " exported", in: window)
+    }
+
+    private func loaded(_ f: Fixture) async throws {
+      try #require(
+        await observe(in: f.window) {
+          f.counter.count(for: "asset-tile-body:changed-asset") > 0
+            && (summary("0/1", in: f) || summary("1/1", in: f))
+        }, "Wait for the actual asset tile and native summary before checking status")
     }
 
     private func expectStatus(
       _ f: Fixture, exported: Bool, currentExists: Bool = true,
       sourceLocation: SourceLocation = #_sourceLocation
     ) async {
-      let expected = [exported ? "1/1" : "0/1"]
-      _ = await eventually("collection summary \(expected)", sourceLocation: sourceLocation) {
-        f.counter.renderedText["collection-summary"] == expected
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == [String(exported)]
+      if !currentExists {
+        #expect(
+          f.records.currentGridPlacement(for: f.selection, collections: f.currentTree) == nil,
+          sourceLocation: sourceLocation)
       }
       #expect(
-        f.counter.renderedText["collection-summary"] == expected, sourceLocation: sourceLocation)
-      #expect(
-        f.counter.renderedText["thumbnail-exported:changed-asset"] == [String(exported)],
+        await observe(in: f.window) { summary(exported ? "1/1" : "0/1", in: f) },
         sourceLocation: sourceLocation)
       if let id = f.sidebarFolderId {
-        let expectedFolder = exported ? "2/2" : "1/2"
-        let expectedBadge = exported ? "complete" : "partial(exported: 1, total: 2)"
-        let settled = await observe {
-          f.counter.renderedText["folder-summary"] == [expectedFolder]
-            && f.counter.renderedText["folder-sidebar:\(id)"] == [expectedBadge]
-            && f.counter.renderedText["folder-tile-exported:album:target"] == [String(exported)]
-            && f.counter.renderedText["folder-tile-exported:album:stable"] == ["true"]
-        }
-        #expect(settled, sourceLocation: sourceLocation)
         #expect(
-          f.counter.renderedText["folder-tile-exported:album:stable"] == ["true"],
-          sourceLocation: sourceLocation)
+          await observe(in: f.window) {
+            folderSummary(exported ? "2/2" : "1/2", in: f)
+              && badge(exported ? "Fully exported" : "1/2", id: id, in: f)
+          }, sourceLocation: sourceLocation)
       } else {
         let id = f.current.kind == .sharedAlbum ? "shared:target" : "album:target"
-        let expectedBadge =
-          exported ? "complete" : currentExists ? "notStarted(total: 1)" : "count:1"
-        let settled = await observe {
-          f.counter.renderedText["collection-sidebar:\(id)"] == [expectedBadge]
-        }
-        #expect(settled, sourceLocation: sourceLocation)
+        #expect(
+          await observe(in: f.window) {
+            badge(exported ? "Fully exported" : "1", id: id, in: f)
+          }, sourceLocation: sourceLocation)
       }
     }
 
@@ -589,7 +594,7 @@ import Testing
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
-      let initial = await observe { f.counter.renderedText["collection-summary"] == ["1/1"] }
+      let initial = await observe { summary("1/1", in: f) }
       try #require(initial)
       f.service.collectionTree = f.currentTree
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
@@ -607,8 +612,7 @@ import Testing
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
         f.library.libraryRefresh.flush()
         let missing = await observe {
-          f.counter.renderedText["collection-summary"] == ["0/1"]
-            && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["false"]
+          summary("0/1", in: f)
         }
         #expect(missing)
         #expect(f.records.mutationCounter == currentMutations)
@@ -634,25 +638,22 @@ import Testing
       f.records.flushPendingNotifications()
       f.show(selectionOverride: .favorites)
       let original = await observe {
-        f.counter.renderedText["collection-summary"] == ["1/1"]
-          && f.counter.renderedText["collection-sidebar:favorites"] == ["complete"]
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["true"]
+        summary("1/1", in: f)
+          && badge("Fully exported", id: "favorites", in: f)
       }
       try #require(original)
       try await f.records.flush()
       await f.records.configureAndWait(for: "B")
       let other = await observe {
-        f.counter.renderedText["collection-summary"] == ["0/1"]
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["false"]
-          && f.counter.renderedText["collection-sidebar:favorites"] == ["count:1"]
+        summary("0/1", in: f)
+          && badge("1", id: "favorites", in: f)
       }
       #expect(other)
       #expect(f.records.placements.isEmpty)
       await f.records.configureAndWait(for: "A")
       let restored = await observe {
-        f.counter.renderedText["collection-summary"] == ["1/1"]
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["true"]
-          && f.counter.renderedText["collection-sidebar:favorites"] == ["complete"]
+        summary("1/1", in: f)
+          && badge("Fully exported", id: "favorites", in: f)
       }
       #expect(restored)
       #expect(
@@ -674,20 +675,28 @@ import Testing
       defer { f.close() }
       f.useLiveCounts()
       f.show(sidebar: false)
-      let loaded = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
+      let loaded = await observe(in: f.window) { folderSummary("0/2", in: f) }
       try #require(loaded)
-      let selectAll = try #require(f.counter.renderedActions["folder-select-all"])
-      selectAll()
-      let both = ["album:stable", "album:target"]
-      let selected = await observe { f.counter.renderedText["folder-selection"] == both }
+      let window = try #require(f.window)
+      let selectAll = try #require(
+        NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+          windowNumber: window.windowNumber, context: nil, characters: "a",
+          charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+      #expect(window.performKeyEquivalent(with: selectAll))
+      let selected = await observe(in: window) {
+        NativeViewAccess.containsText("2 selected · 2 albums · 0/2 exported", in: window)
+      }
       try #require(selected)
 
       f.service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
       f.library.invalidateCache()
       f.library.libraryRefresh.flush()
-      let refreshed = await observe { f.counter.renderedText["folder-summary"] == ["0/3"] }
+      let refreshed = await observe(in: window) {
+        NativeViewAccess.containsText("2 selected · 2 albums · 0/3 exported", in: window)
+      }
       try #require(refreshed)
-      #expect(f.counter.renderedText["folder-selection"] == both)
+      #expect(NativeViewAccess.containsText("2 selected · 2 albums · 0/3 exported", in: window))
 
       let folder = try #require(f.service.collectionTree.first)
       f.service.collectionTree = [
@@ -698,9 +707,106 @@ import Testing
       ]
       f.library.invalidateCache()
       f.library.libraryRefresh.flush()
-      let pruned = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
+      let pruned = await observe(in: window) {
+        NativeViewAccess.containsText("1 selected · 1 album · 0/2 exported", in: window)
+      }
       try #require(pruned)
-      #expect(f.counter.renderedText["folder-selection"] == ["album:stable"])
+      #expect(NativeViewAccess.containsText("1 selected · 1 album · 0/2 exported", in: window))
+    }
+
+    /// The caller must pass current-placement status to each real tile, independently.
+    @Test(.timeLimit(.minutes(1)))
+    func mountedFolderBadgesFollowCurrentPlacementAndKeepTheCompletedSibling() async throws {
+      let f = try await Fixture(change: .ancestorRename)
+      let images = AsyncCheckpoint()
+      f.service.decodedThumbnailOverride = { _, _, _ in
+        await images.enter()
+        return nil
+      }
+      try await withCleanup {
+        f.set(f.old, .done)
+        f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
+        f.records.flushPendingNotifications()
+        f.show(sidebar: false, collectionPane: false)
+        try #require(
+          await observe(in: f.window) {
+            folderSummary("1/2", in: f)
+              && [f.asset.id, f.unchangedAsset.id].allSatisfy { id in
+                f.service.decodedThumbnailCalls.contains {
+                  $0.assetId == id && $0.deliveryMode == .highQuality
+                }
+              }
+          })
+        try await f.barrier()
+        let view = try #require(f.window?.contentView)
+        func bitmap() throws -> NSBitmapImageRep {
+          view.layoutSubtreeIfNeeded()
+          let raw = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+          view.cacheDisplay(in: view.bounds, to: raw)
+          // PNG decoding normalizes extended-range host pixels before examining the real glyph.
+          return try #require(
+            raw.representation(using: .png, properties: [:]).flatMap(NSBitmapImageRep.init(data:)))
+        }
+        func pixels(_ image: NSBitmapImageRep, _ region: CGRect) throws -> Data {
+          let crop = try #require(image.cgImage?.cropping(to: region))
+          return try #require(
+            NSBitmapImageRep(cgImage: crop).representation(using: .png, properties: [:]))
+        }
+        let initial = try bitmap()
+        var points: [CGPoint] = []
+        for y in 0..<initial.pixelsHigh {
+          for x in (initial.pixelsWide / 2)..<initial.pixelsWide {
+            guard let color = initial.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            if color.greenComponent > 0.35 && color.greenComponent > color.redComponent + 0.15
+              && color.greenComponent > color.blueComponent + 0.15
+            {
+              points.append(CGPoint(x: x, y: y))
+            }
+          }
+        }
+        let left = try #require(points.map(\.x).min()), top = try #require(points.map(\.y).min())
+        let right = try #require(points.map(\.x).max()),
+          bottom = try #require(points.map(\.y).max())
+        let stableRegion = CGRect(
+          x: left - 6, y: top - 6, width: right - left + 13, height: bottom - top + 13)
+        // Two 144pt covers share the 350pt pane's 16pt outer padding and inter-column gap.
+        let columnStep = (view.bounds.width - 32 - 16) / 2 + 16
+        let changedRegion = stableRegion.offsetBy(
+          dx: -columnStep * CGFloat(initial.pixelsWide) / view.bounds.width, dy: 0)
+        let stable = try pixels(initial, stableRegion), missing = try pixels(initial, changedRegion)
+        try #require(
+          missing != stable, "Only the unchanged album starts with a real completed badge")
+        f.set(f.current, .done)
+        f.records.flushPendingNotifications()
+        try #require(await observe(in: f.window) { folderSummary("2/2", in: f) })
+        try await f.barrier()
+        let completed = try bitmap()
+        #expect(try pixels(completed, changedRegion) == stable)
+        #expect(try pixels(completed, stableRegion) == stable)
+        let folder = try #require(f.currentTree.first)
+        f.service.collectionTree = [
+          PhotoCollectionDescriptor(
+            id: folder.id, localIdentifier: folder.localIdentifier, title: folder.title,
+            kind: .folder,
+            pathComponents: folder.pathComponents,
+            children: folder.children.map { child in
+              guard child.localIdentifier == "target" else { return child }
+              return PhotoCollectionDescriptor(
+                id: child.id, localIdentifier: child.localIdentifier,
+                title: "Renamed", kind: .album, pathComponents: child.pathComponents, children: [])
+            })
+        ]
+        f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
+        try #require(await observe(in: f.window) { folderSummary("1/2", in: f) })
+        try await f.barrier()
+        let renamed = try bitmap()
+        #expect(try pixels(renamed, changedRegion) == missing)
+        #expect(try pixels(renamed, stableRegion) == stable)
+      } cleanup: {
+        f.close()
+        await images.releaseAll()
+      }
     }
 
     enum FolderCountSurface: CaseIterable { case folderPane, sidebarBadge }
@@ -716,20 +822,18 @@ import Testing
       let older = AsyncCheckpoint()
       let newer = AsyncCheckpoint()
       try await withCleanup {
-        let (key, supersededKey, rendered): (String, String, (Int) -> [String]) =
-          switch surface {
-          case .folderPane: ("folder-summary", "folder-counts-superseded", { ["0/\($0)"] })
-          case .sidebarBadge:
-            (
-              "folder-sidebar:folder:folder", "sidebar-folder-count-superseded",
-              { ["notStarted(total: \($0))"] }
-            )
-          }
+        let supersededKey =
+          surface == .folderPane ? "folder-counts-superseded" : "sidebar-folder-count-superseded"
+        let displayed: (Int) -> Bool = { count in
+          surface == .folderPane
+            ? folderSummary("0/\(count)", in: f)
+            : badge(String(count), id: "folder:folder", in: f)
+        }
         // Exactly one view loads the folder's counts, so 'stable' fetches map to its loads.
         // The sidebar folder starts collapsed, so its album rows don't fetch 'stable' too.
         f.useLiveCounts()
         f.show(sidebar: surface == .sidebarBadge, folderPane: surface == .folderPane)
-        let loaded = await observe { f.counter.renderedText[key] == rendered(2) }
+        let loaded = await observe { displayed(2) }
         try #require(loaded)
 
         let service = f.service
@@ -757,17 +861,17 @@ import Testing
         let newerStarted = await newer.waitForEnter(count: 1)
         try #require(newerStarted, "A newer library change must restart the folder count load")
         await newer.release()
-        let refreshed = await observe { f.counter.renderedText[key] == rendered(3) }
+        let refreshed = await observe { displayed(3) }
         try #require(refreshed)
 
         let supersededBefore = f.counter.count(for: supersededKey)
         await older.release()
         let settled = await observe {
           f.counter.count(for: supersededKey) > supersededBefore
-            || f.counter.renderedText[key] != rendered(3)
+            || !displayed(3)
         }
         #expect(settled)
-        #expect(f.counter.renderedText[key] == rendered(3))
+        #expect(displayed(3))
       } cleanup: {
         await older.releaseAll()
         await newer.releaseAll()

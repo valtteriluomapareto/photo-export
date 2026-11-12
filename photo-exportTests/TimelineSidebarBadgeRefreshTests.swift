@@ -99,11 +99,12 @@ import Testing
         let content = Host(service: service, manager: manager, counter: counter, tick: tick)
           .environment(library).environment(store).environment(manager)
           .environment(manager.progressState)
-          .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
-        window = NSWindow(
+          .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults)
+        window = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 300, height: 500),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         window.contentView = NSHostingView(rootView: content)
         window.orderFront(nil)
       }
@@ -128,12 +129,18 @@ import Testing
 
       var readinessDescription: String {
         let loads = counter.count(for: "timeline-counts-loaded")
-        let years = counter.renderedText["timeline-sidebar-years"] ?? []
-        let month = counter.renderedText["timeline-month:2026-9"] ?? []
-        let expandedYear = counter.renderedText["timeline-year:2026"] ?? []
-        let collapsedYear = counter.renderedText["timeline-year:2025"] ?? []
+        let years = NativeViewAccess.texts(in: window)
+        let month = NativeViewAccess.texts(identifiedBy: "timeline-month:2026-9", in: window)
+        let expandedYear = NativeViewAccess.texts(identifiedBy: "timeline-year:2026", in: window)
+        let collapsedYear = NativeViewAccess.texts(identifiedBy: "timeline-year:2025", in: window)
         return "loads=\(loads), tasks=\(counter.tasks.count), years=\(years), "
           + "month=\(month), expanded=\(expandedYear), collapsed=\(collapsedYear)"
+      }
+    }
+
+    private func caption(_ text: String, row: String, in f: Fixture) -> Bool {
+      NativeViewAccess.texts(identifiedBy: row, in: f.window).contains {
+        $0 == text || $0.hasSuffix(", " + text)
       }
     }
 
@@ -143,7 +150,7 @@ import Testing
       let f = await Fixture()
       try await withCleanup {
         try #require(
-          await observe(in: f.window) { f.counter.renderedText["timeline-month:2026-9"] == ["1/2"] }
+          await observe(in: f.window) { caption("1/2", row: "timeline-month:2026-9", in: f) }
         )
         for task in f.counter.tasks { _ = await finished(task) }
         f.window.contentView?.layoutSubtreeIfNeeded()
@@ -187,8 +194,8 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-year:2026"] == ["50%"]
-              && f.counter.renderedText["timeline-year:2025"] == ["50%"]
+            caption("50%", row: "timeline-year:2026", in: f)
+              && caption("50%", row: "timeline-year:2025", in: f)
           })
         for task in f.counter.tasks { _ = await finished(task) }
         f.service.cachedCountOverride = { scope, adjusted in
@@ -219,9 +226,9 @@ import Testing
             f.counter.count(for: "timeline-year-body:2026") > bodies
           })
         try await f.barrier()
-        #expect(f.counter.renderedText["timeline-year:2026"] == ["50%"])
-        #expect(f.counter.renderedText["timeline-month:2026-9"] == ["1/2"])
-        #expect(f.counter.renderedText["timeline-year:2025"] == ["50%"])
+        #expect(caption("50%", row: "timeline-year:2026", in: f))
+        #expect(caption("1/2", row: "timeline-month:2026-9", in: f))
+        #expect(caption("50%", row: "timeline-year:2025", in: f))
         f.service.yearCounts = [(2026, 4), (2025, 2)]
         f.service.cachedCountOverride = { scope, adjusted in
           switch scope {
@@ -235,11 +242,11 @@ import Testing
         try #require(
           await observe(in: f.window) {
             f.counter.count(for: "timeline-counts-loaded") > completions
-              && f.counter.renderedText["timeline-year:2026"] == ["25%"]
-              && f.counter.renderedText["timeline-month:2026-9"] == ["1/4"]
+              && caption("25%", row: "timeline-year:2026", in: f)
+              && caption("1/4", row: "timeline-month:2026-9", in: f)
           })
         try await f.barrier()
-        #expect(f.counter.renderedText["timeline-year:2025"] == ["50%"])
+        #expect(caption("50%", row: "timeline-year:2025", in: f))
       } cleanup: {
         await gate.releaseAll()
         for task in f.counter.tasks { _ = await finished(task) }
@@ -255,9 +262,9 @@ import Testing
       do {
         let initiallyReady = await observe(in: f.window) {
           f.counter.count(for: "timeline-counts-loaded") > 0
-            && f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-            && f.counter.renderedText["timeline-year:2026"] == ["50%"]
-            && f.counter.renderedText["timeline-year:2025"] == ["50%"]
+            && caption("1/2", row: "timeline-month:2026-9", in: f)
+            && caption("50%", row: "timeline-year:2026", in: f)
+            && caption("50%", row: "timeline-year:2025", in: f)
         }
         let initialDiagnostics = f.readinessDescription
         try #require(initiallyReady, "Initial sidebar: \(initialDiagnostics)")
@@ -285,9 +292,9 @@ import Testing
           relPath: "2026/09/", filename: "second.jpg", exportedAt: Date())
         f.store.flushPendingNotifications()
         let badgesStayVisible = await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["complete"]
-            && f.counter.renderedText["timeline-year:2026"] == ["complete"]
-            && f.counter.renderedText["timeline-year:2025"] == ["50%"]
+          caption("September 2026: 2 of 2 photos exported.", row: "timeline-month:2026-9", in: f)
+            && caption("2 of 2 photos exported in 2026.", row: "timeline-year:2026", in: f)
+            && caption("50%", row: "timeline-year:2025", in: f)
         }
         let heldDiagnostics = f.readinessDescription
         #expect(badgesStayVisible, "Held refresh: \(heldDiagnostics)")
@@ -310,9 +317,10 @@ import Testing
         f.library.libraryRefresh.flush()
         let failedCoverageClears = await observe(in: f.window) {
           f.counter.count(for: "timeline-counts-loaded") > completionsBeforeFailure
-            && f.counter.renderedText["timeline-month:2026-9"] == ["…"]
-            && f.counter.renderedText["timeline-year:2026"] == []
-            && f.counter.renderedText["timeline-year:2025"] == ["50%"]
+            && caption("…", row: "timeline-month:2026-9", in: f)
+            && caption("2026", row: "timeline-year:2026", in: f)
+            && !caption("50%", row: "timeline-year:2026", in: f)
+            && caption("50%", row: "timeline-year:2025", in: f)
         }
         let failedDiagnostics = f.readinessDescription
         #expect(failedCoverageClears, "Failed coverage: \(failedDiagnostics)")
@@ -332,7 +340,7 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+            caption("1/2", row: "timeline-month:2026-9", in: f)
           })
         for task in f.counter.tasks { _ = await finished(task) }
         f.window.contentView?.layoutSubtreeIfNeeded()
@@ -366,8 +374,8 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-              && f.counter.renderedText["timeline-month:2026-8"] == ["2"]
+            caption("1/2", row: "timeline-month:2026-9", in: f)
+              && caption("2", row: "timeline-month:2026-8", in: f)
           })
         for task in f.counter.tasks { _ = await finished(task) }
         f.store.flushPendingNotifications()
@@ -393,7 +401,7 @@ import Testing
           })
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["3 left"]
+            caption("3 left", row: "timeline-month:2026-9", in: f)
           })
         try await f.barrier()
         #expect(f.counter.count(for: "timeline-month-body:2026-8") - before == 0)
@@ -410,7 +418,7 @@ import Testing
           try #require(await gate.waitForEnter(count: step))
           try #require(
             await observe(in: f.window) {
-              f.counter.renderedText["timeline-month:2026-9"] == ["\(3 - step) left"]
+              caption("\(3 - step) left", row: "timeline-month:2026-9", in: f)
             })
           f.store.flushPendingNotifications()
           try await f.barrier()
@@ -490,8 +498,8 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-              && f.counter.renderedText["timeline-month:2026-8"] == ["2"]
+            caption("1/2", row: "timeline-month:2026-9", in: f)
+              && caption("2", row: "timeline-month:2026-8", in: f)
           })
         for task in f.counter.tasks { _ = await finished(task) }
         f.store.flushPendingNotifications()
@@ -515,7 +523,7 @@ import Testing
         f.store.flushPendingNotifications()
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["complete"]
+            caption("September 2026: 2 of 2 photos exported.", row: "timeline-month:2026-9", in: f)
           })
         try await f.barrier()
         #expect(a.changeCount == 1)
@@ -537,7 +545,7 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+            caption("1/2", row: "timeline-month:2026-9", in: f)
           })
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let ids = ["queued-a", "queued-b"]
@@ -558,13 +566,13 @@ import Testing
           })
         #expect(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["2 left"]
+            caption("2 left", row: "timeline-month:2026-9", in: f)
           })
         f.manager.queueCoordinator.processQueueIfNeeded()
         try #require(await gate.waitForEnter(count: 1))
         #expect(
           await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["1 left"]
+            caption("1 left", row: "timeline-month:2026-9", in: f)
           })
       } cleanup: {
         let held = f.manager.currentTask

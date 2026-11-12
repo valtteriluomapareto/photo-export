@@ -119,6 +119,20 @@ struct LibraryGridSelectionLifecycleTests {
 
     func show() { window.orderFront(nil) }
 
+    func gridPixels() throws -> Data {
+      hostingView.layoutSubtreeIfNeeded()
+      let top = NSRect(x: 16, y: 80, width: hostingView.bounds.width - 32, height: 160)
+      let region =
+        hostingView.isFlipped
+        ? top
+        : NSRect(
+          x: top.minX, y: hostingView.bounds.height - top.maxY, width: top.width, height: top.height
+        )
+      let image = try #require(hostingView.bitmapImageRepForCachingDisplay(in: region))
+      hostingView.cacheDisplay(in: region, to: image)
+      return try #require(image.representation(using: .png, properties: [:]))
+    }
+
     func close() {
       window.orderOut(nil)
       window.contentView = nil
@@ -351,24 +365,47 @@ struct LibraryGridSelectionLifecycleTests {
   @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases)
   func parentOnlySelectionChangeRendersTheCurrentHighlight(grid: Grid) async throws {
     let fixture = await Fixture(grid: grid)
-    let a = TestAssetFactory.makeAsset(id: "A")
-    let b = TestAssetFactory.makeAsset(id: "B")
+    let a = TestAssetFactory.makeAsset(id: "A", creationDate: nil)
+    let b = TestAssetFactory.makeAsset(id: "B", creationDate: nil)
+    let images = AsyncCheckpoint()
     fixture.service.progressiveStreamOverride = { _ in
       AsyncThrowingStream {
         $0.yield([a, b])
         $0.finish()
       }
     }
-    defer { fixture.close() }
-    fixture.show()
-    let loaded = await observe {
-      fixture.selection.asset == a && !fixture.service.startCachingCalls.isEmpty
+    fixture.service.decodedThumbnailOverride = { _, _, _ in
+      await images.enter()
+      return nil
     }
-    try #require(loaded)
-    fixture.counter.reset()
-    fixture.selection.asset = b
-    let highlighted = await observe { fixture.counter.count(for: "selected:B") > 0 }
-    #expect(highlighted, "A parent-only ID change must reach the actual grid rendering input")
+    try await withCleanup {
+      fixture.show()
+      try #require(
+        await observe {
+          fixture.selection.asset == a && !fixture.service.startCachingCalls.isEmpty
+        })
+      // No thumbnail can change pixels while the selection moves between the two real cells.
+      try #require(await images.waitForEnter(count: 2))
+      let first = try fixture.gridPixels()
+      let secondBodies = fixture.counter.count(for: "thumbnail-body:B")
+      fixture.selection.asset = b
+      try #require(
+        await observe {
+          fixture.counter.count(for: "thumbnail-body:B") > secondBodies
+        })
+      #expect(
+        try fixture.gridPixels() != first, "The actual highlight must move to the second cell")
+      let firstBodies = fixture.counter.count(for: "thumbnail-body:A")
+      fixture.selection.asset = a
+      try #require(
+        await observe {
+          fixture.counter.count(for: "thumbnail-body:A") > firstBodies
+        })
+      #expect(try fixture.gridPixels() == first, "Returning to the first cell restores its pixels")
+    } cleanup: {
+      fixture.close()
+      await images.releaseAll()
+    }
   }
 
   enum RefreshMutation: CaseIterable { case metadata, removal, empty }

@@ -8,6 +8,31 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct ExportProgressStateTests {
+  @Test func summaryActionsRejectOldIDsAndRetireCurrentFeedback() {
+    let progress = ExportProgressState(clock: TestClock())
+    let old = ManualExportSummary(completedCount: 2, failedCount: 1, failureMessage: nil)
+    progress.manualSummary = old
+    #expect(progress.canShowIssues(for: old.id))
+    let current = ManualExportSummary(completedCount: 3, failedCount: 1, failureMessage: nil)
+    progress.manualSummary = current
+
+    #expect(!progress.canShowIssues(for: old.id))
+    progress.dismissManualSummary(id: old.id)
+    #expect(progress.manualSummary == current)
+    #expect(progress.presentation.manualSummary == current)
+    #expect(progress.canShowIssues(for: current.id))
+
+    progress.dismissManualSummary(id: current.id)
+    #expect(progress.manualSummary?.isDismissed == true)
+    #expect(progress.presentation.manualSummary?.isDismissed == true)
+    #expect(!progress.canShowIssues(for: current.id))
+
+    progress.manualSummary = nil
+    progress.dismissManualSummary(id: current.id)
+    #expect(progress.manualSummary == nil)
+    #expect(!progress.canShowIssues(for: current.id))
+  }
+
   @MainActor
   private final class Fixture {
     let root = TestScratch.directory("ProgressPresentation")

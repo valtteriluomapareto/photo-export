@@ -39,35 +39,25 @@ struct ExportProgressBar: View {
     self.settingsOpener = settingsOpener
   }
 
-  private func observed(_ message: String) -> String {
-    #if DEBUG
-      counter?.recordText([message], for: "progress-message")
-    #endif
-    return message
-  }
-
-  private var isVisible: Bool {
-    if let summary = progressState.presentation.manualSummary { return !summary.isDismissed }
-    return progressState.presentation.totalJobsEnqueued > 0
-      || progressState.presentation.emptyRunMessage != nil
-  }
-
   var body: some View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
-      let _ = recordVisibility()
+      let _ = counter?.record("export-progress-body")
     #endif
     Group {
-      if let summary = progressState.presentation.manualSummary {
-        if !summary.isDismissed { terminalSummary(summary) }
-      } else if progressState.presentation.totalJobsEnqueued > 0 {
+      switch ExportProgressPresentation.content(for: progressState.presentation) {
+      case .hidden:
+        EmptyView()
+      case .summary(let summary):
+        terminalSummary(summary)
+      case .active:
         VStack(alignment: .leading, spacing: 0) {
           if let warning = progressState.presentation.queueWarningMessage {
             queueWarningBanner(message: warning)
           }
           progressContent
         }
-      } else if let message = progressState.presentation.emptyRunMessage {
+      case .empty(let message):
         emptyRunBanner(message: message)
       }
     }
@@ -80,41 +70,20 @@ struct ExportProgressBar: View {
       #if DEBUG
         counter?.record("progress-expiry-finished:\(summary.id)")
       #endif
-      guard !Task.isCancelled, progressState.manualSummary?.id == summary.id else { return }
-      progressState.manualSummary?.isDismissed = true
+      guard !Task.isCancelled else { return }
+      progressState.dismissManualSummary(id: summary.id)
     }
   }
 
-  #if DEBUG
-    private func recordVisibility() {
-      counter?.record("export-progress-body")
-      counter?.recordText(
-        [
-          progressState.presentation.currentAssetFilename ?? "",
-          progressState.presentation.renderActivity.map { String(describing: $0) } ?? "",
-        ],
-        for: "progress-asset")
-      counter?.recordText([String(isVisible)], for: "progress-visible")
-      if !isVisible { counter?.recordText([], for: "progress-message") }
-    }
-  #endif
-
   private func terminalSummary(_ summary: ManualExportSummary) -> some View {
     let dismiss = {
-      guard progressState.manualSummary?.id == summary.id else { return }
-      progressState.manualSummary?.isDismissed = true
+      progressState.dismissManualSummary(id: summary.id)
     }
     let showIssues = {
-      guard progressState.manualSummary?.id == summary.id,
-        progressState.manualSummary?.isDismissed == false
-      else { return }
+      guard progressState.canShowIssues(for: summary.id) else { return }
       selectedSettingsTab = .exportIssues
       if let settingsOpener { settingsOpener() } else { openSettings() }
     }
-    #if DEBUG
-      counter?.recordAction("progress-dismiss", action: dismiss)
-      counter?.recordAction("progress-view-issues", action: showIssues)
-    #endif
     return VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 8) {
         Image(
@@ -122,7 +91,7 @@ struct ExportProgressBar: View {
             ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
         )
         .foregroundStyle(summary.result == .completed ? Color.green : .orange)
-        Text(observed(summary.message))
+        Text(summary.message)
         Spacer(minLength: 0)
         if summary.result == .failed { Button("View Issues", action: showIssues) }
         Button("Dismiss", systemImage: "xmark", action: dismiss)
@@ -152,7 +121,7 @@ struct ExportProgressBar: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .foregroundColor(.orange)
         .font(.caption)
-      Text(observed(message))
+      Text(message)
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(2)
@@ -181,12 +150,12 @@ struct ExportProgressBar: View {
         .frame(maxWidth: 240)
         .layoutPriority(2)
 
-      Text(observed("\(done)/\(total) assets"))
+      Text("\(done)/\(total) assets")
         .font(.caption)
         .monospacedDigit()
         .fixedSize()
         .layoutPriority(2)
-        .help(progressCountTooltip)
+        .help(ExportProgressPresentation.countTooltip(for: exportManager.versionSelection))
 
       currentAssetLabel
         .layoutPriority(1)
@@ -211,7 +180,9 @@ struct ExportProgressBar: View {
         .foregroundColor(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)
-      if let hint = renderActivityHint {
+      if let hint = ExportProgressPresentation.renderActivityHint(
+        progressState.presentation.renderActivity)
+      {
         Text(hint)
           .font(.caption)
           .foregroundColor(.secondary)
@@ -219,42 +190,10 @@ struct ExportProgressBar: View {
           .fixedSize()
       }
     }
-    .accessibilityLabel(accessibilityCurrentAssetLabel)
-  }
-
-  private var renderActivityHint: String? {
-    switch progressState.presentation.renderActivity {
-    case .none: return nil
-    case .downloading: return "(downloading…)"
-    case .rendering: return "(rendering…)"
-    }
-  }
-
-  private var accessibilityCurrentAssetLabel: String {
-    let filename = progressState.presentation.currentAssetFilename ?? ""
-    switch progressState.presentation.renderActivity {
-    case .none:
-      return filename.isEmpty ? "" : "Currently exporting \(filename)"
-    case .downloading:
-      return filename.isEmpty
-        ? "Downloading from iCloud" : "Downloading \(filename) from iCloud"
-    case .rendering:
-      return filename.isEmpty ? "Rendering edited video" : "Rendering edited \(filename)"
-    }
-  }
-
-  private var progressCountTooltip: String {
-    switch exportManager.versionSelection {
-    case .editedWithOriginals:
-      return
-        "Counts assets, not files. Each adjusted asset writes both an edited file and a "
-        + "_orig companion but counts once. The filename is whichever file is currently "
-        + "being written."
-    case .edited:
-      return
-        "Counts assets. The filename is the file currently being written for the asset "
-        + "in progress."
-    }
+    .accessibilityLabel(
+      ExportProgressPresentation.currentAssetLabel(
+        filename: progressState.presentation.currentAssetFilename,
+        activity: progressState.presentation.renderActivity))
   }
 
   // MARK: - Empty-run banner
@@ -268,7 +207,7 @@ struct ExportProgressBar: View {
       Image(systemName: "checkmark.circle.fill")
         .foregroundColor(.green)
         .font(.caption)
-      Text(observed(message))
+      Text(message)
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(1)

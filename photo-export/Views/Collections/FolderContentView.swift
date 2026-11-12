@@ -53,12 +53,6 @@ struct FolderContentView: View {
 
   var body: some View {
     let exportHelp = exportButtonHelp
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "folder-export-help")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordAction("folder-select-all", action: selectAllChildren)
-    #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
         .font(.title2)
@@ -197,10 +191,6 @@ struct FolderContentView: View {
     let albumCount = albumIds.count
     let exported = exportedPhotoCount(albumIds: albumIds)
     let total = totalPhotoCount(albumIds: albumIds)
-    #if DEBUG
-      bodyCounter?.recordText(["\(exported)/\(total)"], for: "folder-summary")
-      bodyCounter?.recordText(selectedChildIds.sorted(), for: "folder-selection")
-    #endif
 
     return HStack(spacing: 8) {
       Image(systemName: summaryIconName(exported: exported, total: total))

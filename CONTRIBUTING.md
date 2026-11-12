@@ -400,11 +400,20 @@ files people expect in an open source project.
 
 ### UI behavior test strategy
 
-Keep combinatorial rules in pure policy tests and use the existing native `NSHostingView`
-behavior tests for SwiftUI bindings and rendered actions. Platform services use injected
-fakes; login-item tests never change System Settings and volume tests use isolated
-notification centers, preferences and temporary folders. No view-inspection or snapshot
-package is required.
+Keep combinatorial captions, eligibility and action choices in production value policies,
+with literal expected results in pure tests. Hosted `NSHostingView` tests exercise actual
+controls through public native accessibility APIs and require downstream effects from
+injected fakes. A copied label or captured action registry does not prove that a Button
+exists or is wired. When a scrollable Form hides its accessibility children, host the same
+small production control component directly; retain a separate real parent binding or
+layout check.
+
+Keep real record-store reads in their summary, row and asset views. The optional DEBUG
+`BodyInvalidationCounter` measures body/summary-scan budgets and retains narrowly required
+owned-task completion witnesses; it does not collect text or actions. Keep existing budget
+bounds and deterministic stale-work completion proof. Platform services use injected fakes;
+login-item tests never change System Settings and volume tests use isolated notification
+centers, preferences and temporary folders. No view-inspection or snapshot package is required.
 
 The dedicated CI XCUITest onboarding/navigation smoke remains deferred in
 [issue #108](https://github.com/valtteriluomapareto/photo-export/issues/108).

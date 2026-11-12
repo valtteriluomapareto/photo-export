@@ -79,7 +79,8 @@ struct LibraryRefreshHostedTests {
             service: service, manager: export.manager, phase: phase, counter: counter,
             collections: collections)
         )
-        .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(export.defaults))
+        .environment(\.bodyInvalidationCounter, counter)
+        .environment(\.accessibilityEnabled, true).defaultAppStorage(export.defaults))
     }
 
     func show() { window.orderFront(nil) }
@@ -108,8 +109,8 @@ struct LibraryRefreshHostedTests {
       f.show()
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText["timeline-sidebar-years"] == ["2026:1"]
-            && f.counter.renderedText["month-summary"] != nil
+          NativeViewAccess.element("timeline-year:2026", in: f.window) != nil
+            && NativeViewAccess.containsText("0/1 exported", in: f.window)
             && f.service.scopeFetchCalls.count == 1
         })
       let inventory = f.service.inventoryThreads.value["years"]?.count ?? 0
@@ -153,7 +154,8 @@ struct LibraryRefreshHostedTests {
       f.show()
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText["collection-sidebar:album:family"] == ["count:1"]
+          NativeViewAccess.texts(identifiedBy: "collection-row:album:family", in: f.window)
+            .contains("1")
         })
       f.service.cachedCountOverride = { scope, _ in
         await (scope == .favorites ? favorite : album).enter()
@@ -176,8 +178,10 @@ struct LibraryRefreshHostedTests {
       await album.releaseAll()
       try #require(
         await observe(in: f.window) {
-          f.counter.renderedText["collection-sidebar:album:family"] == ["count:3"]
-            && f.counter.renderedText["collection-sidebar:favorites"] == ["count:3"]
+          NativeViewAccess.texts(identifiedBy: "collection-row:album:family", in: f.window)
+            .contains("3")
+            && NativeViewAccess.texts(identifiedBy: "collection-row:favorites", in: f.window)
+              .contains("3")
         })
       try await f.barrier()
       #expect(f.counter.count(for: "collections-sidebar") - bodies <= 1)

@@ -59,15 +59,8 @@ private struct AssetGridTile: View {
   let isExported: Bool
   @Binding var selectedAsset: AssetDescriptor?
   let onSelect: () -> Void
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var counter
-  #endif
 
   var body: some View {
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = counter?.record("selected:\(selectedAsset?.id ?? "")")
-    #endif
     ThumbnailView(asset: asset, isSelected: asset.id == selectedAsset?.id, isExported: isExported)
       .frame(width: 120, height: 120)
       .onTapGesture {

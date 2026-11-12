@@ -15,11 +15,6 @@ struct TimelineGridSummary: View, Equatable {
     if !hasCompleteSnapshot {
       LoadingGridSummary(count: assets.count)
     } else if records.state == .loading {
-      #if DEBUG
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter?.recordText(
-          [ManualExportAvailability.loadingHistoryText], for: "month-summary")
-      #endif
       Label(ManualExportAvailability.loadingHistoryText, systemImage: "clock")
         .foregroundColor(.secondary)
     } else {
@@ -28,9 +23,6 @@ struct TimelineGridSummary: View, Equatable {
       #if DEBUG
         // swiftlint:disable:next redundant_discardable_let
         let _ = counter?.record("summaryScan")
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter?.recordText(
-          ["\(summary.exportedCount)/\(summary.totalCount) exported"], for: "month-summary")
       #endif
       AssetGridSummaryLabel(summary: summary)
     }
@@ -59,13 +51,6 @@ struct CollectionGridSummary: View, Equatable {
       LoadingGridSummary(count: assets.count)
     } else {
       let summary = summary()
-      #if DEBUG
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter?.record("summary:\(summary.exportedCount)/\(summary.totalCount)")
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter?.recordText(
-          ["\(summary.exportedCount)/\(summary.totalCount)"], for: "collection-summary")
-      #endif
       AssetGridSummaryLabel(summary: summary)
     }
   }

@@ -104,7 +104,8 @@ import Testing
             .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
             .environment(timeline).environment(collections).environment(manager)
             .environmentObject(destinationManager).environment(photoManager)
-            .environment(\.bodyInvalidationCounter, counter))
+            .environment(\.bodyInvalidationCounter, counter)
+            .environment(\.accessibilityEnabled, true))
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 400),
           styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -235,7 +236,8 @@ import Testing
       #expect(f.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
       #expect(f.collections.exportInfo(assetId: "keep", placement: favorites) == collectionBefore)
       let resultShown = await observe {
-        f.counter.renderedText["import-title"] == ["Import Complete"]
+        f.window?.attachedSheet.map { NativeViewAccess.containsText("Import Complete", in: $0) }
+          == true
       }
       #expect(resultShown, "The existing ImportView must actually present its result")
       f.timeline.drainSynchronously()
@@ -322,7 +324,7 @@ import Testing
       try #require(await observe { f.timeline.finishedResetCount > completedResets })
       #expect(f.timeline.state == .failed)
       #expect(!f.manager.isImporting && f.manager.importTask == nil)
-      #expect(f.counter.renderedText["import-title"] == nil)
+      #expect(f.manager.importResult == nil)
       #expect(f.destination.openedScopeURLs.isEmpty)
       #expect(
         try Data(

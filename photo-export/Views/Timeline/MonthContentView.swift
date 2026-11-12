@@ -70,13 +70,7 @@ struct MonthContentView: View, Equatable {
       ?? "Export unexported assets for this month"
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "month-export-help")
-    #endif
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("month-grid-body")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([String(viewModel.assets.count)], for: "grid-assets")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       // Header with Month and Year

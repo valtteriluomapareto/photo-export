@@ -7,43 +7,12 @@ import SwiftUI
 struct AutoExportSettingsView: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
-  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @Environment(LoginItemController.self) private var loginItemController
-  @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
-
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
-
-  @State private var isShowingMigrationRecoverySheet = false
-  @State private var isShowingSafetyConfirm = false
 
   var body: some View {
     Form {
-      if lifecycleCoordinator.migrationConflict != nil {
-        let showRecovery = { isShowingMigrationRecoverySheet = true }
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction("auto-export-migration-recovery", action: showRecovery)
-        #endif
-        Section {
-          MigrationConflictBanner(onTap: showRecovery)
-            .listRowInsets(EdgeInsets())
-        }
-      } else if safetyMonitor.needsSafetyConfirmation {
-        let showConfirmation = { isShowingSafetyConfirm = true }
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction(
-            "auto-export-safety-confirmation", action: showConfirmation)
-        #endif
-        Section {
-          SafetyConfirmationBanner(onTap: showConfirmation)
-            .listRowInsets(EdgeInsets())
-        }
-      }
+      AutoExportRecoveryPrompt()
 
       Section {
         Toggle(
@@ -118,83 +87,20 @@ struct AutoExportSettingsView: View {
           .disabled(!autoSyncManager.state.canRunNow)
         }
       } footer: {
-        let message = exportNowFooter
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordText([message], for: "auto-export-now-footer")
-        #endif
+        let message = AutoExportPresentation.exportNowFooter(autoSyncManager.state)
         Text(message)
           .font(.caption)
           .foregroundStyle(.secondary)
       }
 
       Section("Startup") {
-        Toggle(
-          isOn: Binding(
-            get: { loginItemController.status == .enabled },
-            set: { newValue in
-              if newValue {
-                loginItemController.register()
-              } else {
-                loginItemController.unregister()
-              }
-            }
-          )
-        ) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Open Photo Export at login")
-            Text(loginItemController.status.footerText)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              #if DEBUG
-                .background {
-                  RenderedTextRecord(
-                    key: "login-item-footer", text: loginItemController.status.footerText)
-                }
-              #endif
-          }
-        }
-        if loginItemController.status == .requiresApproval {
-          Button("Open System Settings\u{2026}") {
-            loginItemController.openSystemLoginItems()
-          }
-        }
+        LoginItemSettingsControls()
       }
     }
     .onAppear { loginItemController.refresh() }
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
-    .sheet(isPresented: $isShowingMigrationRecoverySheet) {
-      DestinationRecordRecoveryView(
-        mode: .migrationConflict,
-        onRebuildComplete: { lifecycleCoordinator.clearMigrationConflictAfterReconcile() },
-        onUseAsIs: nil
-      )
-      .environmentObject(lifecycleCoordinator)
-      .environment(exportManagerFromEnvironment)
-      .environmentObject(exportDestinationManager)
-    }
-    .sheet(isPresented: $isShowingSafetyConfirm) {
-      // The destination has files but no records. Offer to rebuild
-      // progress from the drive (so re-exports skip the existing files instead
-      // of creating ` (1)` duplicates) as well as the plain "these are my
-      // pre-existing files" confirm. Both resolve the safety prompt by
-      // confirming the destination; the rebuild path additionally restores the
-      // record store from the drive's contents first.
-      DestinationRecordRecoveryView(
-        mode: .orphanedProgress,
-        onRebuildComplete: { safetyMonitor.confirmCurrentDestination() },
-        onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
-      )
-      .environmentObject(lifecycleCoordinator)
-      .environment(exportManagerFromEnvironment)
-      .environmentObject(exportDestinationManager)
-    }
   }
-
-  // Supply the existing manager to both recovery sheets so their actions share the app's
-  // export state alongside the lifecycle and destination services.
-  @Environment(ExportManager.self) private var exportManagerFromEnvironment
 
   // MARK: - Scope binding helper
 
@@ -244,114 +150,9 @@ struct AutoExportSettingsView: View {
     }
   }
 
-  private var exportNowFooter: String {
-    switch autoSyncManager.state {
-    case .disabled:
-      return "Enable Auto Export above to use Export Now."
-    case .blocked(.noScopesSelected):
-      return "Pick at least one scope above first."
-    case .blocked(.destinationMissing):
-      return "Select an export destination first."
-    case .blocked(.destinationUnsafe):
-      return "The destination has unresolved issues. Open the destination indicator to review."
-    case .blocked(.photosAccessMissing):
-      return PhotosAccessGuidance.message
-    case .blocked:
-      return "Auto Export is blocked. Resolve the issue above to run now."
-    case .running:
-      return "A run is already in progress."
-    case .waiting(.destinationUnavailable):
-      return
-        "The destination drive isn't connected. Export Now will queue the run for when it's reachable."
-    case .waiting(.destinationChecking):
-      return "Checking the destination folder. Export Now will run if the folder passes the check."
-    case .waiting:
-      return "Auto Export will run shortly."
-    case .scheduled, .idle:
-      return "Bypass the debounce and start a run right now."
-    }
-  }
 }
 
 // MARK: - Subviews
-
-private struct MigrationConflictBanner: View {
-  let onTap: () -> Void
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "exclamationmark.triangle.fill")
-        .foregroundStyle(.orange)
-        .font(.title3)
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Destination Has Unresolved Issues")
-          .font(.headline)
-        Text(
-          "This destination has both current and legacy record sets. Auto Export is blocked until you resolve which to use."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        HStack {
-          Spacer()
-          Button("Resolve\u{2026}") { onTap() }
-            .controlSize(.regular)
-        }
-      }
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
-    .background(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color.orange.opacity(0.1))
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
-    )
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-  }
-}
-
-private struct SafetyConfirmationBanner: View {
-  let onTap: () -> Void
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "exclamationmark.shield.fill")
-        .foregroundStyle(.orange)
-        .font(.title3)
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Confirm This Destination")
-          .font(.headline)
-        Text(
-          "The destination folder already contains files but has no export records. If you've exported here before, you can rebuild your progress; otherwise confirm it's your backup before Auto Export starts writing."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        HStack {
-          Spacer()
-          Button("Review\u{2026}") { onTap() }
-            .controlSize(.regular)
-        }
-      }
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
-    .background(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color.orange.opacity(0.1))
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
-    )
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-  }
-}
 
 private struct StatusSummaryRow: View {
   let state: AutoSyncState
@@ -361,12 +162,12 @@ private struct StatusSummaryRow: View {
       Image(systemName: iconName)
         .foregroundStyle(iconTint)
       VStack(alignment: .leading, spacing: 2) {
-        Text(headline)
+        Text(AutoExportPresentation.statusHeadline(state))
         // TimelineView ticks once a second so the .scheduled countdown
         // ("fires in 9s", "fires in 8s", …) updates without depending on
         // an external state change to force a re-render.
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-          if let detail = detail(now: ctx.date) {
+          if let detail = AutoExportPresentation.statusDetail(state, now: ctx.date) {
             Text(detail)
               .font(.caption)
               .foregroundStyle(.secondary)
@@ -398,28 +199,6 @@ private struct StatusSummaryRow: View {
     }
   }
 
-  private var headline: String {
-    switch state {
-    case .disabled: return "Auto Export is off"
-    case .idle: return "Up to date"
-    case .scheduled: return "Run scheduled"
-    case .running: return "Exporting\u{2026}"
-    case .waiting(let reason): return "Waiting — \(reason.userFacingLabel)"
-    case .blocked(let reason): return "Blocked — \(reason.userFacingLabel)"
-    }
-  }
-
-  private func detail(now: Date) -> String? {
-    switch state {
-    case .scheduled(let reason, let fireAt):
-      let secs = max(0, Int(fireAt.timeIntervalSince(now).rounded()))
-      return "\(reason.userFacingLabel) — fires in \(secs)s"
-    case .running(let reason):
-      return reason.userFacingLabel
-    default:
-      return nil
-    }
-  }
 }
 
 private struct LastRunRow: View {
@@ -431,7 +210,7 @@ private struct LastRunRow: View {
         .foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 2) {
         Text("Last run \(relativeTime)")
-        Text(detail)
+        Text(AutoExportPresentation.lastRunDetail(summary))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -444,12 +223,6 @@ private struct LastRunRow: View {
     return formatter.localizedString(for: summary.endedAt, relativeTo: Date())
   }
 
-  private var detail: String {
-    let counts = "\(summary.completedCount) exported"
-    let failedSuffix = summary.failedCount > 0 ? ", \(summary.failedCount) failed" : ""
-    let resultSuffix = summary.result == .completed ? "" : " (\(summary.result.rawValue))"
-    return counts + failedSuffix + resultSuffix
-  }
 }
 
 /// Shows when the safety-net reconcile last consulted PhotoKit. Trust signal for
@@ -500,27 +273,12 @@ private struct LastCatchUpRow: View {
     HStack(spacing: 8) {
       Image(systemName: "tray.and.arrow.down")
         .foregroundStyle(.secondary)
-      Text(label)
+      Text(AutoExportPresentation.catchUpLabel(summary))
         .font(.caption)
         .foregroundStyle(.secondary)
     }
   }
 
-  private var label: String {
-    let durationMs = Int(summary.duration * 1000)
-    let durationText =
-      durationMs < 1000 ? "\(durationMs) ms" : String(format: "%.1f s", summary.duration)
-    switch summary.result {
-    case .capturedBaseline:
-      return "Last library check: captured baseline in \(durationText)"
-    case .emittedChanges(let count):
-      return "Last library check: \(count) change\(count == 1 ? "" : "s") in \(durationText)"
-    case .detailsUnavailable(let failures):
-      return "Last library check: details unavailable (\(failures) failures) in \(durationText)"
-    case .fetchError(let description):
-      return "Last library check: \(description) in \(durationText)"
-    }
-  }
 }
 
 // MARK: - Description helpers
@@ -528,19 +286,3 @@ private struct LastCatchUpRow: View {
 // Per-view label extensions removed — surface uses
 // `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
 // directly. See `AutoSyncReason.swift`.
-
-#if DEBUG
-  /// Records the text of the view it backs, so a hosted test reads what that view renders
-  /// rather than what the enclosing body computed.
-  private struct RenderedTextRecord: View {
-    let key: String
-    let text: String
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-
-    var body: some View {
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([text], for: key)
-      Color.clear
-    }
-  }
-#endif

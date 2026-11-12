@@ -8,7 +8,6 @@ import Testing
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct DestinationRecoveryPresentationTests {
-    enum Surface: CaseIterable { case root, month, year, collection, folder }
     enum Problem: CaseIterable { case unreachable, permission }
 
     @MainActor
@@ -33,7 +32,6 @@ import Testing
       let autoSync = AutoSyncManager()
       let whatsNew: WhatsNewState
       let hosted: HostedViewHarness
-      let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
 
@@ -92,33 +90,13 @@ import Testing
         await destination.revalidateAndWait()
       }
 
-      @ViewBuilder private func pane(_ surface: Surface) -> some View {
-        switch surface {
-        case .root: LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
-        case .month:
-          MonthContentView(
-            year: 2026, month: 9, versionSelection: .edited, livePhotosPaired: false,
-            onExportMonth: {}, selectedAsset: .constant(nil), photoLibraryService: service)
-        case .year:
-          YearContentView(
-            year: 2026, selection: .constant(nil), selectedAsset: .constant(nil),
-            photoLibraryService: service)
-        case .collection:
-          CollectionContentView(
-            selection: .favorites, title: "Favorites", versionSelection: .edited,
-            livePhotosPaired: false, onExportCollection: {}, selectedAsset: .constant(nil),
-            photoLibraryService: service)
-        case .folder:
-          FolderContentView(
-            folderId: "folder", title: "Folder", selection: .constant(nil),
-            selectedAsset: .constant(nil), photoLibraryService: service)
-        }
-      }
-
-      func show(_ surface: Surface = .root) {
+      func show() {
         let hosted = NSHostingView(
-          rootView: self.hosted.environment(pane(surface).frame(width: 1200, height: 800))
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
+          rootView: self.hosted.environment(
+            LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready).frame(
+              width: 1200, height: 800)
+          )
+          .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults))
         let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
           styleMask: [.titled, .closable])
@@ -135,12 +113,32 @@ import Testing
         window?.contentView = nil
         window?.close()
         window = nil
-        counter.reset()
         timeline.drainSynchronously()
         collections.drainSynchronously()
         fakeDestination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
+      }
+    }
+
+    private func bannerElements(in f: Fixture) -> [AnyObject] {
+      guard let window = f.window else { return [] }
+      return NativeViewAccess.identifiedElements("destination-status-banner", in: window)
+        .flatMap { NativeViewAccess.elements(in: $0) }
+    }
+
+    private func bannerShows(_ text: String, in f: Fixture) -> Bool {
+      bannerElements(in: f).contains {
+        $0.accessibilityLabel?() == text || $0.accessibilityTitle?() == text
+          || NativeViewAccess.containsText(text, in: $0)
+      }
+    }
+
+    private func bannerOffersFolder(in f: Fixture) -> Bool {
+      bannerElements(in: f).contains {
+        $0.accessibilityRole?() == .button
+          && ($0.accessibilityLabel?() == "Choose Folder…"
+            || $0.accessibilityTitle?() == "Choose Folder…")
       }
     }
 
@@ -169,24 +167,18 @@ import Testing
       #expect(f.destination.statusMessage == "Selected path is not a folder")
     }
 
-    @Test(arguments: Surface.allCases)
-    func disabledExportHelpNamesTheUnavailableFolder(surface: Surface) async throws {
+    /// The full destination/history help matrix is pinned by ManualExportAvailabilityTests.
+    @Test func unavailableDestinationDisablesTheActualPrimaryExport() async throws {
       let f = try await Fixture()
       defer { f.close() }
       try await f.setProblem(.unreachable)
-      f.show(surface)
-      let key = surface == .root ? "toolbar-export-help" : "\(surface)-export-help"
-      let rendered = await observe { f.counter.renderedText[key] != nil }
+      f.show()
+      let window = try #require(f.window)
       try #require(
-        rendered,
-        "Actual help consumer must render: \(key); values: \(f.counter.renderedText), bodies: \(f.counter.snapshot())"
-      )
-      #expect(f.counter.renderedText[key] == [reconnect])
-      if surface == .root {
-        #expect(f.counter.renderedText["destination-help"]?.first?.contains(reconnect) == true)
-        #expect(
-          f.counter.renderedText["destination-help"]?.first?.contains("click to change") == false)
-      }
+        await observe(in: window) {
+          NativeViewAccess.button("Export All", in: window)?.isAccessibilityEnabled?() == false
+        })
+      #expect(f.destination.exportUnavailableHelp == reconnect)
     }
 
     @Test(arguments: Problem.allCases, [false, true])
@@ -201,12 +193,10 @@ import Testing
       try await f.setProblem(problem)
       f.show()
       let expected = problem == .unreachable ? reconnect : permission
-      let rendered = await observe { f.counter.renderedText["destination-warning"] != nil }
+      let rendered = await observe { !bannerElements(in: f).isEmpty }
       try #require(rendered, "The actual main-window warning must render")
-      #expect(f.counter.renderedText["destination-warning"] == [expected])
-      #expect(
-        f.counter.renderedText["destination-recovery-action"]
-          == (problem == .permission ? ["Choose Folder…"] : []))
+      #expect(bannerShows(expected, in: f))
+      #expect(bannerOffersFolder(in: f) == (problem == .permission))
       #expect(f.autoSync.isEnabled == enabled)
       if problem == .unreachable {
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
@@ -214,10 +204,10 @@ import Testing
         f.scope.allowed = true
       }
       await f.destination.revalidateAndWait()
-      let cleared = await observe { f.counter.renderedText["destination-warning"] == [] }
+      let cleared = await observe { bannerElements(in: f).isEmpty }
       #expect(cleared)
       f.destination.clearSelection()
-      let noSelection = await observe { f.counter.renderedText["destination-warning"] == [] }
+      let noSelection = await observe { bannerElements(in: f).isEmpty }
       #expect(noSelection)
     }
     @Test func failedBookmarkRestoreShowsRecoveryEvenWithoutResolvedURL() async throws {
@@ -226,12 +216,12 @@ import Testing
       #expect(f.destination.selectedFolderURL == nil)
       #expect(!f.destination.canExportNow && !f.destination.canImportNow)
       f.show()
-      let rendered = await observe { f.counter.renderedText["destination-warning"] == [permission] }
+      let rendered = await observe { bannerShows(permission, in: f) }
       #expect(rendered)
-      #expect(f.counter.renderedText["destination-recovery-action"] == ["Choose Folder…"])
-      #expect(f.counter.renderedText["destination-help"] == [permission])
+      #expect(bannerOffersFolder(in: f))
+      #expect(f.destination.exportUnavailableHelp == permission)
       f.destination.clearSelection()
-      let cleared = await observe { f.counter.renderedText["destination-warning"] == [] }
+      let cleared = await observe { bannerElements(in: f).isEmpty }
       #expect(cleared)
     }
 
@@ -248,10 +238,14 @@ import Testing
       #expect(f.destination.canExportNow && f.destination.canImportNow)
       #expect(f.destination.statusMessage == "Failed to save access to selected folder")
       f.show()
-      let rendered = await observe { f.counter.renderedText["destination-warning"] != nil }
+      let rendered = await observe {
+        f.window.flatMap {
+          NativeViewAccess.button("Export All", in: $0)?.isAccessibilityEnabled?()
+        } == true
+      }
       #expect(rendered)
-      #expect(f.counter.renderedText["destination-warning"] == [])
-      #expect(f.counter.renderedText["destination-recovery-action"] == [])
+      #expect(bannerElements(in: f).isEmpty)
+      #expect(!bannerOffersFolder(in: f))
     }
 
   }

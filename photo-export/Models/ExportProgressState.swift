@@ -69,6 +69,16 @@ final class ExportProgressState {
     self.clock = clock ?? SystemAutoSyncClock()
   }
 
+  /// A retained control may outlive the summary it originally rendered.
+  func dismissManualSummary(id: UUID) {
+    guard manualSummary?.id == id else { return }
+    manualSummary?.isDismissed = true
+  }
+
+  func canShowIssues(for id: UUID) -> Bool {
+    manualSummary?.id == id && manualSummary?.isDismissed == false
+  }
+
   private func changed(immediately: Bool = false) {
     let flush = immediately || totalJobsEnqueued == 0 || totalJobsCompleted >= totalJobsEnqueued
     if sourceUpdateDepth > 0 {

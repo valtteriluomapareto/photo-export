@@ -85,17 +85,17 @@ struct LibraryRootView: View {
   @State private var choosesFolderAfterImportSheet: Bool = false
 
   private var canImport: Bool {
-    hasCompletedOnboarding && photoLibraryManager.isAuthorized
-      && exportDestinationManager.canImportNow && !exportManager.hasActiveExportWork
-      && !exportManager.isImporting
+    LibraryImportAvailability.canImport(
+      onboardingComplete: hasCompletedOnboarding, isAuthorized: photoLibraryManager.isAuthorized,
+      destinationCanImport: exportDestinationManager.canImportNow,
+      hasActiveExportWork: exportManager.hasActiveExportWork, isImporting: exportManager.isImporting
+    )
   }
 
   var body: some View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("library-root")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([String(canImport)], for: "library-can-import")
     #endif
     NavigationSplitView(
       sidebar: {
@@ -580,5 +580,16 @@ private struct AssetSelectionScope<Content: View>: View {
   var body: some View {
     @Bindable var owner = selection
     content($owner.asset)
+  }
+}
+
+/// Eligibility for the File-menu focused action; the root keeps ownership of its live reads.
+enum LibraryImportAvailability {
+  static func canImport(
+    onboardingComplete: Bool, isAuthorized: Bool, destinationCanImport: Bool,
+    hasActiveExportWork: Bool, isImporting: Bool
+  ) -> Bool {
+    onboardingComplete && isAuthorized && destinationCanImport && !hasActiveExportWork
+      && !isImporting
   }
 }

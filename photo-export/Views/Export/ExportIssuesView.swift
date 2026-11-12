@@ -36,10 +36,6 @@ struct ExportIssuesView: View {
     let current = ExportIssuesProjection.Snapshot(
       rows: raw.rows.map { $0.enriched(with: metadata[$0.assetId]) },
       unavailableStores: raw.unavailableStores)
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(current.rows.map(\.assetId), for: "issue-visible-ids")
-    #endif
     VStack(spacing: 0) {
       if !current.unavailableStores.isEmpty {
         Text(
@@ -97,18 +93,10 @@ struct ExportIssuesView: View {
         if let entries = grouped[category] {
           Section(header: Self.header(for: category, count: entries.count)) {
             ForEach(entries) { entry in
-              FailureRow(
-                entry: entry, canRetry: canRetry, autoExportEnabled: autoSyncManager.isEnabled
-              ) {
-                // A rendered closure can outlive a destination switch or a new failure.
-                guard snapshot.rows.contains(where: { $0.matchesFailure(entry) }),
-                  let scope = entry.scopeKey,
-                  let variant = entry.variant, let retry = entry.retry
-                else { return }
-                autoSyncManager.retryFailedVariant(
-                  scope: scope, assetId: entry.assetId, variant: variant,
-                  expectedDestinationId: entry.destinationId, expectedEntry: retry)
-              }
+              ExportIssueRow(
+                autoSyncManager: autoSyncManager,
+                exportDestinationManager: exportDestinationManager,
+                entry: entry, canRetry: canRetry, autoExportEnabled: autoSyncManager.isEnabled)
             }
           }
         }
@@ -169,24 +157,18 @@ struct ExportIssuesView: View {
 
 }
 
-private struct FailureRow: View {
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
+struct ExportIssueRow: View {
+  let autoSyncManager: AutoSyncManager
+  let exportDestinationManager: ExportDestinationManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(\.locale) private var locale
   let entry: ExportIssue
   let canRetry: Bool
   let autoExportEnabled: Bool
-  let onRetry: () -> Void
 
   var body: some View {
-    let primaryLine =
-      "\(entry.filename ?? "Filename unavailable") · \(creationDateLabel) · \(entry.variantLabel)"
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(
-        [primaryLine, entry.assetId], for: "issue-row:\(entry.assetId)")
-    #endif
+    let primaryLine = entry.primaryLine(locale: locale)
     VStack(alignment: .leading, spacing: 4) {
       HStack {
         Text(primaryLine).font(.callout).foregroundStyle(.secondary)
@@ -210,12 +192,8 @@ private struct FailureRow: View {
       HStack {
         Text(timeFooter).font(.caption).foregroundStyle(.tertiary)
         Spacer()
-        if entry.retry != nil, entry.scopeKey != nil, entry.variant != nil, !entry.isCovered {
-          #if DEBUG
-            // swiftlint:disable:next redundant_discardable_let
-            let _ = bodyCounter?.recordAction("issue-retry:\(entry.assetId)", action: onRetry)
-          #endif
-          Button("Retry", action: onRetry).controlSize(.small).disabled(!canRetry)
+        if entry.showsRetry {
+          Button("Retry", action: retry).controlSize(.small).disabled(!canRetry)
             .help(
               "Retries using your configured Auto Export scopes. You can also export this item manually."
             )
@@ -232,9 +210,16 @@ private struct FailureRow: View {
     .padding(.vertical, 2)
   }
 
-  private var creationDateLabel: String {
-    guard let date = entry.creationDate else { return "Date unavailable" }
-    return date.formatted(.dateTime.day().month(.abbreviated).year().locale(locale))
+  private func retry() {
+    let current = ExportIssuesProjection.snapshot(
+      destinationId: exportDestinationManager.destinationId,
+      timeline: exportRecordStore, collections: collectionExportRecordStore,
+      retryState: autoSyncManager.currentRetryState,
+      retryDestinationId: autoSyncManager.currentRetryDestinationId)
+    guard let selection = entry.retrySelection(in: current.rows) else { return }
+    autoSyncManager.retryFailedVariant(
+      scope: selection.scope, assetId: entry.assetId, variant: selection.variant,
+      expectedDestinationId: entry.destinationId, expectedEntry: selection.retry)
   }
 
   private var timeFooter: String {

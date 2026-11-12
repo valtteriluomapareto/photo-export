@@ -52,15 +52,11 @@ struct CollectionContentView: View, Equatable {
 
   var body: some View {
     let exportHelp = exportButtonHelp
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "collection-export-help")
-    #endif
     let placement = currentPlacement
     #if DEBUG
       // Required as a declaration inside the ViewBuilder.
       // swiftlint:disable:next redundant_discardable_let
-      let _ = recordRenderingInputs()
+      let _ = bodyCounter?.record("collectionBody")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
@@ -86,6 +82,7 @@ struct CollectionContentView: View, Equatable {
           onExportCollection()
         }
         .buttonStyle(.bordered)
+        .accessibilityIdentifier("collection-export-primary")
         .disabled(!canExport)
         .help(exportHelp)
       }
@@ -168,18 +165,6 @@ struct CollectionContentView: View, Equatable {
       }
     }
   }
-
-  #if DEBUG
-    private func recordRenderingInputs() {
-      bodyCounter?.record("collectionBody")
-      bodyCounter?.recordText([String(viewModel.assets.count)], for: "grid-assets")
-      bodyCounter?.record("scope:\(scopeTaskId)")
-      bodyCounter?.recordAction("collectionExport", action: onExportCollection)
-      bodyCounter?.record("title:\(title)")
-      bodyCounter?.record("banner:\(showsReducedQualityBanner)")
-      bodyCounter?.record("canExport:\(canExport)")
-    }
-  #endif
 
   // MARK: - Scope plumbing
 

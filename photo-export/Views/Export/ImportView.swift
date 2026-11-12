@@ -14,17 +14,6 @@ struct ImportView: View {
 
   @State private var newFolderError: String?
 
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
-
-  private func observed(_ text: String, key: String) -> String {
-    #if DEBUG
-      bodyCounter?.recordText([text], for: key)
-    #endif
-    return text
-  }
-
   var body: some View {
     VStack(spacing: 20) {
       if exportManager.previousBackupMissing {
@@ -53,25 +42,19 @@ struct ImportView: View {
   // MARK: - Progress View
 
   private var progressView: some View {
-    #if DEBUG
-      bodyCounter?.recordText(["true"], for: "import-progress")
-    #endif
     let cancel = {
       exportManager.cancelImport()
       dismiss()
     }
-    #if DEBUG
-      bodyCounter?.recordAction("import-cancel", action: cancel)
-    #endif
     return VStack(spacing: 16) {
       Image(systemName: "arrow.triangle.2.circlepath")
         .font(.system(size: 36))
         .foregroundColor(.accentColor)
 
-      Text(observed("Importing Existing Backup", key: "import-title"))
+      Text("Importing Existing Backup")
         .font(.headline)
 
-      Text(observed(stageLabel, key: "import-message"))
+      Text(stageLabel)
         .font(.subheadline)
         .foregroundColor(.secondary)
 
@@ -84,24 +67,7 @@ struct ImportView: View {
     }
   }
 
-  private var stageLabel: String {
-    switch exportManager.importStage {
-    case .scanningBackupFolder:
-      return "Scanning backup folder\u{2026}"
-    case .readingPhotosLibrary:
-      return "Reading Photos library\u{2026}"
-    case .matchingAssets(let matched, let total):
-      return "Matching assets\u{2026} \(matched) found of \(total) files"
-    case .rebuildingLocalState:
-      return "Rebuilding local state\u{2026}"
-    case .reconcilingDiskState:
-      return "Pruning records for missing files\u{2026}"
-    case .done:
-      return "Done"
-    case .none:
-      return "Preparing\u{2026}"
-    }
-  }
+  private var stageLabel: String { ImportPresentation.stageLabel(exportManager.importStage) }
 
   private var timelineExportAvailability: ManualExportAvailability {
     ManualExportAvailability(
@@ -110,18 +76,15 @@ struct ImportView: View {
   }
 
   private var canRetryImport: Bool {
-    exportDestinationManager.canImportNow && exportRecordStore.state == .ready
-      && !collectionExportRecordStore.state.needsRecovery
-      && !exportManager.isImporting && !exportManager.hasActiveExportWork
+    ImportPresentation.canRetry(
+      destinationCanImport: exportDestinationManager.canImportNow,
+      timeline: exportRecordStore.state, collections: collectionExportRecordStore.state,
+      importing: exportManager.isImporting, activeExport: exportManager.hasActiveExportWork)
   }
 
   private var recoveryGuidance: String {
-    if exportRecordStore.state.needsRecovery || collectionExportRecordStore.state.needsRecovery {
-      return
-        "Close this sheet and resolve the export history alert before retrying. Keep the app open to preserve unsaved progress."
-    }
-    return
-      "Check that your backup drive is connected. Close this sheet to reselect the export folder if access needs renewing, then try again."
+    ImportPresentation.recoveryGuidance(
+      timeline: exportRecordStore.state, collections: collectionExportRecordStore.state)
   }
 
   private func terminalView(error: String?) -> some View {
@@ -130,21 +93,15 @@ struct ImportView: View {
       exportManager.startImport()
     }
     let close = { dismiss() }
-    #if DEBUG
-      bodyCounter?.recordText(["false"], for: "import-progress")
-      bodyCounter?.recordText([String(canRetryImport)], for: "import-can-retry")
-      bodyCounter?.recordAction("import-retry", action: retry)
-      bodyCounter?.recordAction("import-close", action: close)
-    #endif
     return VStack(spacing: 16) {
       Image(systemName: error == nil ? "info.circle" : "exclamationmark.triangle")
         .font(.system(size: 36))
         .foregroundStyle(error == nil ? Color.secondary : Color.orange)
-      Text(observed(error == nil ? "Import Stopped" : "Import Failed", key: "import-title"))
+      Text(error == nil ? "Import Stopped" : "Import Failed")
         .font(.headline)
-      Text(observed(error ?? "No import is running.", key: "import-message"))
+      Text(error ?? "No import is running.")
         .multilineTextAlignment(.center)
-      Text(observed(recoveryGuidance, key: "import-recovery"))
+      Text(recoveryGuidance)
         .font(.caption)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
@@ -172,28 +129,21 @@ struct ImportView: View {
         if outcome == .newHistory { dismiss() }
       }
     }
-    #if DEBUG
-      bodyCounter?.recordText(["false"], for: "import-progress")
-      bodyCounter?.recordAction("import-choose-another-folder", action: chooseAnother)
-      bodyCounter?.recordAction("import-use-as-new-folder", action: useAsNew)
-    #endif
     return VStack(spacing: 16) {
       Image(systemName: "questionmark.folder")
         .font(.system(size: 36))
         .foregroundStyle(.orange)
-      Text(observed("This Folder Doesn\u{2019}t Contain Your Previous Backup", key: "import-title"))
+      Text("This Folder Doesn\u{2019}t Contain Your Previous Backup")
         .font(.headline)
         .multilineTextAlignment(.center)
       Text(
-        observed(
-          "None of the files in your export history were found in \u{201C}\(folderName)\u{201D}, "
-            + "so your history was kept as it was. Choose the folder that has your earlier "
-            + "exports, or use this one as a new backup folder.",
-          key: "import-message")
+        "None of the files in your export history were found in \u{201C}\(folderName)\u{201D}, "
+          + "so your history was kept as it was. Choose the folder that has your earlier "
+          + "exports, or use this one as a new backup folder."
       )
       .multilineTextAlignment(.center)
       if let newFolderError {
-        Text(observed(newFolderError, key: "import-new-folder-error"))
+        Text(newFolderError)
           .font(.caption)
           .foregroundStyle(.orange)
           .multilineTextAlignment(.center)
@@ -212,80 +162,23 @@ struct ImportView: View {
   // MARK: - Result View
 
   private func resultView(_ report: ImportReport) -> some View {
-    #if DEBUG
-      bodyCounter?.recordText(["false"], for: "import-progress")
-    #endif
     let recognized = report.matchedCount + report.collectionMatchedCount
     return VStack(spacing: 16) {
       Image(systemName: recognized > 0 ? "checkmark.circle.fill" : "info.circle.fill")
         .font(.system(size: 36))
         .foregroundColor(recognized > 0 ? .green : .blue)
 
-      Text(observed("Import Complete", key: "import-title"))
+      Text("Import Complete")
         .font(.headline)
 
       VStack(alignment: .leading, spacing: 8) {
-        reportRow(
-          label: "Timeline files scanned",
-          value: "\(report.totalScanned)",
-          icon: "doc.on.doc"
-        )
-        reportRow(
-          label: "Matched to Photos library",
-          value: "\(report.matchedCount)",
-          icon: "checkmark.circle"
-        )
-        if report.ambiguousCount > 0 {
-          reportRow(
-            label: "Ambiguous (skipped)",
-            value: "\(report.ambiguousCount)",
-            icon: "questionmark.circle"
-          )
-        }
-        if report.unmatchedCount > 0 {
-          reportRow(
-            label: "No matching asset found",
-            value: "\(report.unmatchedCount)",
-            icon: "xmark.circle"
-          )
-        }
-        if report.collectionFilesScanned > 0 {
-          reportRow(
-            label: "Album and Favorites files scanned",
-            value: "\(report.collectionFilesScanned)",
-            icon: "rectangle.stack"
-          )
-          reportRow(
-            label: "Album and Favorites files matched",
-            value: observed("\(report.collectionMatchedCount)", key: "import-collection-matched"),
-            icon: "checkmark.rectangle.stack"
-          )
-        }
-        if !report.unrecognizedCollectionFolders.isEmpty {
+        ForEach(ImportPresentation.rows(report)) { row in
           VStack(alignment: .leading, spacing: 2) {
-            reportRow(
-              label: "Album folders not linked to an album",
-              value: observed(
-                "\(report.unrecognizedCollectionFolders.count)",
-                key: "import-collection-unrecognized"),
-              icon: "folder.badge.questionmark"
-            )
-            Text(
-              observed(
-                unlinkedFoldersCaption(report.unrecognizedCollectionFolders),
-                key: "import-collection-unrecognized-caption")
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.leading, 28)
+            reportRow(label: row.label, value: row.value, icon: row.icon)
+            if let caption = row.caption {
+              Text(caption).font(.caption).foregroundStyle(.secondary).padding(.leading, 28)
+            }
           }
-        }
-        if report.prunedRecords > 0 || report.prunedVariants > 0 {
-          reportRow(
-            label: "Records pruned (file missing)",
-            value: pruneSummary(report),
-            icon: "trash"
-          )
         }
       }
       .padding()
@@ -303,9 +196,7 @@ struct ImportView: View {
 
       if report.collectionsSkipped {
         Text(
-          observed(
-            "Album and Favorites history wasn\u{2019}t rebuilt because it isn\u{2019}t available. Resolve the export history alert, then import again.",
-            key: "import-collections-skipped")
+          ImportPresentation.collectionsSkippedGuidance
         )
         .font(.caption)
         .foregroundStyle(.orange)
@@ -334,31 +225,6 @@ struct ImportView: View {
             destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? "")
       }
     }
-  }
-
-  /// Names up to three unlinked folders by their path below `Collections/<root>/`, then the
-  /// explanation.
-  private func unlinkedFoldersCaption(_ folders: [String]) -> String {
-    let names = folders.prefix(3).map { "\u{201C}\(collectionFolderName($0))\u{201D}" }
-    let more = folders.count > 3 ? " and \(folders.count - 3) more" : ""
-    return names.joined(separator: ", ") + more
-      + ". These are usually albums renamed, moved or deleted in Photos since they were "
-      + "exported. Their files are left as they are."
-  }
-
-  /// `Collections/Albums/Trips/Paris/` → `Trips/Paris`; a root folder such as
-  /// `Collections/Favorites/` → `Favorites`.
-  private func collectionFolderName(_ path: String) -> String {
-    let components = path.split(separator: "/").map(String.init)
-    guard components.count > 2 else { return components.last ?? path }
-    return components.dropFirst(2).joined(separator: "/")
-  }
-
-  private func pruneSummary(_ report: ImportReport) -> String {
-    if report.prunedVariants == report.prunedRecords {
-      return "\(report.prunedRecords)"
-    }
-    return "\(report.prunedRecords) records, \(report.prunedVariants) variants"
   }
 
   private func reportRow(label: String, value: String, icon: String) -> some View {

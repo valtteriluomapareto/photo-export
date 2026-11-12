@@ -86,8 +86,9 @@ Land this before invasive refactors.
    wraps `withObservationTracking` with a timeout and re-registration. For
    the upcoming Phase 2 work.
 3. ✅ `BodyInvalidationCounter` (`photo-export/App/BodyInvalidationCounter.swift`,
-   `#if DEBUG`) records hosted view bodies and rendered state through an isolated
-   `bodyInvalidationCounter` environment value. The original global measurement
+   `#if DEBUG`) records hosted view bodies and summary-scan budgets through an isolated
+   `bodyInvalidationCounter` environment value. Finite completion witnesses retain
+   deterministic held-task lifecycle checks; captions and actual controls use pure/native tests. The original global measurement
    modifier was removed after the Observation migration.
 4. ✅ `AppDiagnostics` (`photo-export/App/AppDiagnostics.swift`) for the
    `AppLaunch` interval and `SelectionChanged` event; `Export.Run` interval
@@ -117,8 +118,9 @@ normal app windows do not collect global body measurements.
 
 Issue #149 extends the collection pane's existing narrow-input precedent to Favorites,
 albums, and shared albums. An optional DEBUG `bodyInvalidationCounter` environment value
-supports isolated hosted measurements of bodies, actual summary scans, rendering inputs,
-and rendered actions. The hosted regression uses a real placement and 10,000 synthetic
+supports isolated hosted measurements of bodies and actual summary scans. Production
+value-policy tests cover captions/eligibility, and native control tests cover bindings and
+effects; text/action snapshots are no longer recorded. The hosted regression uses a real placement and 10,000 synthetic
 assets: ten acknowledged unrelated queue publications caused ten extra bodies/scans
 before the fix and zero afterward (macOS 26.6.2, Xcode 27). This is a deterministic count
 measurement, not an Instruments trace or a real-library throughput benchmark. The pane

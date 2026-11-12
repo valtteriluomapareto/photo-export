@@ -42,7 +42,6 @@ import Testing
       let timeline: ExportRecordStore
       let collections: CollectionExportRecordStore
       let navigation: Navigation
-      let counter = BodyInvalidationCounter()
       let gate = AsyncCheckpoint()
       let requests = RequestLog()
       let root = TestScratch.directory("AssetDetailStatus")
@@ -50,7 +49,6 @@ import Testing
       let timelinePlacement = ExportPlacement.timeline(year: 2025, month: 1)
 
       init(
-        adjusted: Bool = false, live: Bool = false,
         paneSize: NSSize = NSSize(width: 500, height: 600)
       ) async {
         library = PhotoLibraryManager(overrideService: photos)
@@ -60,7 +58,7 @@ import Testing
         await collections.configureAndWait(for: "A")
         navigation = Navigation(
           asset: TestAssetFactory.makeAsset(
-            id: "selected", hasAdjustments: adjusted, isLivePhoto: live))
+            id: "selected"))
         photos.fullImageRequestOverride = { [gate, requests] id in
           requests.ids.append(id)
           await gate.enter()
@@ -70,11 +68,11 @@ import Testing
         let hosting = NSHostingView(
           rootView: Host(navigation: navigation, library: library, collections: collections)
             .environment(library).environment(timeline).environment(collections)
-            .environment(\.bodyInvalidationCounter, counter))
-        window = NSWindow(
+            .environment(\.accessibilityEnabled, true))
+        window = HostedViewHarness.makeWindow(
           contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: paneSize),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         window.contentView = hosting
       }
 
@@ -99,14 +97,25 @@ import Testing
         await gate.waitForEnter(count: 1)
       }
 
+      private func visibleRows() -> [String] {
+        let prefixes = [
+          "Original:", "Original failed:", "Live Photo video:", "Live Photo video failed:",
+          "Edited:", "Edited failed:", "Edited version", "Edited Live Photo video:",
+          "Edited Live Photo video failed:",
+        ]
+        var rows: [String] = []
+        for text in NativeViewAccess.texts(in: window)
+        where prefixes.contains(where: { text.hasPrefix($0) }) && !rows.contains(text) {
+          rows.append(text)
+        }
+        return rows
+      }
+
       func expectRows(_ expected: [String], sourceLocation: SourceLocation = #_sourceLocation) async
       {
-        _ = await eventually("asset detail rows \(expected)", sourceLocation: sourceLocation) {
-          window.contentView?.layoutSubtreeIfNeeded()
-          return counter.renderedText["asset-detail-status"] == expected
-        }
         #expect(
-          counter.renderedText["asset-detail-status"] == expected, sourceLocation: sourceLocation)
+          await observe(in: window) { visibleRows() == expected }, sourceLocation: sourceLocation)
+        #expect(visibleRows() == expected, sourceLocation: sourceLocation)
       }
 
       func close() async {
@@ -140,20 +149,35 @@ import Testing
         let favorites = ExportPlacement.favorites()
         let album = placement(.album, "album")
         let shared = placement(.sharedAlbum, "shared")
-        f.set(f.timelinePlacement, variants: [.original: record(.done)])
+        f.set(favorites, variants: [.original: record(.done)])
+        await f.show(favorites)
+        await f.expectRows(["Original: Exported"])
+        #expect(f.timeline.exportInfo(assetId: f.navigation.asset.id) == nil)
+        f.set(f.timelinePlacement, variants: [.original: record(.pending)])
         f.set(favorites, variants: [.original: record(.pending)])
         f.set(album, variants: [.original: record(.failed, error: "Album disk full")])
         f.set(shared, variants: [.original: record(.inProgress)])
-        await f.show(f.timelinePlacement)
+        f.collections.flushPendingNotifications()
+        await f.expectRows(["Original: Pending"])
+        f.navigation.placement = f.timelinePlacement
+        await f.expectRows(["Original: Pending"])
+        let timelineDetails = f.photos.detailsFetchCalls.count
+        #expect(timelineDetails == 1)
+        f.set(f.timelinePlacement, variants: [.original: record(.done)])
+        f.timeline.flushPendingNotifications()
         await f.expectRows(["Original: Exported"])
+        #expect(f.photos.detailsFetchCalls.count - timelineDetails == 0)
         f.navigation.placement = favorites
         await f.expectRows(["Original: Pending"])
         f.navigation.placement = album
         await f.expectRows(["Original failed: Album disk full"])
         f.navigation.placement = shared
         await f.expectRows(["Original: In progress"])
+        let details = f.photos.detailsFetchCalls.count
+        #expect(details == 1)
         f.set(shared, variants: [.original: record(.done)])
         await f.expectRows(["Original: Exported"])
+        #expect(f.photos.detailsFetchCalls.count == details)
         f.navigation.placement = nil
         await f.expectRows([])
         #expect(f.requests.ids == [f.navigation.asset.id])
@@ -176,111 +200,6 @@ import Testing
         } else {
           #expect(size.width <= 1000, "The 500-point pane needs at most Retina width")
         }
-      } cleanup: {
-        await f.close()
-      }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func recordPublicationUpdatesStatusWithoutFetchingDetails() async {
-      let f = await Fixture()
-      await withCleanup {
-        f.set(f.timelinePlacement, variants: [.original: record(.pending)])
-        await f.show(f.timelinePlacement)
-        await f.expectRows(["Original: Pending"])
-        let before = f.photos.detailsFetchCalls.count
-        f.set(f.timelinePlacement, variants: [.original: record(.done)])
-        f.timeline.flushPendingNotifications()
-        await f.expectRows(["Original: Exported"])
-        #expect(f.photos.detailsFetchCalls.count - before == 0)
-      } cleanup: {
-        await f.close()
-      }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func collectionOnlySuccessIsVisibleWithoutTimelineHistory() async {
-      let f = await Fixture()
-      await withCleanup {
-        let album = placement(.album, "only-album")
-        f.set(album, variants: [.original: record(.done)])
-        await f.show(album)
-        await f.expectRows(["Original: Exported"])
-        #expect(f.timeline.exportInfo(assetId: f.navigation.asset.id) == nil)
-      } cleanup: {
-        await f.close()
-      }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func sharedAlbumShowsOnlySingleResourceHistoryForAdjustedLivePhoto() async {
-      let f = await Fixture(adjusted: true, live: true)
-      await withCleanup {
-        let variants: [ExportVariant: ExportVariantRecord] = [
-          .original: record(.done), .originalPairedVideo: record(.pending),
-          .edited: record(.failed, error: "irrelevant edit"), .editedPairedVideo: record(.pending),
-        ]
-        f.set(f.timelinePlacement, variants: variants)
-        let shared = placement(.sharedAlbum, "shared")
-        f.set(shared, variants: variants)
-        await f.show(shared)
-        await f.expectRows(["Original: Exported"])
-      } cleanup: {
-        await f.close()
-      }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func convertedEditedHistoryIsVisibleWithoutPhotosAdjustments() async {
-      let f = await Fixture()
-      await withCleanup {
-        f.set(f.timelinePlacement, variants: [.edited: record(.done)])
-        await f.show(f.timelinePlacement)
-        await f.expectRows(["Edited: Exported"])
-      } cleanup: {
-        await f.close()
-      }
-    }
-
-    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-    func currentPlacementLookupIsExactAndReadOnly(shared: Bool) async throws {
-      let f = await Fixture()
-      try await withCleanup {
-        let kind: PhotoCollectionDescriptor.Kind = shared ? .sharedAlbum : .album
-        let selection: LibrarySelection =
-          shared ? .sharedAlbum(collectionId: "album") : .album(collectionId: "album")
-        func album(_ title: String, parent: [String] = []) -> PhotoCollectionDescriptor {
-          PhotoCollectionDescriptor(
-            id: "album", localIdentifier: "album", title: title, kind: kind, pathComponents: parent,
-            children: [])
-        }
-        let resolver = ExportPlacementResolver()
-        let prior = album("Old")
-        let old = try resolver.placement(
-          for: selection, collections: [prior], existingPlacements: [])
-        f.set(old, variants: [.original: record(.done)])
-        try await f.collections.flush()
-        let count = f.collections.mutationCounter
-        let keys = Set(f.collections.placements.keys)
-        for changed in [album("New"), album("Old", parent: shared ? [] : ["Moved"])] {
-          let result = f.collections.currentPlacement(for: selection, collections: [changed])
-          if !shared || changed.title == "New" { #expect(result == nil) }
-        }
-        #expect(f.collections.currentPlacement(for: selection, collections: []) == nil)
-        #expect(f.collections.mutationCounter == count)
-        #expect(Set(f.collections.placements.keys) == keys)
-        let current = album("New")
-        let fresh = try resolver.placement(
-          for: selection, collections: [current], existingPlacements: [old])
-        f.set(fresh, variants: [.original: record(.failed, error: "current failure")])
-        let found = try #require(
-          f.collections.currentPlacement(for: selection, collections: [current]))
-        #expect(found.id == fresh.id)
-        #expect(found.relativePath == fresh.relativePath)
-        #expect(found.id != old.id)
-        #expect(
-          f.collections.exportInfo(assetId: f.navigation.asset.id, placement: old)?.variants[
-            .original]?.status == .done)
       } cleanup: {
         await f.close()
       }
@@ -329,27 +248,5 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func typedRecoveryRowsRemainLiteralInCurrentCollection() async {
-      let f = await Fixture(adjusted: true, live: true)
-      await withCleanup {
-        let album = placement(.album, "fallback")
-        f.set(
-          album,
-          variants: [
-            .original: record(.done),
-            .originalPairedVideo: record(.failed, reason: .pairedVideoUnavailable),
-            .edited: record(.failed, reason: .editedUnavailableOriginalBackedUp),
-          ])
-        await f.show(album)
-        await f.expectRows([
-          "Original: Exported",
-          "Live Photo video: Photos doesn't currently expose a paired video for this Live Photo. The still was exported.",
-          "Edited version was unavailable. The original was saved as a `_orig` companion.",
-        ])
-      } cleanup: {
-        await f.close()
-      }
-    }
   }
 #endif

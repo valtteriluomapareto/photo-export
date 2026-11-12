@@ -103,7 +103,9 @@ import Testing
             service: service, counter: counter
           )
           .environment(library).environment(records).environment(manager)
-          .environmentObject(destination).environment(\.bodyInvalidationCounter, counter))
+          .environmentObject(destination).environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true)
+          .environment(\.locale, Locale(identifier: "en_US")))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -118,7 +120,7 @@ import Testing
         window.orderOut(nil)
         window.contentView = nil
         window.close()
-        counter.reset()  // Release captured action closures after dismantling the host.
+        counter.reset()
         timeline.drainSynchronously()
         records.drainSynchronously()
         try? FileManager.default.removeItem(at: root)
@@ -134,8 +136,7 @@ import Testing
       }
 
       var readinessDescription: String {
-        "summary=\(counter.count(for: "summary:0/10000")), "
-          + "scans=\(counter.count(for: "summaryScan")), "
+        "scans=\(counter.count(for: "summaryScan")), "
           + "bodies=\(counter.count(for: "collectionBody")), "
           + "preheatStarts=\(service.startCachingCalls.count)"
       }
@@ -149,7 +150,7 @@ import Testing
       try #require(
         await observe(in: f.window) {
           f.counter.count(for: "grid-load-finished") > 0
-            && f.counter.count(for: "summary:0/10000") > 0
+            && NativeViewAccess.containsText("0/10,000 exported", in: f.window)
         })
       try await f.renderBarrier()
       let beyondInitialWindow = Set(f.service.favoritesAssets.dropFirst(500).map(\.id))
@@ -179,7 +180,8 @@ import Testing
       defer { f.close() }
       f.show()
       let loaded = await observe(in: f.window) {
-        f.counter.count(for: "summary:0/10000") > 0 && f.service.startCachingCalls.count == 1
+        NativeViewAccess.containsText("0/10,000 exported", in: f.window)
+          && f.service.startCachingCalls.count == 1
       }
       let diagnostics = f.readinessDescription
       try #require(
@@ -241,36 +243,42 @@ import Testing
       f.records.flushPendingNotifications()
       f.show()
       let initial = await observe(in: f.window) {
-        f.counter.count(for: "summary:3/3") > 0 && f.counter.count(for: "selected:adjusted") > 0
+        NativeViewAccess.containsText("3/3 exported", in: f.window)
+          && f.counter.count(for: "thumbnail-body:adjusted") > 0
       }
       try #require(initial)
-      let selectedBefore = f.counter.count(for: "selected:live")
+      let selectedBefore = f.counter.count(for: "thumbnail-body:live")
       f.navigation.asset = live
       let rebound = await observe(in: f.window) {
-        f.counter.count(for: "selected:live") > selectedBefore
+        f.counter.count(for: "thumbnail-body:live") > selectedBefore
       }
       try #require(rebound, "A live binding change must update the pane's selected-thumbnail input")
       #expect(f.navigation.asset == live)
 
       f.manager.versionSelection = .editedWithOriginals
-      let originals = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > 0 }
+      let originals = await observe(in: f.window) {
+        NativeViewAccess.containsText("2/3 exported", in: f.window)
+      }
       try #require(originals)
       f.manager.livePhotosPairedExport = true
-      let paired = await observe(in: f.window) { f.counter.count(for: "summary:1/3") > 0 }
+      let paired = await observe(in: f.window) {
+        NativeViewAccess.containsText("1/3 exported", in: f.window)
+      }
       try #require(paired)
-      let beforeStatus = f.counter.count(for: "summary:2/3")
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
         filename: "ORIGINAL.HEIC", exportedAt: Date())
       f.records.flushPendingNotifications()
       let status = await observe(in: f.window) {
-        f.counter.count(for: "summary:2/3") > beforeStatus
+        NativeViewAccess.containsText("2/3 exported", in: f.window)
       }
       try #require(status)
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
       f.library.libraryRefresh.flush()
-      let refreshed = await observe(in: f.window) { f.counter.count(for: "summary:2/4") > 0 }
+      let refreshed = await observe(in: f.window) {
+        NativeViewAccess.containsText("2/4 exported", in: f.window)
+      }
       try #require(refreshed)
       #expect(f.navigation.asset == live)
 
@@ -295,14 +303,14 @@ import Testing
       f.navigation.selection = .sharedAlbum(collectionId: "shared")
       f.navigation.title = "Updated shared title"
       let sharedRendered = await observe(in: f.window) {
-        f.counter.count(for: "summary:1/1") > 0 && f.counter.count(for: "banner:true") > 0
-          && f.counter.count(for: "title:Updated shared title") > 0
+        NativeViewAccess.containsText("1/1 exported", in: f.window)
+          && NativeViewAccess.containsText("Shared albums export at reduced quality", in: f.window)
+          && NativeViewAccess.containsText("Updated shared title", in: f.window)
       }
       try #require(sharedRendered)
-      let bannersBefore = f.counter.count(for: "banner:false")
       f.manager.versionSelection = .edited
       let bannerRemoved = await observe(in: f.window) {
-        f.counter.count(for: "banner:false") > bannersBefore
+        !NativeViewAccess.containsText("Shared albums export at reduced quality", in: f.window)
       }
       #expect(bannerRemoved)
     }
@@ -325,44 +333,50 @@ import Testing
           id: "shared-action", localIdentifier: "shared-action",
           title: "Shared action", kind: .sharedAlbum, pathComponents: [], children: []))
       f.show()
-      let ready = await observe(in: f.window) { f.counter.count(for: "canExport:true") > 0 }
+      let ready = await observe(in: f.window) {
+        NativeViewAccess.element("collection-export-primary", in: f.window)?
+          .isAccessibilityEnabled?() == true
+      }
       try #require(ready)
-      let disabledBefore = f.counter.count(for: "canExport:false")
       await f.records.configureAndWait(for: nil)
       let disabled = await observe(in: f.window) {
-        f.counter.count(for: "canExport:false") > disabledBefore
+        NativeViewAccess.element("collection-export-primary", in: f.window)?
+          .isAccessibilityEnabled?() == false
       }
       try #require(disabled)
-      let enabledBefore = f.counter.count(for: "canExport:true")
       await f.records.configureAndWait(for: "test")
       let reenabled = await observe(in: f.window) {
-        f.counter.count(for: "canExport:true") > enabledBefore
+        NativeViewAccess.element("collection-export-primary", in: f.window)?
+          .isAccessibilityEnabled?() == true
       }
       try #require(reenabled)
-      let action = try #require(f.counter.renderedActions["collectionExport"])
-      action()
+      let button = try #require(NativeViewAccess.button("Export Favorites", in: f.window))
+      let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+      _ = press()
       let favoriteRan = await observe(in: f.window) {
         f.records.exportInfo(assetId: "scope-asset", placement: f.favorite) != nil
       }
       try #require(favoriteRan)
       await f.manager.waitForQueueDrained()
 
-      for (selection, scopeKey, assetId, kind, localId) in [
+      for (selection, assetId, kind, localId) in [
         (
-          LibrarySelection.album(collectionId: "bulk-album-0-0"), "album:bulk-album-0-0",
+          LibrarySelection.album(collectionId: "bulk-album-0-0"),
           "scope-asset",
           ExportPlacement.Kind.album, "bulk-album-0-0"
         ),
         (
-          .sharedAlbum(collectionId: "shared-action"), "shared-album:shared-action", "scope-asset",
+          .sharedAlbum(collectionId: "shared-action"), "scope-asset",
           .sharedAlbum, "shared-action"
         ),
       ] {
         f.navigation.selection = selection
-        let changed = await observe(in: f.window) { f.counter.count(for: "scope:\(scopeKey)") > 0 }
-        try #require(changed)
-        let action = try #require(f.counter.renderedActions["collectionExport"])
-        action()
+        let title = kind == .sharedAlbum ? "Export Shared Album" : "Export Album"
+        try #require(
+          await observe(in: f.window) { NativeViewAccess.button(title, in: f.window) != nil })
+        let button = try #require(NativeViewAccess.button(title, in: f.window))
+        let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+        _ = press()
         let ran = await observe(in: f.window) {
           guard
             let placement = f.records.placements(matching: kind).first(where: {

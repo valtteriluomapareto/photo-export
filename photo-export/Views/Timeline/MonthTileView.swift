@@ -1,240 +1,36 @@
 import AppKit
 import SwiftUI
 
-/// A single tile in `YearContentView`'s grid. Mirrors `FolderTileView`'s visual rhythm
-/// (rounded cover area, 4-up cover grid, title, caption, fully-exported badge) so the
-/// year-by-month overview reads the same as the Collections folder overview, but uses a
-/// larger tile because a year always holds exactly twelve children — far fewer than a
-/// folder typically does — so we can afford the additional cover area.
-///
-/// Covers are loaded lazily via `.task` so a year with 12 months only fetches covers for
-/// the tiles that scroll into view (`LazyVGrid` semantics). Each tile requests the four
-/// chronologically earliest assets through a limited background query.
+/// The month adapter owns year/month task identity; the shared tile owns rendering.
 struct MonthTileView: View {
-  /// Side length of the tile's image area. Larger than `FolderTileView.tileSide` (144)
-  /// because the year overview has a fixed cardinality of 12 children — there's
-  /// breathing room to give each cover more real estate without the grid feeling sparse.
-  static let tileSide: CGFloat = 180
-
+  static let tileSide = CoverTileStyle.month.side
   let year: Int
   let month: Int
-  /// Total photo count for the month, or `nil` while the count is still loading. The
-  /// caption reserves a line of height during loading so tiles don't jump.
   let photoCount: Int?
-  /// `true` when every photo in the month has been exported under the active version
-  /// selection. Drives the green checkmark badge on the cover.
   let isFullyExported: Bool
-
   let photoLibraryService: any PhotoLibraryService
-
   @Environment(\.displayScale) private var displayScale
-
-  @State private var covers: [CGImage] = []
-  @State private var coverState: CoverState = .idle
-  @State private var isHovering: Bool = false
-
-  private enum CoverState {
-    case idle
-    case loading
-    case loaded
-    case empty
-    case failed
-  }
+  @State private var content: CoverTileContent = .idle
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      coverArea
-        .frame(width: Self.tileSide, height: Self.tileSide)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(alignment: .topTrailing) { exportedBadge }
-
-      Text(MonthFormatting.name(for: month))
-        .font(.body)
-        .lineLimit(1)
-        .truncationMode(.tail)
-        .frame(width: Self.tileSide, alignment: .leading)
-
-      Text(captionText)
-        .font(.caption)
-        .foregroundColor(.secondary)
-        .lineLimit(1)
-        .frame(width: Self.tileSide, alignment: .leading)
-    }
-    .scaleEffect(isHovering ? 1.02 : 1.0)
-    .animation(.easeInOut(duration: 0.12), value: isHovering)
-    .onHover { isHovering = $0 }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(accessibilityLabel)
+    CoverTileView(
+      style: .month, title: MonthFormatting.name(for: month),
+      caption: CoverTileFormatting.photoCount(photoCount),
+      accessibilityLabel: CoverTileFormatting.label(
+        prefix: ["Month", "\(MonthFormatting.name(for: month)) \(year)"],
+        photoCount: photoCount, exported: isFullyExported, content: content),
+      content: content, isFullyExported: isFullyExported
+    )
     .accessibilityHint("Opens the month's photos")
-    // Note: the wrapping `Button` in `YearContentView` already supplies `.isButton`,
-    // so the trait isn't repeated here.
     .task(id: "\(year)-\(month)") {
-      await loadCovers()
-    }
-  }
-
-  // MARK: - Cover area
-
-  @ViewBuilder
-  private var coverArea: some View {
-    ZStack {
-      Rectangle().fill(Color.gray.opacity(0.15))
-      switch coverState {
-      case .loaded:
-        coverGrid
-      case .loading, .idle:
-        Rectangle().fill(Color.gray.opacity(0.2)).accessibilityLabel("Loading cover")
-      case .empty:
-        Image(systemName: "photo.on.rectangle.angled")
-          .font(.system(size: 36))
-          .foregroundStyle(.secondary)
-      case .failed:
-        Image(systemName: "exclamationmark.triangle")
-          .foregroundStyle(.secondary)
-          .help("Couldn't load preview")
-          .accessibilityHidden(true)
+      // ForEach keys the month alone. A year change must immediately discard old covers.
+      content = .loading
+      if let loaded = await CoverTileContent.load(
+        scope: .timeline(year: year, month: month), service: photoLibraryService,
+        side: Self.tileSide, displayScale: displayScale), !Task.isCancelled
+      {
+        content = loaded
       }
-    }
-  }
-
-  @ViewBuilder
-  private var coverGrid: some View {
-    let displayed = Array(covers.prefix(4))
-    if displayed.count <= 1 {
-      if let single = displayed.first {
-        Image(decorative: single, scale: 1)
-          .resizable()
-          .scaledToFill()
-          .frame(width: Self.tileSide, height: Self.tileSide)
-          .clipped()
-      }
-    } else {
-      VStack(spacing: 1) {
-        HStack(spacing: 1) {
-          coverCell(at: 0, of: displayed)
-          coverCell(at: 1, of: displayed)
-        }
-        HStack(spacing: 1) {
-          coverCell(at: 2, of: displayed)
-          coverCell(at: 3, of: displayed)
-        }
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func coverCell(at index: Int, of covers: [CGImage]) -> some View {
-    let cellSide = (Self.tileSide - 1) / 2
-    if index < covers.count {
-      Image(decorative: covers[index], scale: 1)
-        .resizable()
-        .scaledToFill()
-        .frame(width: cellSide, height: cellSide)
-        .clipped()
-    } else {
-      Rectangle()
-        .fill(Color.secondary.opacity(0.18))
-        .frame(width: cellSide, height: cellSide)
-    }
-  }
-
-  /// Fully-exported badge. Uses palette rendering (white check inside a green disc) so
-  /// the glyph sits cleanly on top of any thumbnail content without a separate flat
-  /// white plate behind it — that plate read as a foreign sticker and was particularly
-  /// loud in Dark Mode. A subtle shadow keeps the green readable over light covers.
-  @ViewBuilder
-  private var exportedBadge: some View {
-    if isFullyExported {
-      Image(systemName: "checkmark.circle.fill")
-        .symbolRenderingMode(.palette)
-        .foregroundStyle(.white, .green)
-        .font(.title3)
-        .shadow(color: Color.black.opacity(0.25), radius: 1.5, y: 0.5)
-        .padding(6)
-        .accessibilityHidden(true)
-    }
-  }
-
-  // MARK: - Captions
-
-  private var captionText: String {
-    guard let photoCount else { return " " }
-    return photoCount == 1 ? "1 photo" : "\(photoCount) photos"
-  }
-
-  private var accessibilityLabel: String {
-    var parts = ["Month", "\(MonthFormatting.name(for: month)) \(year)"]
-    if let photoCount {
-      parts.append(photoCount == 1 ? "1 photo" : "\(photoCount) photos")
-    }
-    if isFullyExported { parts.append("fully exported") }
-    switch coverState {
-    case .idle, .loading: parts.append("Loading preview")
-    case .failed: parts.append("Couldn't load preview")
-    case .loaded, .empty: break
-    }
-    return parts.joined(separator: ", ")
-  }
-
-  // MARK: - Cover loading
-
-  /// Loads a bounded cover query and reuses target-sized decoded images.
-  private func loadCovers() async {
-    // Reset state on every run: the .task id changes when the user flips
-    // years, but SwiftUI keeps each month-tile's @State alive across that
-    // switch because `ForEach(months, id: \.self)` keys identity on the month
-    // alone. Without an explicit reset, a year flip leaves the prior year's
-    // thumbnails on screen even though the task is firing for the new year.
-    covers = []
-    coverState = .loading
-    do {
-      let assets = try await photoLibraryService.coverAssets(
-        in: .timeline(year: year, month: month), limit: 4)
-      // The previous task (different year/month) may have already been cancelled by
-      // SwiftUI's .task(id:) lifecycle, but its `await` could still resume and write
-      // state for a tile that's no longer visible. Bail before publishing.
-      try Task.checkCancellation()
-      let coverIds = assets.prefix(4).map(\.id)
-      if coverIds.isEmpty {
-        coverState = .empty
-        return
-      }
-      // Request thumbnails at the tile's displayed pixel size so PhotoKit
-      // doesn't serve the ~200 px cached degraded version that the default
-      // `loadThumbnail` path returns. Using the high-quality + exact path
-      // ensures the 4-up cover grid reads as sharply as the in-pane grid
-      // does (the grid's separate `loadThumbnailHighQuality` upgrade path
-      // also calls into this method, so both surfaces now match).
-      let pixelSide = Self.tileSide * max(displayScale, 1)
-      let target = CGSize(width: pixelSide, height: pixelSide)
-      let loaded = await withTaskGroup(of: (Int, CGImage?).self) { group in
-        for (index, id) in coverIds.enumerated() {
-          group.addTask {
-            (
-              index,
-              await photoLibraryService.decodedThumbnail(
-                for: id, quantizedSize: target, deliveryMode: .highQuality)
-            )
-          }
-        }
-        var pairs: [(Int, CGImage)] = []
-        for await (index, image) in group {
-          if let image { pairs.append((index, image)) }
-        }
-        return pairs.sorted(by: { $0.0 < $1.0 }).map(\.1)
-      }
-      try Task.checkCancellation()
-      if loaded.isEmpty {
-        coverState = .failed
-      } else {
-        covers = loaded
-        coverState = .loaded
-      }
-    } catch is CancellationError {
-      // Don't change state on cancellation — the new task that replaced us will
-      // publish its own state from `covers = []` and `coverState = .loading`.
-    } catch {
-      coverState = .failed
     }
   }
 }
