@@ -161,6 +161,14 @@ import Testing
           await observe(in: sheet) {
             NativeViewAccess.button(rebuildTitle, in: sheet)?.isAccessibilityEnabled?() == true
           })
+        lifecycle.clearMigrationConflictAfterReconcile()
+        try #require(
+          await observe(in: sheet) {
+            !NativeViewAccess.containsText("Show diagnostic details", in: sheet)
+          })
+        #expect(
+          window.attachedSheet === sheet && sheet.isVisible,
+          "Clearing the banner condition must retain the sheet's presentation owner")
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
