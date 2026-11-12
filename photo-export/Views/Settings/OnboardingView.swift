@@ -103,6 +103,9 @@ struct OnboardingView: View {
       .frame(maxWidth: 440)
 
       OnboardingExportActions(
+        exportDestinationManager: exportDestinationManager,
+        destinationCanExport: exportDestinationManager.canExportNow,
+        hasDestination: exportDestinationManager.selectedFolderURL != nil,
         historyState: historyState, exportAll: exportAll, includeOriginals: includeOriginals,
         convertHEICToJPEG: convertHEICToJPEG, onSkip: onSkip)
 

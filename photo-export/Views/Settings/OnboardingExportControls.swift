@@ -45,7 +45,10 @@ struct OnboardingExportOptions: View {
 /// The real first-run actions, used inside the scrollable screen.
 struct OnboardingExportActions: View {
   @Environment(ExportManager.self) private var exportManager
-  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  /// The parent supplies render values; this reference is read only by the action.
+  let exportDestinationManager: ExportDestinationManager
+  let destinationCanExport: Bool
+  let hasDestination: Bool
   let historyState: RecordStoreState
   let exportAll: Bool
   let includeOriginals: Bool
@@ -54,15 +57,13 @@ struct OnboardingExportActions: View {
 
   private var exportAvailability: ManualExportAvailability {
     ManualExportAvailability(
-      destinationCanExport: exportDestinationManager.canExportNow,
-      history: historyState)
+      destinationCanExport: destinationCanExport, history: historyState)
   }
 
   /// Why Start Export is disabled while the picked folder's history loads; empty otherwise.
   private var startExportHelp: String {
     guard exportAll, exportAvailability == .loadingHistory else { return "" }
-    return exportAvailability.unavailableHelp(
-      destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? ""
+    return ManualExportAvailability.loadingHistoryText
   }
 
   var body: some View {
@@ -77,7 +78,9 @@ struct OnboardingExportActions: View {
         // selection the user made here, not the persisted default.
         exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
         exportManager.convertHEICToJPEG = convertHEICToJPEG
-        if exportAll && exportAvailability.canStart {
+        let currentAvailability = ManualExportAvailability(
+          destinationCanExport: exportDestinationManager.canExportNow, history: historyState)
+        if exportAll && currentAvailability.canStart {
           exportManager.startExportAll()
         }
         onSkip()
@@ -87,7 +90,7 @@ struct OnboardingExportActions: View {
       // export.
       .accessibilityIdentifier("onboarding-export-primary")
       .disabled(
-        exportDestinationManager.selectedFolderURL == nil
+        !hasDestination
           || (exportAll && exportAvailability == .loadingHistory)
       )
       .help(startExportHelp)
