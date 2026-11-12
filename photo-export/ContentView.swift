@@ -89,17 +89,9 @@ extension ContentView: Equatable {
 
 struct AuthorizationView: View {
   @Environment(\.openURL) private var openURL
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
   let photoLibraryManager: PhotoLibraryManager
 
   var body: some View {
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.record(
-        "authorization-pane:\(photoLibraryManager.authorizationStatus.rawValue)")
-    #endif
     VStack(spacing: 20) {
       Image(systemName: "photo.on.rectangle.angled")
         .resizable()
@@ -121,19 +113,10 @@ struct AuthorizationView: View {
         || photoLibraryManager.authorizationStatus == .restricted
       {
         let message = PhotosAccessGuidance.message
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordText([message], for: "photos-access-guidance")
-        #endif
         Text(message)
           .foregroundColor(.secondary)
           .padding()
 
-        #if DEBUG
-          // swiftlint:disable:next redundant_discardable_let
-          let _ = bodyCounter?.recordAction(
-            "authorization-open-settings", action: openSystemSettings)
-        #endif
         Button("Open System Settings", action: openSystemSettings)
           .padding()
       } else {
@@ -151,9 +134,6 @@ struct AuthorizationView: View {
       if photoLibraryManager.authorizationStatus == .notDetermined {
         _ = await photoLibraryManager.requestAuthorization()
       }
-      #if DEBUG
-        bodyCounter?.record("authorization-initial-check-complete")
-      #endif
     }
   }
 

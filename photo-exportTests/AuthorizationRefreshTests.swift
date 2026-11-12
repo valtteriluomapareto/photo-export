@@ -13,12 +13,7 @@ import Testing
     @MainActor
     private struct Host: View {
       let library: PhotoLibraryManager
-      let counter: BodyInvalidationCounter
       var body: some View {
-        let route = library.isAuthorized ? "authorized" : "authorization"
-        // A declaration keeps the probe out of ViewBuilder's view expressions.
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter.recordText([route], for: "authorization-route")
         Group {
           if library.isAuthorized {
             Text("Authorized content")
@@ -38,8 +33,8 @@ import Testing
     private final class Fixture {
       let service = FakePhotoLibraryService()
       let notifications = NotificationCenter()
-      let counter = BodyInvalidationCounter()
       let library: PhotoLibraryManager
+      let initialAuthorizationReads: Int
       let opened = URLCapture()
       let window: NSWindow
 
@@ -47,11 +42,11 @@ import Testing
         service.authorizationStatus = status
         service.isAuthorized = PhotoLibraryManager.isAuthorizationSufficient(status)
         library = PhotoLibraryManager(overrideService: service)
+        initialAuthorizationReads = service.authorizationStatusReads
         library.observeAppActivation(notificationCenter: notifications)
         let capture = opened
-        let content = Host(library: library, counter: counter)
+        let content = Host(library: library)
           .environment(\.accessibilityEnabled, true)
-          .environment(\.bodyInvalidationCounter, counter)
           .environment(
             \.openURL,
             OpenURLAction { url in
@@ -73,7 +68,6 @@ import Testing
         window.orderOut(nil)
         window.contentView = nil
         window.close()
-        counter.reset()
       }
     }
 
@@ -84,12 +78,12 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
+        await observe { f.service.authorizationStatusReads > f.initialAuthorizationReads })
       let revision = f.library.libraryRevision
       // Status is authoritative even if a service's separate convenience flag is stale.
       f.service.authorizationStatus = status
       f.activate()
-      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+      #expect(await observe { NativeViewAccess.containsText("Authorized content", in: f.window) })
       #expect(f.library.authorizationStatus == status && f.library.isAuthorized)
       #expect(f.library.libraryRevision == revision + 1)
       #expect(f.service.requestAuthorizationCalls == 0)
@@ -105,10 +99,13 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+        await observe { NativeViewAccess.containsText("Authorized content", in: f.window) })
       f.service.authorizationStatus = status
       f.activate()
-      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorization"] })
+      #expect(
+        await observe {
+          NativeViewAccess.containsText("Photo Library Access Required", in: f.window)
+        })
       #expect(!f.library.isAuthorized && f.library.authorizationStatus == status)
       #expect(f.service.requestAuthorizationCalls == 0)
     }
@@ -121,7 +118,7 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
+        await observe { f.service.authorizationStatusReads > f.initialAuthorizationReads })
       let revision = f.library.libraryRevision
       f.activate()
       f.activate()
@@ -145,20 +142,8 @@ import Testing
       defer { f.close() }
       f.service.authorizationStatus = .authorized
       f.show()
-      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+      #expect(await observe { NativeViewAccess.containsText("Authorized content", in: f.window) })
       #expect(f.service.requestAuthorizationCalls == 0)
-    }
-
-    @Test(arguments: [PHAuthorizationStatus.denied, .restricted])
-    func accessGuidanceNamesThePhotosPrivacyPath(status: PHAuthorizationStatus) async throws {
-      let f = Fixture(status: status)
-      defer { f.close() }
-      f.show()
-      try #require(await observe { f.counter.renderedText["photos-access-guidance"] != nil })
-      #expect(
-        f.counter.renderedText["photos-access-guidance"] == [
-          "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
-        ])
     }
 
     @Test func settingsActionOpensTheExistingPhotosPrivacyURL() async throws {
@@ -169,6 +154,10 @@ import Testing
         await observe(in: f.window) {
           NativeViewAccess.containsText("Photo Library Access Required", in: f.window)
         })
+      #expect(
+        NativeViewAccess.containsText(
+          "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos.",
+          in: f.window))
       let button = try #require(NativeViewAccess.button("Open System Settings", in: f.window))
       #expect(button.isAccessibilityEnabled?() == true)
       #expect(button.accessibilityPerformPress?() == true)

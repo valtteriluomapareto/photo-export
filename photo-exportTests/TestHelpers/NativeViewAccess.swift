@@ -14,9 +14,6 @@ enum NativeViewAccess {
       if let children = object.accessibilityChildren?() {
         for child in children { visit(child as AnyObject) }
       }
-      if let children = object.accessibilityChildrenInNavigationOrder?() {
-        for child in children { visit(child as AnyObject) }
-      }
       if let view = object as? NSView {
         for child in view.subviews { visit(child) }
       }

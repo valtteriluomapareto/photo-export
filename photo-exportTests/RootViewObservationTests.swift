@@ -170,6 +170,7 @@ import Testing
           .environment(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true)
           .environment(\.screenshotSurfaceKey, screenshotSurfaceKey).defaultAppStorage(defaults))
         let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
@@ -525,7 +526,10 @@ import Testing
           f.library.refreshAuthorizationStatus()
           try #require(
             await observe(in: f.window) {
-              f.counter.count(for: "authorization-pane:\(status.rawValue)") > 0
+              f.library.authorizationStatus == status
+                && f.window.map {
+                  NativeViewAccess.containsText("Photo Library Access Required", in: $0)
+                } == true
             })
         }
         f.service.authorizationStatus = .authorized

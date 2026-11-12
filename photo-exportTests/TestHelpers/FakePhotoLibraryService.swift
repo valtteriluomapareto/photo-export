@@ -7,7 +7,15 @@ import Photos
 @MainActor
 final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
   var isAuthorized: Bool = true
-  var authorizationStatus: PHAuthorizationStatus = .authorized
+  private var suppliedAuthorizationStatus: PHAuthorizationStatus = .authorized
+  private(set) var authorizationStatusReads = 0
+  var authorizationStatus: PHAuthorizationStatus {
+    get {
+      authorizationStatusReads += 1
+      return suppliedAuthorizationStatus
+    }
+    set { suppliedAuthorizationStatus = newValue }
+  }
 
   var thumbnailResolveOverride: (@MainActor ([String]) async -> [ThumbnailAsset])?
   var thumbnailResolveCalls: [[String]] = []

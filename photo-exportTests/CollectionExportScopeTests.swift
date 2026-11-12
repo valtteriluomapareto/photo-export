@@ -47,7 +47,8 @@ import Testing
           styleMask: [.titled], toolbarStyle: .unified)
         window.contentView = NSHostingView(
           rootView: environment.environment(Host(manager: h.manager, action: action))
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(h.defaults))
+            .environment(\.bodyInvalidationCounter, counter)
+            .environment(\.accessibilityEnabled, true).defaultAppStorage(h.defaults))
         for id in ["A", "B", "old", "favorite"] {
           let asset = TestAssetFactory.makeAsset(id: id)
           h.photoLib.assetsByAlbumLocalId[id] = [asset]
@@ -83,6 +84,35 @@ import Testing
         h.collectionStore.drainSynchronously()
         h.dest.cleanup()
         try? FileManager.default.removeItem(at: h.storeRoot)
+      }
+    }
+
+    @Test func nativeToolbarStartsTheAdvertisedCollectionScope() async throws {
+      let f = await Fixture(action: .all)
+      try await withCleanup {
+        f.h.photoLib.collectionTree = f.tree("A")
+        f.window.orderFront(nil)
+        try #require(
+          await observe(in: f.window) {
+            NativeViewAccess.button("Export All Albums", in: f.window)?.isAccessibilityEnabled?()
+              == true
+          })
+        let button = try #require(NativeViewAccess.button("Export All Albums", in: f.window))
+        try #require(f.h.manager.pendingJobs.isEmpty)
+        if let native = button as? NSButton {
+          #expect(native.isEnabled)
+          native.performClick(nil)
+        } else {
+          let method: (() -> Bool)? = button.accessibilityPerformPress
+          let press = try #require(method)
+          _ = press()  // AppKit's toolbar proxy returns false even when the action runs.
+        }
+        try #require(
+          await observe(in: f.window) {
+            Set(f.h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["A", "B", "favorite"]
+          })
+      } cleanup: {
+        await f.close()
       }
     }
 
