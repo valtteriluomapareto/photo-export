@@ -14,14 +14,8 @@ final class ProductionThumbnailBackend: PhotoKitThumbnailBackend, @unchecked Sen
   }
 
   func coverAssets(in scope: PhotoFetchScope, options: PHFetchOptions) -> [ThumbnailAsset] {
-    let result: PHFetchResult<PHAsset>
-    switch scope {
-    case .timeline, .favorites:
-      result = PHAsset.fetchAssets(with: options)
-    case .album(let id), .sharedAlbum(let id):
-      guard let collection = PhotoLibraryManager.fetchAssetCollection(localIdentifier: id)
-      else { return [] }
-      result = PHAsset.fetchAssets(in: collection, options: options)
+    guard let result = PhotoLibraryManager.fetchResult(for: scope, options: options) else {
+      return []
     }
     return (0..<min(result.count, options.fetchLimit)).map { Self.handle(result.object(at: $0)) }
   }

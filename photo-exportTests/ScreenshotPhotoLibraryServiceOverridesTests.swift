@@ -36,10 +36,15 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
       !years.isEmpty,
       "screenshot mode must surface curated years; an empty list means the override didn't take")
     let firstYear = try #require(years.first)
-    let yearAssets = try await svc.fetchAssets(year: firstYear, month: nil, mediaType: nil)
+    var yearAssets: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .timeline(year: firstYear, month: nil), mediaType: nil, batchSize: 200)
+    {
+      yearAssets += batch
+    }
     #expect(
       !yearAssets.isEmpty,
-      "fetchAssets(year:month:) must return curated synthetic assets, not an empty production result"
+      "the timeline scope must return curated synthetic assets, not an empty production result"
     )
   }
 
@@ -52,11 +57,11 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
       "every screenshot year must surface a non-zero curated count")
   }
 
-  @Test func countAssetsForYearMonthReturnsCuratedData() throws {
+  @Test func countAssetsForYearMonthReturnsCuratedData() async throws {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
     let firstYear = try #require(years.first)
-    let total = try svc.countAssets(year: firstYear)
+    let total = try await svc.cachedCountAssets(in: .timeline(year: firstYear, month: nil))
     #expect(total > 0)
   }
 
@@ -64,8 +69,9 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
     let firstYear = try #require(years.first)
-    let total = try svc.countAssets(year: firstYear)
-    let adjusted = try await svc.countAdjustedAssets(year: firstYear)
+    let year = PhotoFetchScope.timeline(year: firstYear, month: nil)
+    let total = try await svc.cachedCountAssets(in: year)
+    let adjusted = try await svc.cachedCountAdjustedAssets(in: year)
     // Curated shape, as for scopes below; per-asset flags vary between processes.
     try #require(adjusted > 0)
     #expect(adjusted == total / 4)
@@ -73,9 +79,9 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Collections
 
-  @Test func fetchCollectionTreeReturnsCuratedTree() throws {
+  @Test func fetchCollectionTreeReturnsCuratedTree() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let tree = try svc.fetchCollectionTree()
+    let tree = try await svc.loadCollectionTree()
     #expect(!tree.isEmpty)
     let kinds = Set(tree.map(\.kind))
     #expect(kinds.contains(.favorites))
@@ -90,7 +96,12 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func fetchAssetsInFavoritesScopeReturnsCuratedFavorites() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let favs = try await svc.fetchAssets(in: .favorites, mediaType: nil)
+    var favs: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .favorites, mediaType: nil, batchSize: 200)
+    {
+      favs += batch
+    }
     #expect(
       !favs.isEmpty,
       "favorites scope must surface curated synthetic favorites, not empty production result")
@@ -98,11 +109,16 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func fetchAssetsInAlbumScopeReturnsCuratedAlbumAssets() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let tree = try svc.fetchCollectionTree()
+    let tree = try await svc.loadCollectionTree()
     let firstAlbum = tree.first { $0.kind == .album }
     let albumId = try #require(
       firstAlbum?.localIdentifier, "Curated tree must contain at least one album")
-    let assets = try await svc.fetchAssets(in: .album(collectionId: albumId), mediaType: nil)
+    var assets: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .album(collectionId: albumId), mediaType: nil, batchSize: 200)
+    {
+      assets += batch
+    }
     #expect(!assets.isEmpty)
   }
 
@@ -180,7 +196,8 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func requestFullImageReturnsImage() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let img = try await svc.requestFullImage(for: "family-1")
+    let img = try await svc.requestPreview(
+      for: "family-1", pixelSize: CGSize(width: 2048, height: 2048), onDegraded: { _ in })
     _ = img  // non-throw is the pin
   }
 

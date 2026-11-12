@@ -61,7 +61,7 @@ final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
   /// id different contents under the two scopes when needed; in practice most tests
   /// will only populate one or the other.
   var assetsBySharedAlbumLocalId: [String: [AssetDescriptor]] = [:]
-  /// Canned collection tree returned by `fetchCollectionTree()`. Empty by default.
+  /// Canned collection tree returned by `loadCollectionTree()`. Empty by default.
   var collectionTree: [PhotoCollectionDescriptor] = []
   var collectionTreeError: Error?
   /// Asset IDs that fetchAssetDescriptor should treat as missing, even if they
@@ -190,22 +190,6 @@ final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
     return nil
   }
 
-  func countAssets(year: Int, month: Int) throws -> Int {
-    timelineAssets(year: year, month: month).count
-  }
-
-  func countAssets(year: Int) throws -> Int {
-    timelineAssets(year: year, month: nil).count
-  }
-
-  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
-    timelineAssets(year: year, month: month).filter(\.hasAdjustments).count
-  }
-
-  func countAdjustedAssets(year: Int) async throws -> Int {
-    timelineAssets(year: year, month: nil).filter(\.hasAdjustments).count
-  }
-
   func availableYears() throws -> [Int] {
     availableYearsObserver?()
     if let error = availableYearsError { throw error }
@@ -248,12 +232,6 @@ final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
   }
 
   // MARK: - Phase 2: Collections
-
-  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    inventoryThreads.mutate { $0["tree", default: []].append(Thread.isMainThread) }
-    if let error = collectionTreeError { throw error }
-    return collectionTree
-  }
 
   /// Every `fetchAssets(in:mediaType:)` scope, in call order.
   private(set) var scopeFetchCalls: [PhotoFetchScope] = []

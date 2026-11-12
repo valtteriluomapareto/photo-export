@@ -33,31 +33,9 @@ final class RecordingPhotoLibraryService: PhotoLibraryService, ThumbnailReading 
     record("requestAuthorization")
     return true
   }
-  func fetchAssets(year: Int, month: Int?, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
-  {
-    record("fetchAssets(year:month:mediaType:)")
-    return []
-  }
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
     record("fetchAssetDescriptor(for:)")
     return nil
-  }
-  func countAssets(year: Int, month: Int) throws -> Int {
-    record("countAssets(year:month:)")
-    return 0
-  }
-  func countAssets(year: Int) throws -> Int {
-    record("countAssets(year:)")
-    return 0
-  }
-  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
-    record("countAdjustedAssets(year:month:)")
-    return 0
-  }
-  func countAdjustedAssets(year: Int) async throws -> Int {
-    record("countAdjustedAssets(year:)")
-    return 0
   }
   nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
     record("loadYearsWithCounts()")
@@ -75,16 +53,6 @@ final class RecordingPhotoLibraryService: PhotoLibraryService, ThumbnailReading 
   }
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     record("availableYearsWithCounts()")
-    return []
-  }
-  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    record("fetchCollectionTree()")
-    return []
-  }
-  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
-    -> [AssetDescriptor]
-  {
-    record("fetchAssets(in:mediaType:)")
     return []
   }
   nonisolated func fetchAssetsProgressive(
@@ -142,11 +110,6 @@ final class RecordingPhotoLibraryService: PhotoLibraryService, ThumbnailReading 
   ) async throws -> NSImage {
     record("requestPreview(for:pixelSize:onDegraded:)")
     return NSImage(size: pixelSize)
-  }
-
-  func requestFullImage(for assetId: String) async throws -> NSImage {
-    record("requestFullImage(for:)")
-    return NSImage()
   }
   func resources(for assetId: String) -> [ResourceDescriptor] {
     record("resources(for:)")

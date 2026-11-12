@@ -29,8 +29,8 @@ struct PhotoLibraryManagerLiveAuthorizationTests {
     return (manager, reads)
   }
 
-  /// The main-actor entry points can run inside a view body (`fetchCollectionTree` on a
-  /// cache miss), so the refresh is deferred rather than published during the call.
+  /// A main-actor entry point can run inside a view body, so the refresh is deferred rather
+  /// than published during the call.
   @Test func yearListingThrowsOnALiveDenialAndRefreshesTheCachedFlagAfterTheCall() async {
     let (manager, reads) = staleManager()
     var published: [Bool] = []

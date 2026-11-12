@@ -131,20 +131,30 @@ struct PhotoLibraryManagerObservationTests {
   }
 
   /// Overridden query reads fail to follow invalidations until they register a revision dependency.
-  @Test func collectionTreeAndAssetDetailsFollowLibraryChanges() {
+  @Test func collectionTreeAndAssetDetailsFollowLibraryChanges() async {
     let service = FakePhotoLibraryService()
     service.detailsByAssetId["A"] = AssetDetails(
       originalFilename: "A.jpg", fileSize: 10, resources: [])
+    service.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "old", localIdentifier: "old", title: "Old", kind: .album, pathComponents: [],
+        children: [])
+    ]
     let library = PhotoLibraryManager(overrideService: service)
-    let tree = ObservationProbe { _ = try? library.fetchCollectionTree() }
+    await library.libraryRefresh.loadTree()
+    let tree = ObservationProbe { _ = library.libraryRefresh.tree }
     let details = ObservationProbe { _ = library.assetDetails(for: "A") }
 
+    service.collectionTree = []
     library.invalidateCache(changedThumbnailAssetIDs: [])
+    library.libraryRefresh.flush()
+    await library.libraryRefresh.loadTree()
     #expect(tree.changeCount == 1)
     #expect(details.changeCount == 1)
     let afterTree = tree.changeCount
     let afterDetails = details.changeCount
     library.forgetPHAssetCache()
+    await library.libraryRefresh.loadTree()
     #expect(tree.changeCount == afterTree)
     #expect(details.changeCount == afterDetails)
   }

@@ -83,9 +83,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     // family bundled photos via `assetIdsByAlbum["family-stream"]` — narratively
     // this is a relative's shared family stream, semantically distinct from the
     // user's own "Family" album. The descriptor's `kind == .sharedAlbum` is
-    // what routes it into the new sidebar section in
-    // `PhotoLibraryManager.fetchCollectionTree`; the screenshot tree appends it
-    // last so the partition order matches production.
+    // what routes it into the Shared Albums sidebar section; the screenshot tree
+    // appends it last so the partition order matches production.
     let familyStream = PhotoCollectionDescriptor(
       id: "shared-album:family-stream", localIdentifier: "family-stream",
       title: "Family stream", kind: .sharedAlbum, pathComponents: [], children: [])
@@ -170,6 +169,12 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     return byKey
   }()
 
+  /// Curated timeline ids for a month, or for every month of the year when `month` is nil.
+  private static func timelineIds(year: Int, month: Int?) -> [String] {
+    if let month { return timelineAssetsByMonth["\(year)-\(month)"] ?? [] }
+    return timelineAssetsByMonth.filter { $0.key.hasPrefix("\(year)-") }.flatMap(\.value)
+  }
+
   // MARK: - PhotoLibraryService overrides — auth
 
   func requestAuthorization() async -> Bool {
@@ -180,45 +185,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
 
   // MARK: - PhotoLibraryService overrides — timeline reads
 
-  func fetchAssets(
-    year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil
-  ) async throws -> [AssetDescriptor] {
-    let ids: [String]
-    if let month {
-      ids = Self.timelineAssetsByMonth["\(year)-\(month)"] ?? []
-    } else {
-      // Union of every month in the requested year.
-      ids = Self.timelineAssetsByMonth
-        .filter { $0.key.hasPrefix("\(year)-") }
-        .flatMap { $0.value }
-    }
-    return ids.map(Self.makeDescriptor(id:))
-  }
-
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
     Self.makeDescriptor(id: assetId)
-  }
-
-  func countAssets(year: Int, month: Int) throws -> Int {
-    Self.timelineAssetsByMonth["\(year)-\(month)"]?.count ?? 0
-  }
-
-  func countAssets(year: Int) throws -> Int {
-    Self.timelineAssetsByMonth
-      .filter { $0.key.hasPrefix("\(year)-") }
-      .reduce(0) { $0 + $1.value.count }
-  }
-
-  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
-    // Mark ~1/4 of the month's assets as having adjustments — enough to surface
-    // the "edited photo" badge in the year/month sidebar.
-    let total = try countAssets(year: year, month: month)
-    return max(0, total / 4)
-  }
-
-  func countAdjustedAssets(year: Int) async throws -> Int {
-    let total = try countAssets(year: year)
-    return max(0, total / 4)
   }
 
   nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
@@ -230,7 +198,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   }
 
   nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
-    try await MainActor.run { try self.fetchCollectionTree() }
+    await MainActor.run { Self.tree }
   }
 
   func availableYears() throws -> [Int] {
@@ -242,23 +210,19 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
 
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     try availableYears().map { year in
-      (year: year, count: (try? countAssets(year: year)) ?? 0)
+      (year: year, count: Self.timelineIds(year: year, month: nil).count)
     }
   }
 
   // MARK: - PhotoLibraryService overrides — collections
 
-  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    Self.tree
-  }
-
-  func fetchAssets(
+  private func fetchAssets(
     in scope: PhotoFetchScope, mediaType: PHAssetMediaType?
   ) async throws -> [AssetDescriptor] {
     let ids: [String]
     switch scope {
     case .timeline(let year, let month):
-      return try await fetchAssets(year: year, month: month, mediaType: mediaType)
+      ids = Self.timelineIds(year: year, month: month)
     case .favorites:
       ids = Self.favoriteAssetIds
     case .album(let collectionId), .sharedAlbum(let collectionId):
@@ -274,12 +238,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     await Task { @MainActor in
       switch scope {
       case .timeline(let year, let month):
-        if let month {
-          return Self.timelineAssetsByMonth["\(year)-\(month)"]?.count ?? 0
-        }
-        return Self.timelineAssetsByMonth
-          .filter { $0.key.hasPrefix("\(year)-") }
-          .reduce(0) { $0 + $1.value.count }
+        return Self.timelineIds(year: year, month: month).count
       case .favorites:
         return Self.favoriteAssetIds.count
       case .album(let collectionId), .sharedAlbum(let collectionId):
@@ -365,13 +324,6 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
   ) async throws -> NSImage {
     if let image = image(for: assetId, size: pixelSize) { return image }
-    throw PhotoLibraryManager.PhotoLibraryError.assetUnavailable
-  }
-
-  func requestFullImage(for assetId: String) async throws -> NSImage {
-    if let img = image(for: assetId, size: CGSize(width: 2048, height: 2048)) {
-      return img
-    }
     throw PhotoLibraryManager.PhotoLibraryError.assetUnavailable
   }
 
