@@ -236,36 +236,6 @@ struct HistoricalAuxiliaryStoreFixtureTests {
     }
   }
 
-  @Test(arguments: journalTags)
-  func journalsPreserveActiveAndNotYetStartedScopesOnTwoOpens(tag: String) throws {
-    let fixture = try Fixture(tag: tag)
-    defer { fixture.cleanup() }
-    for _ in 0..<2 {
-      let a = try #require(
-        JSONSerialization.jsonObject(
-          with: Data(
-            contentsOf:
-              fixture.destinations.appendingPathComponent("A/currentRun.json"))) as? [String: Any])
-      #expect(
-        Set(a.keys) == ["startedAt", "trigger", "scopes", "currentScope", "currentScopeStartedAt"])
-      #expect(a["startedAt"] as? Double == 700_000_000)
-      #expect(a["trigger"] as? String == "photosChanged")
-      #expect(a["scopes"] as? [String] == ["timeline", "favorites", "albums"])
-      #expect(a["currentScope"] as? String == "favorites")
-      #expect(a["currentScopeStartedAt"] as? Double == 700_000_030)
-      let b = try #require(
-        JSONSerialization.jsonObject(
-          with: Data(
-            contentsOf:
-              fixture.destinations.appendingPathComponent("B/currentRun.json"))) as? [String: Any])
-      #expect(Set(b.keys) == ["startedAt", "trigger", "scopes"])
-      #expect(b["startedAt"] as? Double == 700_000_100)
-      #expect(b["trigger"] as? String == "appLaunch")
-      #expect(b["scopes"] as? [String] == ["albums"])
-      #expect(b["currentScope"] == nil && b["currentScopeStartedAt"] == nil)
-    }
-  }
-
   @Test(arguments: metadataTags)
   func scopePreferenceLoadsReleasedPayloadOnTwoOpens(tag: String) throws {
     let fixture = try Fixture(tag: tag)

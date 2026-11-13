@@ -10,10 +10,7 @@ struct ExportDestinationValidationTests {
 
   @Test func urlForMonthThrowsNoSelectionWhenNoFolderSelected() {
     let mgr = ExportDestinationManager(
-      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
-      storedBookmarkScopeAcquirer: { _ in true },
-      validationScopeAcquirer: { _ in true },
-      validationScopeReleaser: { _ in }
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager")
     )
     #expect(throws: ExportDestinationManager.ExportDestinationError.noSelection) {
       try mgr.urlForMonth(year: 2025, month: 6)
@@ -30,7 +27,7 @@ struct ExportDestinationValidationTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let mgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
-      bookmarkSaver: { _ in true }, storedBookmarkScopeAcquirer: { _ in true },
+      bookmarkSaver: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in })
     await mgr.persistSelectionAndWait(dir)
@@ -114,7 +111,6 @@ struct ExportDestinationValidationTests {
       skipRestore: true,
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -127,7 +123,6 @@ struct ExportDestinationValidationTests {
     let restored = ExportDestinationManager(
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -157,7 +152,6 @@ struct ExportDestinationValidationTests {
       skipRestore: true,
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { url in
         acquired.append(url)
         return true
@@ -169,7 +163,6 @@ struct ExportDestinationValidationTests {
     let restored = ExportDestinationManager(
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { url in
         acquired.append(url)
         return true

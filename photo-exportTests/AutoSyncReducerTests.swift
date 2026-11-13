@@ -1015,6 +1015,28 @@ struct AutoSyncReducerTests {
     #expect(effects.contains(.cancelDebounce(.appLaunch)))
   }
 
+  /// Export Now pressed during a toolbar export, which has no run context, waits for that
+  /// export; a later trigger does not replace it.
+  @Test func exportNowDuringToolbarExportSurvivesALaterTrigger() {
+    let toolbarExport = ExportRunState(
+      activeContext: nil, isManualActive: true, isAutoSyncActive: false)
+    let (waiting, _) = AutoSyncReducer.reduce(
+      .exportRunStateChanged(toolbarExport), in: enabledStateWithSafeDestinationAndScope(),
+      now: now)
+    #expect(waiting.current == .waiting(.manualExportActive))
+    let (requested, _) = AutoSyncReducer.reduce(.runNowRequested, in: waiting, now: now)
+    let (changed, _) = AutoSyncReducer.reduce(
+      .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)),
+      in: requested, now: now)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .exportRunStateChanged(.idle), in: changed, now: now)
+
+    let fireAt = now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: .userExportNow))
+    #expect(next.current == .scheduled(reason: .userExportNow, fireAt: fireAt))
+    #expect(effects.contains(.scheduleDebounce(.userExportNow, fireAt: fireAt)))
+  }
+
   /// Reducer agent #1: enabledChanged(true) must guard against state.enabled == true.
   /// A republished settings observation should not cancel-and-replace an active
   /// debounce.

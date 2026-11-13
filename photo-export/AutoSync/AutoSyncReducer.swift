@@ -343,9 +343,7 @@ enum AutoSyncReducer {
         // Deleted assets require no export or destination cleanup.
         // A deleted-only event (no inserts/updates) — and one whose
         // collection-only signal isn't relevant to a selected scope — produces no
-        // export work, so skip dirty mutation, persistence, and the debounce. Token
-        // acknowledgement is still emitted below; the manager withholds it
-        // while an earlier dirty snapshot for this destination remains unsaved.
+        // export work, so skip dirty mutation, persistence, and the debounce.
         let producesExportWork = !changedIds.isEmpty || albumsRelevantCollectionChange
 
         if producesExportWork {
@@ -372,7 +370,6 @@ enum AutoSyncReducer {
           effects.append(.persistDirtyState(dirty, destinationId: destinationId))
           triggerReason = .photosChanged
         }
-
       }
 
     case .photosChangeFetchFailed(let failure):
@@ -385,8 +382,8 @@ enum AutoSyncReducer {
       if state.enabled, let destinationId = state.destination.id,
         !state.scopeSelection.isEmpty
       {
-        // Mark every selected scope as needing full reconciliation. No destination
-        // token is reset here; the adapter independently rebases its global cursor.
+        // Mark every selected scope as needing full reconciliation. The adapter
+        // rebases its own cursor.
         var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
         for scope in state.scopeSelection.enabledScopes {
           var scopeState = dirty.scope(scope)
@@ -587,8 +584,8 @@ enum AutoSyncReducer {
     pending == .userExportNow && incoming != .userExportNow && suppressibleRunInProgress(previous)
   }
 
-  /// The states a destination stop's summary can arrive in before its run goes idle: an
-  /// Auto Export run, or a manual export that AutoSync waits for.
+  /// An export not yet idle: an Auto Export run, whose destination-stop summary can come first,
+  /// or a manual export AutoSync waits for. Export Now pressed during either stays pending.
   private static func suppressibleRunInProgress(_ current: AutoSyncState) -> Bool {
     switch current {
     case .running, .waiting(.manualExportActive): return true

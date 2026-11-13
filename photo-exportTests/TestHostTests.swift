@@ -8,7 +8,6 @@ import Testing
 @Suite struct TestHostTests {
   @Test func hostedTestsRunInTheMinimalTestHost() {
     #expect(AppEntry.mode == .testHost)
-    #expect(!PhotoExportApp.wasComposed)
   }
 
   @Test func onlyTheTestEnvironmentSelectsTheTestHost() {

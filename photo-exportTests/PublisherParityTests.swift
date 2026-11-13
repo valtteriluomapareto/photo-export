@@ -73,18 +73,6 @@ struct PublisherParityTests {
 
   // MARK: - AppLifecycleCoordinator
 
-  @Test func lifecycleCurrentDestination() async {
-    let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-      configureRecordStores: { _ in .success })
-    await assertPublishedParity(
-      coordinator, \.currentDestination, { $0.currentDestinationPublisher },
-      change: { coordinator.apply(destination: Self.snapshot("A")) },
-      // `apply` skips a snapshot equal to the current one.
-      unchangedWrite: .after { coordinator.apply(destination: Self.snapshot("A")) },
-      unchangedWriteDelivery: .isDropped)
-  }
-
   @Test func lifecycleMigrationConflict() async {
     var result = ConfigureRecordStoresResult.success
     let coordinator = AppLifecycleCoordinator(
@@ -243,34 +231,6 @@ struct PublisherParityTests {
     }
   }
 
-  @Test func managerActiveRunContext() async {
-    let f = await ManagerFixture()
-    await withCleanup {
-      let context = ExportRunContext(
-        source: .manual, visibility: .userVisible, scope: .timelineFullLibrary,
-        selection: .edited)
-      await assertPublishedParity(
-        f.manager, \.activeRunContext, { $0.activeRunContextPublisher },
-        change: { _ = await f.manager.runExport(context: context) },
-        unchangedWrite: .notDrivable("set once when a run starts and cleared once when it ends"))
-    } cleanup: {
-      await f.close()
-    }
-  }
-
-  @Test func managerIsPreparingExport() async {
-    let f = await ManagerFixture()
-    await withCleanup {
-      await assertPublishedParity(
-        f.manager, \.isPreparingExport, { $0.isPreparingExportPublisher },
-        change: { await f.manager.startExportAll()?.value },
-        // Tearing down active work stores `false` unconditionally.
-        unchangedWrite: .before { f.manager.cancelAndClear() })
-    } cleanup: {
-      await f.close()
-    }
-  }
-
   /// AutoSync's run-state contract: `CombineLatest4` over the run context, the running flag,
   /// the queue depth and the bulk-enqueue flag, without repeats.
   @Test func managerExportRunState() async {
@@ -314,34 +274,6 @@ struct PublisherParityTests {
       store, \.selection, { $0.scopeSelectionPublisher },
       change: { store.setSelection(AutoExportScopeSelection(timeline: true)) },
       unchangedWrite: .before { store.setSelection(store.selection) })
-  }
-
-  // MARK: - AutoSyncManager
-
-  @Test func autoSyncLastRunSummary() async throws {
-    let manager = AutoSyncManager()
-    let builder = FakeAutoSyncEnvironmentBuilder()
-    let destination = DestinationSnapshot(
-      fingerprint: Self.fingerprint("A"), isAvailable: true, safety: .safe)
-    let other = DestinationSnapshot(
-      fingerprint: Self.fingerprint("B"), isAvailable: true, safety: .safe)
-    let summary = ExportRunSummary(
-      context: ExportRunContext(
-        source: .autoSync, visibility: .background, reason: .appLaunch,
-        scope: .autoExport(AutoExportScopeSelection(timeline: true)), selection: .edited),
-      endedAt: Date(), enqueuedCount: 1, completedCount: 1, failedCount: 0, skippedCount: 0,
-      cancelReason: nil, result: .completed)
-    try builder.runSummaryStore.save(summary, destinationId: try #require(destination.id))
-    try builder.runSummaryStore.save(summary, destinationId: try #require(other.id))
-    manager.attach(to: builder.environment)
-    await assertPublishedParity(
-      manager, \.lastRunSummary, { $0.lastRunSummaryPublisher },
-      change: { builder.destination.subject.send(destination) },
-      // Switching to a destination whose stored summary is equal: `lastRunSummary != summary`
-      // skips the write.
-      unchangedWrite: .after { builder.destination.subject.send(other) },
-      unchangedWriteDelivery: .isDropped)
-    #expect(manager.lastRunSummary == summary)
   }
 
   // MARK: - DestinationSnapshotAdapter

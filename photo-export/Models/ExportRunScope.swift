@@ -1,8 +1,8 @@
 import Foundation
 
 /// Scope of a recorded export run. Auto Export schedules full-scope runs through the
-/// `.autoExport` umbrella. Targeted cases and manual sources remain Codable compatibility
-/// surface for released summaries; current runners reject targeted requests.
+/// `.autoExport` umbrella, and released versions recorded only those full scopes. The
+/// targeted cases still decode; current runners reject targeted requests.
 enum ExportRunScope: Equatable, Codable, Sendable {
   case timelineFullLibrary
   case timelineAssets(Set<String>)
@@ -34,8 +34,8 @@ enum ExportRunScope: Equatable, Codable, Sendable {
   }
 }
 
-/// Where a recorded `ExportRunContext` originated. Current contexts come from
-/// `AutoSyncManager`; `.manual` remains compatible with released persisted summaries.
+/// Where a recorded `ExportRunContext` originated. Contexts come from `AutoSyncManager`;
+/// no released version recorded `.manual`.
 enum ExportRunSource: String, Codable, Equatable, Sendable {
   case manual
   case autoSync

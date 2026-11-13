@@ -21,15 +21,7 @@ struct PhotoExportApp: App {
   @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
-  #if DEBUG
-    /// Set when the real app is composed; the test host never composes it.
-    @MainActor private(set) static var wasComposed = false
-  #endif
-
   init() {
-    #if DEBUG
-      Self.wasComposed = true
-    #endif
     AppDiagnostics.beginLaunch()
     // `--screenshot-mode` swaps the real Photos backing for a curated synthetic library so
     // marketing screenshots don't leak the maintainer's personal Photos library. See

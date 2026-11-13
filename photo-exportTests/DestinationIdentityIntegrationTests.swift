@@ -77,6 +77,14 @@ struct DestinationIdentityIntegrationTests {
       destinationManager: manager, lifecycleCoordinator: coordinator,
       safetyMonitor: safetyMonitor)
 
+    var verdicts: [DestinationSafetyMonitor.Verdict] = []
+    let verdictCancellable = safetyMonitor.verdictPublisher.sink { verdicts.append($0) }
+    defer { verdictCancellable.cancel() }
+    let checked: [DestinationSafetyMonitor.Verdict] = [
+      .init(stableId: nil, needsConfirmation: false),
+      .init(stableId: stableId, needsConfirmation: false),
+    ]
+
     coordinator.attach(
       initial: DestinationIdentitySnapshot(identity: manager.identity),
       identityPublisher: manager.identityPublisher)
@@ -86,10 +94,8 @@ struct DestinationIdentityIntegrationTests {
     await collectionStore.waitUntilSettled()
     #expect(timelineStore.state == .ready)
     #expect(collectionStore.state == .ready)
-    #expect(
-      await eventually("the safety check of S finishes") {
-        safetyMonitor.completedEvaluationCount == 1
-      })
+    #expect(await eventually("the safety check of S finishes") { verdicts.count >= 2 })
+    #expect(verdicts == checked)
 
     var snapshots: [DestinationSnapshot] = []
     let cancellable = adapter.destinationSnapshotPublisher.sink { snapshots.append($0) }
@@ -118,7 +124,7 @@ struct DestinationIdentityIntegrationTests {
     // `confirmationPersistsAcrossRemountDrift` covers the keying directly; here we assert the
     // wired monitor stays quiet.)
     #expect(confirmationStore.isConfirmed(destinationId: stableId))
-    #expect(safetyMonitor.completedEvaluationCount == 1)
+    #expect(verdicts == checked)
     #expect(safetyMonitor.needsSafetyConfirmation == false)
   }
 }

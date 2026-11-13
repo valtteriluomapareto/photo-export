@@ -308,4 +308,122 @@ struct ExportPreparationTests {
     #expect(try FileManager.default.contentsOfDirectory(atPath: second.path).isEmpty)
     #expect(f.timeline.exportInfo(assetId: "prepare") == nil)
   }
+
+  @Test func steadyExportUsesAtMostThreeMainThreadFilesystemCallsPerAsset() async throws {
+    let f = try await PreparationFixture(io: DestinationIO())
+    defer { f.cleanup() }
+    let checkpoint = AsyncCheckpoint()
+    f.writer.checkpoint = checkpoint
+    let assets = (0..<3).map {
+      TestAssetFactory.makeAsset(
+        id: "directory-count-\($0)",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 1)))
+    }
+    f.photos.assetsByYearMonth["2025-2"] = assets
+    for asset in assets {
+      f.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "\(asset.id).JPG")
+      ]
+    }
+    f.manager.startExportMonth(year: 2025, month: 2)
+    await checkpoint.waitForEnter(count: 1)
+    // The first asset warms the directory cache. Each next checkpoint brackets one
+    // commit/cleanup and the next asset's identity, physical-path and filename probes.
+    var start = f.files.calls.count
+    for index in 2...3 {
+      await checkpoint.release()
+      await checkpoint.waitForEnter(count: index)
+      let phase = Array(f.files.calls.dropFirst(start))
+      #expect(phase.filter(\.onMainThread).count <= 3)
+      #expect(phase.contains { !$0.onMainThread })
+      start = f.files.calls.count
+    }
+    await checkpoint.releaseAll()
+    await f.manager.waitForQueueDrained()
+    #expect(
+      assets.allSatisfy {
+        f.timeline.exportInfo(assetId: $0.id)?.variants[.original]?.status == .done
+      })
+  }
+
+  @Test func directoryDeletedDuringStageWriteIsNotRecreated() async throws {
+    let f = try await PreparationFixture(io: DestinationIO())
+    defer { f.cleanup() }
+    let asset = TestAssetFactory.makeAsset(
+      id: "deleted-stage",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 1)))
+    f.photos.assetsByYearMonth["2025-2"] = [asset]
+    f.photos.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    f.writer.writeHook = { url in
+      try FileManager.default.removeItem(at: url.deletingLastPathComponent())
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
+    }
+    f.manager.startExportMonth(year: 2025, month: 2)
+    await f.manager.waitForQueueDrained()
+    #expect(f.writer.writeCalls.count == 1)
+    let stage = try #require(f.writer.writeCalls.first?.url)
+    #expect(!FileManager.default.fileExists(atPath: stage.deletingLastPathComponent().path))
+    #expect(f.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.status == .failed)
+  }
+
+  @Test(arguments: [ENOENT, ENOTDIR], [false, true])
+  func missingDirectoryProducerIsRetriedOnlyOnce(code: Int32, succeedsOnRetry: Bool) async throws {
+    let harness = await ExportManagerHarness(label: "DirectoryRetry")
+    let asset = TestAssetFactory.makeAsset(
+      id: "retry",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 1)))
+    harness.photoLib.assetsByYearMonth["2025-2"] = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    let writer = harness.writer
+    writer.writeHook = { _ in
+      if !succeedsOnRetry || writer.writeCalls.count == 1 {
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+      }
+    }
+    harness.manager.startExportMonth(year: 2025, month: 2)
+    await harness.manager.waitForQueueDrained()
+    #expect(harness.writer.writeCalls.count == 2)
+    #expect(harness.dest.revalidationCount == 1)
+    #expect(
+      harness.store.exportInfo(assetId: asset.id)?.variants[.original]?.status
+        == (succeedsOnRetry ? .done : .failed))
+  }
+
+  enum CleanupOutcome: CaseIterable { case success, failure, cancellation }
+
+  @Test(arguments: CleanupOutcome.allCases)
+  func stageCleanupFinishesBeforeDestinationScopeCloses(outcome: CleanupOutcome) async throws {
+    let harness = await ExportManagerHarness(label: "DirectoryCleanup")
+    let asset = TestAssetFactory.makeAsset(
+      id: "cleanup",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 1)))
+    harness.photoLib.assetsByYearMonth["2025-2"] = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    let writerGate = AsyncCheckpoint()
+    harness.writer.checkpoint = writerGate
+    let cleanup = LeafGate()
+    harness.fileSystem.existsHook = { path in
+      if URL(fileURLWithPath: path).lastPathComponent.hasPrefix(".photo-export-") {
+        if pthread_main_np() != 0 {
+          Issue.record("Stage cleanup must run off the main thread")
+          Task { await cleanup.entered.enter() }
+        } else {
+          cleanup.hold()
+        }
+      }
+    }
+    defer { cleanup.release() }
+    harness.manager.startExportMonth(year: 2025, month: 2)
+    await writerGate.waitForEnter(count: 1)
+    let running = try #require(harness.manager.currentTask)
+    if outcome == .failure { harness.writer.writeError = CocoaError(.fileWriteNoPermission) }
+    if outcome == .cancellation { harness.manager.cancelAndClear() }
+    await writerGate.releaseAll()
+    await cleanup.entered.waitForEnter(count: 1)
+    #expect(harness.dest.endScopedAccessCount == 0)
+    cleanup.release()
+    await cleanup.entered.releaseAll()
+    _ = await running.value
+    #expect(harness.dest.beginScopedAccessCount == harness.dest.endScopedAccessCount)
+  }
 }

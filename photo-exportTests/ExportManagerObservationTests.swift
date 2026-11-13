@@ -344,7 +344,7 @@ struct ExportManagerObservationTests {
     }
   }
 
-  /// Equal teardown writes remain silent to Observation while Combine still delivers them.
+  /// Equal teardown writes stay silent to Observation and to the run-state publisher.
   @Test func unchangedRunStateWritesDoNotNotifyObservation() async {
     let f = await Fixture()
     await withCleanup {
@@ -357,17 +357,15 @@ struct ExportManagerObservationTests {
       let paused = ObservationProbe { _ = f.manager.isPaused }
       let missing = ObservationProbe { _ = f.manager.previousBackupMissing }
       let stage = ObservationProbe { _ = f.manager.importStage }
-      var events: [String] = []
-      let subscription = f.manager.isPreparingExportPublisher.sink {
-        events.append("enqueueing \($0)")
-      }
+      var states: [ExportRunState] = []
+      let subscription = f.manager.exportRunStatePublisher.sink { states.append($0) }
       defer { subscription.cancel() }
       f.manager.cancelAndClear()
       #expect(runState.changeCount == 0)
       #expect(paused.changeCount == 0)
       #expect(missing.changeCount == 0)
       #expect(stage.changeCount == 0)
-      #expect(events == ["enqueueing false", "enqueueing false"])
+      #expect(states == [.idle])
     } cleanup: {
       await f.close()
     }

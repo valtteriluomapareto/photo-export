@@ -22,10 +22,7 @@ struct ExportDestinationManagerIdentityTests {
   @Test func configureForScreenshotModeSetsAvailableWritableState() {
     let manager = ExportDestinationManager(
       skipRestore: true,
-      userDefaults: TestScratch.defaults("screenshot"),
-      storedBookmarkScopeAcquirer: { _ in true },
-      validationScopeAcquirer: { _ in true },
-      validationScopeReleaser: { _ in }
+      userDefaults: TestScratch.defaults("screenshot")
     )
 
     manager.configureForScreenshotMode()
@@ -41,10 +38,7 @@ struct ExportDestinationManagerIdentityTests {
   @Test func configureForScreenshotModeRespectsCustomDisplayName() {
     let manager = ExportDestinationManager(
       skipRestore: true,
-      userDefaults: TestScratch.defaults("screenshot"),
-      storedBookmarkScopeAcquirer: { _ in true },
-      validationScopeAcquirer: { _ in true },
-      validationScopeReleaser: { _ in }
+      userDefaults: TestScratch.defaults("screenshot")
     )
 
     manager.configureForScreenshotMode(displayName: "External Photos")
@@ -125,7 +119,6 @@ struct ExportDestinationManagerIdentityTests {
       skipRestore: true,
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -136,7 +129,6 @@ struct ExportDestinationManagerIdentityTests {
     let restored = ExportDestinationManager(
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -177,10 +169,7 @@ struct ExportDestinationManagerIdentityTests {
     let mgrEmpty = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
-      validationScopeAcquirer: { _ in true },
-      validationScopeReleaser: { _ in }
+      bookmarkDefaultsKey: bookmarkKey
     )
     #expect(mgrEmpty.currentLegacyDestinationId() == nil)
 
@@ -188,7 +177,6 @@ struct ExportDestinationManagerIdentityTests {
       skipRestore: true,
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -224,7 +212,6 @@ struct ExportDestinationManagerIdentityTests {
       skipRestore: true,
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -236,7 +223,6 @@ struct ExportDestinationManagerIdentityTests {
     let restored = ExportDestinationManager(
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey,
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )

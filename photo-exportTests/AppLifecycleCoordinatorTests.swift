@@ -113,7 +113,7 @@ struct AppLifecycleCoordinatorTests {
     // idempotent no-ops. cancelCount remains 0.
     #expect(cancelCount == 0)
     #expect(configureCalls == [snapA.id])
-    #expect(coordinator.lastConfiguredDestinationId == snapA.id)
+    #expect(coordinator.currentDestination.id == snapA.id)
   }
 
   @Test func sameIdDoesNotRePublishCurrentDestinationWhenSnapshotIsEqual() {
@@ -123,7 +123,7 @@ struct AppLifecycleCoordinatorTests {
       configureRecordStores: { _ in .success }
     )
     var emissions = 0
-    let cancellable = coordinator.currentDestinationPublisher.dropFirst().sink { _ in
+    let cancellable = coordinator.$currentDestination.dropFirst().sink { _ in
       emissions += 1
     }
 
@@ -290,7 +290,7 @@ struct AppLifecycleCoordinatorTests {
     // (cancel). cancelCount is 1.
     #expect(configureCalls == [idA, idB])
     #expect(cancelCount == 1)
-    #expect(coordinator.lastConfiguredDestinationId == idB)
+    #expect(coordinator.currentDestination.id == idB)
   }
 
   @Test func clearMigrationConflictAfterReconcileGCsLegacyAndClearsFlag() {

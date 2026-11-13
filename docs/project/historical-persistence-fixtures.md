@@ -123,9 +123,9 @@ initializer is unavailable; obtaining one requires a real Photos library's
 bounded generation, and neither the user's library nor a forged archive is used.
 Existing missing/corrupt-file tests remain. The per-destination token fixtures prove
 only the released opaque Data payload, **not** global secure-unarchive compatibility.
-The destination token and current-run journal readers are retired. Their immutable bytes,
-manifest checksums and writer provenance remain covered through raw Data/JSON checks;
-all remaining store fixtures still exercise their shipping readers.
+The destination token and current-run journal readers are retired. Manifest checksums and
+writer provenance still pin their immutable bytes, and a raw Data check reads the token
+payloads; all remaining store fixtures still exercise their shipping readers.
 Valid global-token coverage needs a separately established isolated library and an
 explicit runtime-compatibility scope; this fixture set does not cover every Apple-owned
 token format.

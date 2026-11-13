@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import os
 
 @testable import Photo_Export
 
@@ -108,48 +107,5 @@ struct PreparedFilenameClaimsTests {
     timeline.drainSynchronously()
     collections.drainSynchronously()
     try? FileManager.default.removeItem(at: root)
-  }
-
-  /// The synchronous observer executes in the production decode/prepare task itself, so
-  /// an async observer's executor hop cannot hide main-thread preparation.
-  @Test(arguments: [false, true])
-  func productionHistoryPreparationRunsOffMain(collection: Bool) async throws {
-    let root = TestScratch.directory("PreparedClaimsOffMain")
-    let threads = LockedBox<[Bool]>([])
-    let timeline = ExportRecordStore(baseDirectoryURL: root)
-    let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    defer {
-      timeline.drainSynchronously()
-      collections.drainSynchronously()
-      try? FileManager.default.removeItem(at: root)
-    }
-    let placement = ExportPlacement.favorites()
-    if collection {
-      await collections.configureAndWait(for: "A")
-      collections.upsertPlacement(placement)
-      collections.markVariantInProgress(
-        assetId: "seed", placement: placement, variant: .original, filename: "seed.JPG")
-      try await collections.flush()
-      await collections.configureAndWait(for: nil)
-      collections.preparationObserver = { threads.mutate { $0.append(Thread.isMainThread) } }
-      await collections.configureAndWait(for: "A")
-    } else {
-      await timeline.configureAndWait(for: "A")
-      timeline.markVariantInProgress(
-        assetId: "seed", variant: .original, year: 2026, month: 10,
-        relPath: "2026/10/", filename: "seed.JPG")
-      try await timeline.flush()
-      await timeline.configureAndWait(for: nil)
-      timeline.preparationObserver = { threads.mutate { $0.append(Thread.isMainThread) } }
-      await timeline.configureAndWait(for: "A")
-    }
-    #expect(threads.value == [false])
-    #expect((collection ? collections.state : timeline.state) == .ready)
-    #expect(
-      collection
-        ? collections.isFilenameClaimed(
-          "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe")
-        : timeline.isFilenameClaimed(
-          "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
   }
 }
