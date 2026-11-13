@@ -303,14 +303,6 @@ than replacing it with `null`, which would remove the PR requirement. For a poli
 change, record fresh before/after API evidence and verify the actual required checks. No
 workflow edit changes branch protection by itself.
 
-### Destination identity invariant tests
-
-Destination identity tests inject security-scope acquisition and release while exercising
-real bookmarks, file identity, destination validation and record-store configuration. Their
-execution does not depend on native scope access for bare temporary URLs. Deliberate denial
-cases keep their injected failure inputs. The regression manifest names remount and
-different-folder gates; CI verifies their actual Passed results in the test bundle.
-
 ### Advisory coverage summary
 
 After the macOS unit-test step, `ci/coverage_summary.py` reads the existing xcresult
