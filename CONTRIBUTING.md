@@ -122,8 +122,8 @@ checked patterns and the narrow allow marker for tests that must inspect a real 
 ### Static guards
 
 Run the repository checks that CI runs, including self-tests of the guards.
-Install the pinned Swift tools from [Style checks](#style-checks) and the workflow tools
-below first; the runner includes native workflow/shell validation and strict app-and-test formatting:
+Install the pinned tools from [Style checks](#style-checks) first; the runner includes native
+workflow/shell validation and strict app-and-test formatting:
 
 ```bash
 scripts/ci/run-guards.sh
@@ -135,45 +135,28 @@ your Photos library. See the [CI script guide](scripts/README.md#ci-scripts-scri
 for each guard's scope. Checks of built apps and test results run after the relevant
 build/test step in CI; the runner covers the static guards.
 
-### Workflow and shell checks
+### Style checks
 
-CI pins **actionlint 1.7.12** and **ShellCheck 0.11.0** with verified SHA256 downloads and
-version checks. The macOS arm64 installer publishes paths only after both tools validate:
+CI pins **SwiftLint 0.65.1**, **swift-format 603.0.0**, **actionlint 1.7.12** and **ShellCheck
+0.11.0** with SHA256-verified downloads. Use those versions for matching strict diagnostics. On
+macOS15+ arm64 with Command Line Tools installed, the same installer can prepare a local temporary
+session:
 
 ```bash
 CI_TOOLS_DIR="$(mktemp -d)"
 RUNNER_TEMP="$CI_TOOLS_DIR" GITHUB_PATH="$CI_TOOLS_DIR/paths" bash scripts/ci/install-ci-tools.sh
 while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$CI_TOOLS_DIR/paths"
+swiftlint version
+swift-format --version
 actionlint -version
 shellcheck --version
 ```
 
-`check-workflows.sh` runs actionlint on all workflows, including ShellCheck for embedded
-shell. `check-shell-scripts.sh` analyzes tracked shell scripts. Both are in the one
-`run-guards.sh` list and fail if a required tool is missing. The native actionlint config
-allows only the existing preview runner label `xcode-27`. Other platforms may install the
-same tagged tools from their upstream sources; pin provenance is in
-[`install-ci-tools.sh`](scripts/ci/install-ci-tools.sh).
-
-### Style checks
-
-CI pins **SwiftLint 0.65.1** and **swift-format 603.0.0** with SHA256-verified downloads. Use those
-versions for matching strict diagnostics. On macOS15+ arm64 with Command Line Tools installed, the
-same installer can prepare a local temporary session:
-
-```bash
-SWIFT_TOOLS_DIR="$(mktemp -d)"
-RUNNER_TEMP="$SWIFT_TOOLS_DIR" GITHUB_PATH="$SWIFT_TOOLS_DIR/paths" bash scripts/ci/install-swift-tools.sh
-while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$SWIFT_TOOLS_DIR/paths"
-swiftlint version
-swift-format --version
-```
-
-The installer checks both hashes and exact versions before publishing paths; it has no
+The installer checks every hash and exact version before publishing paths; it has no
 Homebrew/latest fallback. Installed binaries remain in the temporary session directory. Other
 platforms can install the same tagged tools from their upstream sources; the CI installer targets
 its macOS arm64 image. Update pins/checksums and the installer fixtures deliberately when upgrading.
-Download provenance is recorded in [`install-swift-tools.sh`](scripts/ci/install-swift-tools.sh).
+Download provenance is recorded in [`install-ci-tools.sh`](scripts/ci/install-ci-tools.sh).
 
 Run the same enforcing style checks as CI from the repository root:
 
@@ -236,7 +219,8 @@ property or named publisher accessor AutoSync observes:
    the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a
    new X, touch these files" recipes.
 2. If your change touches the queue, AutoSync surface, record stores, the final file commit or its
-   name planning, destination identity or root resolution, or the screenshot photo library service, the following **regression-gate tests**
+   name planning, destination identity or root resolution, or the screenshot photo library service,
+   the following [regression-gate tests](docs/reference/architecture-conventions.md#regression-gates)
    must pass *without re-recording* unless you have explicitly audited the new behavior:
    - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence, including
      `[idle, autoSyncActive, idle]` for an automatic run and
@@ -271,22 +255,27 @@ property or named publisher accessor AutoSync observes:
    - `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` — pins that a deleted file's name
      stays reserved for its record, so Import Existing Backup drops that record and the next export
      writes the file back at its own name.
-
-   - `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` — The real destination manager, adapter, lifecycle, record stores and safety monitor keep the stable key through remount fingerprint drift.
-   - `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` — Real bookmark and file-identity evidence gives a genuinely different folder a new nonnil destination id.
-   - `ExportDestinationEscapeProtectionTests` — Real directory resolution refuses root escapes, including symlinks and reparented cached directories, while valid directories succeed.
-   - `JSONLRecordFileIOFailureTests` — JSONL I/O failures cannot be acknowledged by flush, and snapshot recovery retains queued work; a flush cannot acknowledge a newer mutation.
-   - `RecordStorePersistenceHealthTests` — Timeline and collection history must be flushed and healthy before retry acknowledgement; recovery retains pending and in-flight records.
-   - `HistoricalPersistenceFixtureTests` — Shipping record loaders replay immutable released snapshots and logs with their original history and placement semantics.
-   - `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` — Shipping dirty, retry, summary and safety loaders read released state twice, including targeted/manual summary compatibility.
-   - `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` — An import with a failed history append reports failure rather than success; the successful control reopens durable records.
-
-   The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it
-   or if a gate is skipped. A suite gate enforces its current members, including skipped or
-   failing cases; removing duplicate method rows intentionally gives up their separate symbol
-   pins. Keep the canonical AutoSync cases and expectations when editing that suite.
-   Read-only Photos access remains the separate static CI guard
-   `scripts/ci/check-read-only-photos.py` with its self-tests.
+   - `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` — pins that the real
+     destination manager, adapter, lifecycle, record stores and safety monitor keep the stable key
+     through remount fingerprint drift.
+   - `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` — pins
+     that real bookmark and file-identity evidence gives a genuinely different folder a new nonnil
+     destination id.
+   - `ExportDestinationEscapeProtectionTests` — pins that real directory resolution refuses root
+     escapes, including symlinks and reparented cached directories, while valid directories succeed.
+   - `JSONLRecordFileIOFailureTests` — pins that flush cannot acknowledge JSONL I/O failures or a
+     newer mutation, and that snapshot recovery retains queued work.
+   - `RecordStorePersistenceHealthTests` — pins that timeline and collection history are
+     flushed and healthy before retry acknowledgement, and that recovery retains pending and
+     in-flight records.
+   - `HistoricalPersistenceFixtureTests` — pins that shipping record loaders replay immutable
+     released snapshots and logs with their original history and placement semantics.
+   - `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` —
+     pins that shipping dirty, retry, summary and safety loaders read released state twice,
+     including targeted/manual summary compatibility.
+   - `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` — pins that an
+     import with a failed history append reports failure; the successful control reopens durable
+     records.
 3. For a new collaborator, follow the reference's Host pattern and state ownership
    rules. Coordinator state has one owner; synchronous sinks update the manager's
    bridged named-accessor state or plain tracked UI state so AutoSync sees consistent state.
@@ -378,11 +367,9 @@ proposes weekly Action updates and website npm updates; routine minor/patch webs
 grouped, while major updates remain separate. Maintainers review these PRs and merge only after
 current-head CI passes. No automatic merging is enabled.
 
-CI runs app and website validation on every pull request and main push. The actual
-`build-and-test` and `website` jobs keep the existing required check names; there are
-no routing or skipped-result wrapper jobs. Static guards run through the single
-`scripts/ci/run-guards.sh` entry point. See the [CI validator guide](scripts/README.md#ci-validators).
-Release workflow triggers remain separate and unchanged.
+CI runs the `build-and-test` and `website` jobs on every pull request and main push. Static
+guards run through the single `scripts/ci/run-guards.sh` entry point. See the [CI validator
+guide](scripts/README.md#ci-validators).
 
 Main branch protection requires the final `build-and-test` and `website` checks,
 both from GitHub Actions (app ID `15368`). Release workflows are not required checks. Pending, failed or cancelled required results

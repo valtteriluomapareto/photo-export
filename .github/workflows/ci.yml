@@ -57,10 +57,7 @@ jobs:
       - name: Select Xcode
         run: bash scripts/ci/select-xcode.sh
 
-      - name: Install SwiftLint and swift-format
-        run: bash scripts/ci/install-swift-tools.sh
-
-      - name: Install actionlint and ShellCheck
+      - name: Install SwiftLint, swift-format, actionlint and ShellCheck
         run: bash scripts/ci/install-ci-tools.sh
 
       - name: SwiftLint

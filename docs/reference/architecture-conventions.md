@@ -1054,11 +1054,11 @@ CI checks the list twice:
 If you rename, move, add or remove one of these tests, update the list file, this table, and the gate lists in `AGENTS.md` and `CONTRIBUTING.md` in the same PR. A gate that returns early without recording an issue still reports Passed; no result-bundle check can catch that, so write gate preconditions with `#require` rather than `guard … return`.
 
 Read-only Photos access is enforced separately by the static CI guard
-`check-read-only-photos.py` and its self-tests. Destination tests inject only scope
-acquisition/release setup; their identity, bookmarks, filesystem and loader operations remain
-production code. A suite gate rejects skipped/failing current members but
-cannot notice silent deletion of a method; the two canonical AutoSync methods remain reviewed
-suite members after removing their duplicate symbol rows.
+`check-read-only-photos.py` and its self-tests; these gates protect runtime behavior. A suite
+gate rejects skipped or failing members but cannot notice that a method was deleted, so keep the
+canonical AutoSync cases and expectations when editing that suite. Destination tests inject only
+scope acquisition and release; their identity, bookmark, filesystem and loader operations are
+production code.
 
 | Test | Fires when… | What to do |
 | --- | --- | --- |
@@ -1076,14 +1076,14 @@ suite members after removing their duplicate symbol rows.
 | [`IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`](../../photo-exportTests/IdenticalFileAdoptionTests.swift) | Re-exporting a month after its history is lost writes `IMG_0001 (1).JPG` beside an identical `IMG_0001.JPG`, records another name, or moves or re-timestamps the existing file | Restore adoption: an unclaimed regular file with the staged size and bytes is recorded under its stored name, with no move and no timestamps (§Final file commit boundary). |
 | `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` | Two byte-identical assets, re-exported after lost history in either order, end up recorded against one file, or write new ` (n)` copies | Restore the claim rule. A file another record names is never adopted, so each asset's record keeps a file of its own. |
 | `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` | After an exported file is deleted, another asset with the same filename takes its name, or Import Existing Backup keeps the deleted file's record, or the next export does not write the first asset back at its own name, leaving the folder without exactly two files | Restore the claim rule for empty names. A name another record names is taken even with nothing at it, so the reconcile can see its file is gone and drop the record. |
-| `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` | Remount fingerprint drift changes a stable destination key, reconfigures history under another id, or prompts for safety again. | Restore the production behavior; do not weaken or skip the invariant. |
-| `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` | Selecting a genuinely different folder through real bookmark/file-identity evidence keeps the old id or yields no usable new id. | Restore the production behavior; do not weaken or skip the invariant. |
-| `ExportDestinationEscapeProtectionTests` | Directory resolution accepts a path outside the export root, including a symlink or reparented cached directory, or refuses a valid control path. | Restore the production behavior; do not weaken or skip the invariant. |
-| `JSONLRecordFileIOFailureTests` | Flush acknowledges failed I/O or a mutation submitted during its await, or snapshot recovery loses queued work. | Restore the production behavior; do not weaken or skip the invariant. |
-| `RecordStorePersistenceHealthTests` | An unflushed or failed record is acknowledged for retry, or history recovery loses pending or in-flight records. | Restore the production behavior; do not weaken or skip the invariant. |
-| `HistoricalPersistenceFixtureTests` | Shipping loaders fail to replay released snapshots/logs, change their history/placement semantics, or the immutable fixture inventory drifts. | Restore the production behavior; do not weaken or skip the invariant. |
-| `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` | Shipping dirty/retry/summary/safety loaders fail to reopen released state or lose targeted/manual summary compatibility. | Restore the production behavior; do not weaken or skip the invariant. |
-| `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` | An import reports success after a history append fails, or its successful control cannot reopen all durable records. | Restore the production behavior; do not weaken or skip the invariant. |
+| `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` | Remount fingerprint drift changes a stable destination key, reconfigures history under another id, or prompts for safety again. | Keep history and safety confirmations keyed on the stable id across fingerprint drift (§Destination identity). |
+| `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` | Selecting a genuinely different folder through real bookmark/file-identity evidence keeps the old id or yields no usable new id. | Mint a new stable id only from real different-folder evidence (§Destination identity). |
+| `ExportDestinationEscapeProtectionTests` | Directory resolution accepts a path outside the export root, including a symlink or reparented cached directory, or refuses a valid control path. | Keep the root containment check in directory resolution; never follow a symlink or cached directory out of the root. |
+| `JSONLRecordFileIOFailureTests` | Flush acknowledges failed I/O or a mutation submitted during its await, or snapshot recovery loses queued work. | Acknowledge only writes that reached disk, and carry queued work through snapshot recovery. |
+| `RecordStorePersistenceHealthTests` | An unflushed or failed record is acknowledged for retry, or history recovery loses pending or in-flight records. | Keep failed records retained for Retry; never acknowledge unflushed work. |
+| `HistoricalPersistenceFixtureTests` | Shipping loaders fail to replay released snapshots/logs, change their history/placement semantics, or the immutable fixture inventory drifts. | Keep the loaders backward compatible. Never edit the fixtures to make a loader pass. |
+| `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` | Shipping dirty/retry/summary/safety loaders fail to reopen released state or lose targeted/manual summary compatibility. | Keep the stores decoding released files. Never edit the fixtures to make a loader pass. |
+| `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` | An import reports success after a history append fails, or its successful control cannot reopen all durable records. | Report the failed append to the user, and keep every record that did reach disk. |
 
 ## Extension recipes
 

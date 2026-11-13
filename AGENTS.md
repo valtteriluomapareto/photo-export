@@ -43,8 +43,8 @@ owns cancellation, actor isolation and AutoSync seam rules, plus the Host and fo
 patterns. Follow its extension recipes rather than copying orchestration into views
 or adding method bodies to `ExportManager+AutoSyncConformance.swift`.
 
-The behavioral regression gates are the same in this guide, `CONTRIBUTING.md`, and the canonical
-reference:
+The [regression gates](docs/reference/architecture-conventions.md#regression-gates) must pass
+without re-recording unless the new behavior has been explicitly audited:
 
 - `AutoSyncSeamCharacterizationTests`
 - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`
@@ -60,7 +60,6 @@ reference:
 - `IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`
 - `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss`
 - `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile`
-
 - `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId`
 - `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId`
 - `ExportDestinationEscapeProtectionTests`
@@ -69,17 +68,6 @@ reference:
 - `HistoricalPersistenceFixtureTests`
 - `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice`
 - `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl`
-
-Run these without re-recording unless the new behavior has been explicitly audited. They are listed
-once in `scripts/ci/regression-gates.txt`, which also pins containing-suite declarations to support
-method-level gates; those pins are not additional behavioral gates. CI checks that this list names
-every gate in the file and that every gate ran and passed.
-
-Read-only Photos access has a separate static CI guard: `scripts/ci/check-read-only-photos.py`
-and its self-tests. It checks source for mutation APIs; the result-bundle gates above protect
-runtime behavior. The AutoSync suite gate includes both canonical automatic and superseding
-manual-run sequences. Suite gates reject skipped/failing current members, but do not detect
-silent removal of an individual method.
 
 ## Documentation Layout
 
