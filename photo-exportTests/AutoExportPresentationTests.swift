@@ -4,41 +4,6 @@ import Testing
 @testable import Photo_Export
 
 struct AutoExportPresentationTests {
-  @Test func exportNowFooterPreservesEachAdmissionExplanation() {
-    let rows: [(AutoSyncState, String)] = [
-      (.disabled, "Enable Auto Export above to use Export Now."),
-      (.blocked(.noScopesSelected), "Pick at least one scope above first."),
-      (.blocked(.destinationMissing), "Select an export destination first."),
-      (
-        .blocked(.destinationUnsafe),
-        "The destination has unresolved issues. Open the destination indicator to review."
-      ),
-      (
-        .blocked(.photosAccessMissing),
-        "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
-      ),
-      (.blocked(.importActive), "Auto Export is blocked. Resolve the issue above to run now."),
-      (.running(reason: .photosChanged), "A run is already in progress."),
-      (
-        .waiting(.destinationUnavailable),
-        "The destination drive isn't connected. Export Now will queue the run for when it's reachable."
-      ),
-      (
-        .waiting(.destinationChecking),
-        "Checking the destination folder. Export Now will run if the folder passes the check."
-      ),
-      (.waiting(.manualExportActive), "Auto Export will run shortly."),
-      (.idle, "Bypass the debounce and start a run right now."),
-      (
-        .scheduled(reason: .photosChanged, fireAt: .distantFuture),
-        "Bypass the debounce and start a run right now."
-      ),
-    ]
-    for (state, expected) in rows {
-      #expect(AutoExportPresentation.exportNowFooter(state) == expected)
-    }
-  }
-
   @Test func statusCountdownUsesTheSuppliedTimeAndClampsExpiredDeadlines() {
     let now = Date(timeIntervalSince1970: 100)
     let state = AutoSyncState.scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(1.6))

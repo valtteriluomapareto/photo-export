@@ -99,8 +99,7 @@ struct AutoExportSettingsView: View {
           .disabled(!autoSyncManager.state.canRunNow)
         }
       } footer: {
-        let message = AutoExportPresentation.exportNowFooter(autoSyncManager.state)
-        Text(message)
+        Text(AutoExportPresentation.exportNowFooter(autoSyncManager.state))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
