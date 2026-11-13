@@ -17,7 +17,6 @@ struct OnboardingExportOptions: View {
       VStack(alignment: .leading, spacing: 4) {
         Toggle("Include originals for edited photos", isOn: $includeOriginals)
           .toggleStyle(.checkbox)
-          .accessibilityIdentifier("onboarding-include-originals")
         Text(
           "Off: one file per photo. On: also keep original copies for photos "
             + "you've edited."
