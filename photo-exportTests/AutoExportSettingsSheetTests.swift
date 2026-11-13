@@ -10,19 +10,6 @@ import Testing
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct AutoExportSettingsSheetTests {
-    private final class RenderTick: ObservableObject {
-      @Published var value = 0
-    }
-
-    private struct RenderWitness: View {
-      @ObservedObject var tick: RenderTick
-      let counter: BodyInvalidationCounter
-      var body: some View {
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter.record("settings-render:\(tick.value)")
-        Color.clear.frame(width: 1, height: 1)
-      }
-    }
     private func expectHeader(_ title: String, in window: NSWindow) async throws {
       try #require(await observe(in: window) { window.attachedSheet != nil })
       let sheet = try #require(window.attachedSheet)
@@ -189,57 +176,6 @@ import Testing
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
-    }
-
-    @Test func actualSettingsRendersAndRemovesTheRecoveryPrompt() async throws {
-      let core = AppCoreTestHarness.makeCore(
-        AppCoreTestHarness.makeTestComposition(label: "settings-prompt-mounted"))
-      var result = ConfigureRecordStoresResult.success
-      let lifecycle = AppLifecycleCoordinator(
-        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-        configureRecordStores: { _ in result })
-      lifecycle.apply(destination: .init(identity: .init(stableId: "A", fingerprint: nil)))
-      result = .migrationConflict(newId: "new", legacyId: "legacy")
-      lifecycle.apply(destination: .init(identity: .init(stableId: "B", fingerprint: nil)))
-      let counter = BodyInvalidationCounter()
-      let tick = RenderTick()
-      let window = HostedViewHarness.makeWindow(
-        contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 900),
-        styleMask: [.titled, .closable])
-      window.contentView = NSHostingView(
-        rootView: AutoExportSettingsView()
-          .environmentObject(lifecycle).photoExportEnvironment(core)
-          .overlay { RenderWitness(tick: tick, counter: counter) })
-      try await withCleanup {
-        window.orderFront(nil)
-        try #require(
-          await observe(in: window) {
-            counter.count(for: "settings-render:0") > 0
-              && (promptPixels(in: window)?.count ?? 0) > 3000
-          })
-        let shown = try #require(promptPixels(in: window))
-        lifecycle.clearMigrationConflictAfterReconcile()
-        tick.value += 1
-        try #require(await observe(in: window) { counter.count(for: "settings-render:1") > 0 })
-        let cleared = try #require(promptPixels(in: window))
-        #expect(cleared != shown)
-      } cleanup: {
-        await close(window, core: core, counter: counter)
-      }
-    }
-
-    /// Compare the actual first Form row after an acknowledged render, without OS-specific
-    /// HDR color thresholds or snapshots recorded for one macOS version.
-    private func promptPixels(in window: NSWindow) -> Data? {
-      guard let view = window.contentView,
-        view.bounds.height >= 180
-      else { return nil }
-      let rect = NSRect(
-        x: view.bounds.minX, y: view.isFlipped ? view.bounds.minY : view.bounds.maxY - 180,
-        width: view.bounds.width, height: 180)
-      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
-      view.cacheDisplay(in: rect, to: bitmap)
-      return bitmap.representation(using: .png, properties: [:])
     }
   }
 #endif

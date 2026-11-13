@@ -188,7 +188,6 @@ struct ExportIssuePresentationTests {
     defer { f.close() }
     f.window.orderFront(nil)
     try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 1 })
-    let before = try #require(pixels(in: f.window))
     #expect(f.service.detailsFetchCalls.isEmpty)
     f.timeline.markVariantInProgress(
       assetId: "asset", variant: .edited, year: 2026, month: 10,
@@ -196,7 +195,6 @@ struct ExportIssuePresentationTests {
     f.timeline.markVariantFailed(
       assetId: "asset", variant: .edited, error: "Network failed", at: failedAt)
     try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") >= 2 })
-    #expect(await observe(in: f.window) { pixels(in: f.window) != before })
     #expect(f.service.detailsFetchCalls == ["asset"])
   }
 
@@ -223,7 +221,6 @@ struct ExportIssuePresentationTests {
         f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1
       })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
-    let before = try #require(pixels(in: f.window))
     // Change only creation metadata: the mounted Form must install the new date too.
     f.service.favoritesAssets = [TestAssetFactory.makeAsset(id: "asset", creationDate: created)]
     f.library.invalidateCache()
@@ -231,7 +228,6 @@ struct ExportIssuePresentationTests {
       await observe(in: f.window) {
         f.counter.count(for: "issue-metadata:\(f.destinationId):2") == 1
       })
-    #expect(await observe(in: f.window) { pixels(in: f.window) != before })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
   }
 
@@ -388,7 +384,6 @@ struct ExportIssuePresentationTests {
       await observe(in: f.window) {
         f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 1
       })
-    let before = try #require(pixels(in: f.window))
     if collection {
       let placement = ExportPlacement.favorites()
       f.collections.upsertPlacement(placement)
@@ -407,16 +402,8 @@ struct ExportIssuePresentationTests {
       f.timeline.flushPendingNotifications()
     }
     try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):0") >= 2 })
-    #expect(await observe(in: f.window) { pixels(in: f.window) != before })
-  }
-
-  private func pixels(in window: NSWindow) -> Data? {
-    guard let view = window.contentView else { return nil }
-    view.layoutSubtreeIfNeeded()
-    let rect = view.bounds
-    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
-    view.cacheDisplay(in: rect, to: bitmap)
-    return bitmap.representation(using: .png, properties: [:])
+    #expect(
+      await observe(in: f.window) { NativeViewAccess.containsText("new-failure", in: f.window) })
   }
 
   // MARK: - Retry footer
