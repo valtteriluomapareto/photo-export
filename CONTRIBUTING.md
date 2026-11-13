@@ -122,8 +122,8 @@ checked patterns and the narrow allow marker for tests that must inspect a real 
 ### Static guards
 
 Run the repository checks that CI runs, including self-tests of the guards.
-Install the pinned Swift tools from [Style checks](#style-checks) and the workflow tools
-below first; the runner includes native workflow/shell validation and strict app-and-test formatting:
+Install the pinned tools from [Style checks](#style-checks) first; the runner includes native
+workflow/shell validation and strict app-and-test formatting:
 
 ```bash
 scripts/ci/run-guards.sh
@@ -135,45 +135,28 @@ your Photos library. See the [CI script guide](scripts/README.md#ci-scripts-scri
 for each guard's scope. Checks of built apps and test results run after the relevant
 build/test step in CI; the runner covers the static guards.
 
-### Workflow and shell checks
+### Style checks
 
-CI pins **actionlint 1.7.12** and **ShellCheck 0.11.0** with verified SHA256 downloads and
-version checks. The macOS arm64 installer publishes paths only after both tools validate:
+CI pins **SwiftLint 0.65.1**, **swift-format 603.0.0**, **actionlint 1.7.12** and **ShellCheck
+0.11.0** with SHA256-verified downloads. Use those versions for matching strict diagnostics. On
+macOS15+ arm64 with Command Line Tools installed, the same installer can prepare a local temporary
+session:
 
 ```bash
 CI_TOOLS_DIR="$(mktemp -d)"
 RUNNER_TEMP="$CI_TOOLS_DIR" GITHUB_PATH="$CI_TOOLS_DIR/paths" bash scripts/ci/install-ci-tools.sh
 while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$CI_TOOLS_DIR/paths"
+swiftlint version
+swift-format --version
 actionlint -version
 shellcheck --version
 ```
 
-`check-workflows.sh` runs actionlint on all workflows, including ShellCheck for embedded
-shell. `check-shell-scripts.sh` analyzes tracked shell scripts. Both are in the one
-`run-guards.sh` list and fail if a required tool is missing. The native actionlint config
-allows only the existing preview runner label `xcode-27`. Other platforms may install the
-same tagged tools from their upstream sources; pin provenance is in
-[`install-ci-tools.sh`](scripts/ci/install-ci-tools.sh).
-
-### Style checks
-
-CI pins **SwiftLint 0.65.1** and **swift-format 603.0.0** with SHA256-verified downloads. Use those
-versions for matching strict diagnostics. On macOS15+ arm64 with Command Line Tools installed, the
-same installer can prepare a local temporary session:
-
-```bash
-SWIFT_TOOLS_DIR="$(mktemp -d)"
-RUNNER_TEMP="$SWIFT_TOOLS_DIR" GITHUB_PATH="$SWIFT_TOOLS_DIR/paths" bash scripts/ci/install-swift-tools.sh
-while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$SWIFT_TOOLS_DIR/paths"
-swiftlint version
-swift-format --version
-```
-
-The installer checks both hashes and exact versions before publishing paths; it has no
+The installer checks every hash and exact version before publishing paths; it has no
 Homebrew/latest fallback. Installed binaries remain in the temporary session directory. Other
 platforms can install the same tagged tools from their upstream sources; the CI installer targets
 its macOS arm64 image. Update pins/checksums and the installer fixtures deliberately when upgrading.
-Download provenance is recorded in [`install-swift-tools.sh`](scripts/ci/install-swift-tools.sh).
+Download provenance is recorded in [`install-ci-tools.sh`](scripts/ci/install-ci-tools.sh).
 
 Run the same enforcing style checks as CI from the repository root:
 
@@ -378,11 +361,9 @@ proposes weekly Action updates and website npm updates; routine minor/patch webs
 grouped, while major updates remain separate. Maintainers review these PRs and merge only after
 current-head CI passes. No automatic merging is enabled.
 
-CI runs app and website validation on every pull request and main push. The actual
-`build-and-test` and `website` jobs keep the existing required check names; there are
-no routing or skipped-result wrapper jobs. Static guards run through the single
-`scripts/ci/run-guards.sh` entry point. See the [CI validator guide](scripts/README.md#ci-validators).
-Release workflow triggers remain separate and unchanged.
+CI runs the `build-and-test` and `website` jobs on every pull request and main push. Static
+guards run through the single `scripts/ci/run-guards.sh` entry point. See the [CI validator
+guide](scripts/README.md#ci-validators).
 
 Main branch protection requires the final `build-and-test` and `website` checks,
 both from GitHub Actions (app ID `15368`). Release workflows are not required checks. Pending, failed or cancelled required results

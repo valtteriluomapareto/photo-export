@@ -101,7 +101,7 @@ scripts/ci/run-guards.sh
 [`run-guards.sh`](ci/run-guards.sh) runs guard fixture self-tests, export IO boundaries, read-only Photos,
 source-comment plan references, test waits, test scratch state, the observation ratchet,
 persistence value sets, project versions, regression-gate symbols/documentation,
-destination-identity keying and strict app-and-test formatting (using the pinned Swift tools described below).
+destination-identity keying and strict app-and-test formatting (using the pinned tools described below).
 It names each check, continues after independent failures and reports all failed checks
 before returning nonzero. CI invokes this one entry point; each guard has its own
 GitHub log group, including on failure. Native workflow and shell validators are part of
@@ -262,26 +262,17 @@ label; GitHub cancels it after 24 hours, and that is not a toolchain result.
 
 ### CI validators
 
-Every PR and main push runs the actual `website` job on Linux and `build-and-test` on
-macOS. Their required check names are unchanged. There is no path routing or intermediate
-skipped-result gate. Website formatting/lint/build/link checks and the app's strict lint,
-guards, warning check, full tests, result audit and Release checks keep their existing roles.
-Release triggers and the advisory canary remain separate.
+[`install-ci-tools.sh`](ci/install-ci-tools.sh) installs SwiftLint 0.65.1, swift-format
+603.0.0, actionlint 1.7.12 and ShellCheck 0.11.0 from pinned upstream archives, verifying
+every SHA256 and version before publishing any path. [`check-workflows.sh`](ci/check-workflows.sh)
+validates all workflows with native actionlint and embedded-shell checking. Its config admits
+the exact existing preview runner `xcode-27`. [`check-shell-scripts.sh`](ci/check-shell-scripts.sh)
+checks all tracked shell scripts with filename boundaries preserved. Missing tools fail closed.
+See [local installation](../CONTRIBUTING.md#style-checks).
 
-[`install-ci-tools.sh`](ci/install-ci-tools.sh) installs actionlint 1.7.12 and ShellCheck
-0.11.0 from pinned upstream archives, verifying SHA256 and versions before publishing
-either path. [`check-workflows.sh`](ci/check-workflows.sh) validates all workflows with
-native actionlint and embedded-shell checking. Its config admits the exact existing
-preview runner `xcode-27`. [`check-shell-scripts.sh`](ci/check-shell-scripts.sh) checks
-all tracked shell scripts with filename boundaries preserved. Missing tools fail closed.
-See [local installation](../CONTRIBUTING.md#workflow-and-shell-checks).
-
-Fixture tests execute actual scripts or the real native validators with disposable inputs.
-They do not read repository workflow YAML or simulate GitHub expressions. Invalid YAML,
-unknown expression context, embedded shell errors, standalone shell errors and missing
-tools must fail. New script entry points keep literal output/argument/status fixtures.
-Native syntax checking does not prove release trigger or publication policy; review
-those conditions, permissions, environments, safe defaults and concurrency directly.
+New script entry points keep literal output/argument/status fixtures. Native syntax checking
+does not prove release trigger or publication policy; review those conditions, permissions,
+environments, safe defaults and concurrency directly.
 
 ### Main branch protection
 
@@ -358,8 +349,7 @@ The version validator checks every `MARKETING_VERSION` assignment line in `proje
 The channel context fixtures execute `release-context-direct.sh` and
 `release-context-appstore.sh` in disposable directories with explicit event/ref/build-only
 inputs. They pin actual output keys, versions, build numbers and prerelease suppression,
-not GitHub's complete publication routing. The homemade workflow-expression evaluator is
-removed. Workflow publication conditions and safe defaults remain directly reviewed.
+not GitHub's complete publication routing.
 Keychain fixtures use only whitelisted offline commands and fake inputs; they check whole
 search-list paths (including spaces and an empty original list) and generated-password
 masking before use/export. Archive/sanitizer fixtures retain complete sanitized logs,
