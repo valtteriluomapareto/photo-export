@@ -47,7 +47,6 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -82,7 +81,6 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in highFP },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -105,7 +103,6 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -138,7 +135,6 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -171,7 +167,6 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -273,7 +268,6 @@ struct StableDestinationIdentityTests {
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
       sameFolderEvidenceProvider: { _ in .ambiguous },
       ambiguityResolver: { _ in .sameDestination },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -300,7 +294,6 @@ struct StableDestinationIdentityTests {
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
       sameFolderEvidenceProvider: { _ in .ambiguous },
       ambiguityResolver: { _ in .newDestination },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -334,7 +327,6 @@ struct StableDestinationIdentityTests {
         resolverCalls += 1
         return .sameDestination
       },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -362,7 +354,6 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in fp },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -390,7 +381,6 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey,
       fingerprintProvider: { _ in self.lowConfidence("/Volumes/mount-A/backup") },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -403,7 +393,6 @@ struct StableDestinationIdentityTests {
     let restored = ExportDestinationManager(
       userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey, stableIdDefaultsKey: stableKey,
       fingerprintProvider: { _ in self.lowConfidence("/Volumes/mount-B/backup") },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -435,7 +424,6 @@ struct StableDestinationIdentityTests {
       fingerprintProvider: { _ in self.lowConfidence("/Volumes/mount-A/backup") },
       sameFolderEvidenceProvider: { _ in .differentFromStored },
       bookmarkSaver: { _ in !failSave },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
@@ -560,7 +548,6 @@ struct StableDestinationIdentityTests {
       userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey, stableIdDefaultsKey: stableKey,
       fingerprintProvider: { _ in fp },
       ambiguityResolver: { _ in .sameDestination },
-      storedBookmarkScopeAcquirer: { _ in true },
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in }
     )
