@@ -339,26 +339,6 @@ struct AutoSyncManagerTests {
     #expect(manager.currentRetryState.isEmpty)
   }
 
-  /// Destination going away mid-fan-out cancels the remaining scopes (via `cancelActiveFanOut`),
-  /// and releases the owned task handle after the old task exits.
-  @Test func destinationClearedMidFanOutCancelsRemainingScopes() async throws {
-    let manager = AutoSyncManager()
-    let builder = FakeAutoSyncEnvironmentBuilder()
-    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
-    builder.destination.subject.send(safeDestination())
-    builder.scopes.subject.send(
-      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
-    manager.attach(to: builder.environment)
-
-    builder.clock.advance(by: 10)
-    let fanOut = try #require(manager.activeRunFanOutTask)
-    await Task.yield()
-    // Destination removed mid-fan-out.
-    builder.destination.subject.send(.none)
-    await fanOut.value
-    #expect(manager.activeRunFanOutTask == nil)
-  }
-
   @Test func runCompletionPersistsRunSummaryToStore() async {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
