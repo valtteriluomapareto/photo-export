@@ -155,7 +155,7 @@ struct ExportProgressBar: View {
         .monospacedDigit()
         .fixedSize()
         .layoutPriority(2)
-        .help(ExportProgressPresentation.countTooltip(for: exportManager.versionSelection))
+        .help(progressCountTooltip)
 
       currentAssetLabel
         .layoutPriority(1)
@@ -180,9 +180,7 @@ struct ExportProgressBar: View {
         .foregroundColor(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)
-      if let hint = ExportProgressPresentation.renderActivityHint(
-        progressState.presentation.renderActivity)
-      {
+      if let hint = renderActivityHint {
         Text(hint)
           .font(.caption)
           .foregroundColor(.secondary)
@@ -194,6 +192,28 @@ struct ExportProgressBar: View {
       ExportProgressPresentation.currentAssetLabel(
         filename: progressState.presentation.currentAssetFilename,
         activity: progressState.presentation.renderActivity))
+  }
+
+  private var renderActivityHint: String? {
+    switch progressState.presentation.renderActivity {
+    case .none: return nil
+    case .downloading: return "(downloading…)"
+    case .rendering: return "(rendering…)"
+    }
+  }
+
+  private var progressCountTooltip: String {
+    switch exportManager.versionSelection {
+    case .editedWithOriginals:
+      return
+        "Counts assets, not files. Each adjusted asset writes both an edited file and a "
+        + "_orig companion but counts once. The filename is whichever file is currently "
+        + "being written."
+    case .edited:
+      return
+        "Counts assets. The filename is the file currently being written for the asset "
+        + "in progress."
+    }
   }
 
   // MARK: - Empty-run banner

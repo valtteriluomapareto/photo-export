@@ -714,99 +714,55 @@ import Testing
       #expect(NativeViewAccess.containsText("1 selected · 1 album · 0/2 exported", in: window))
     }
 
-    /// The caller must pass current-placement status to each real tile, independently.
+    /// The caller must pass current-placement status to each real tile, independently. A tile's
+    /// label says "fully exported" exactly when it shows the completed badge.
     @Test(.timeLimit(.minutes(1)))
     func mountedFolderBadgesFollowCurrentPlacementAndKeepTheCompletedSibling() async throws {
       let f = try await Fixture(change: .ancestorRename)
-      let images = AsyncCheckpoint()
-      f.service.decodedThumbnailOverride = { _, _, _ in
-        await images.enter()
-        return nil
+      defer { f.close() }
+      // The folder pane's ScrollView lists no accessibility children; hit-testing reaches each
+      // tile. Neither fake cover loads, so each label is fixed once its load settles.
+      func tiles(_ expected: [String: Bool]) -> Bool {
+        guard let window = f.window else { return false }
+        return expected.allSatisfy { title, exported in
+          let label =
+            "Album, \(title), 1 photo, \(exported ? "fully exported, " : "")Couldn't load preview"
+          return NativeViewAccess.hitTestButton(label, in: window) != nil
+        }
       }
-      try await withCleanup {
-        f.set(f.old, .done)
-        f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
-        f.records.flushPendingNotifications()
-        f.show(sidebar: false, collectionPane: false)
-        try #require(
-          await observe(in: f.window) {
-            folderSummary("1/2", in: f)
-              && [f.asset.id, f.unchangedAsset.id].allSatisfy { id in
-                f.service.decodedThumbnailCalls.contains {
-                  $0.assetId == id && $0.deliveryMode == .highQuality
-                }
-              }
+      f.set(f.old, .done)
+      f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
+      f.records.flushPendingNotifications()
+      f.show(sidebar: false, collectionPane: false)
+      try #require(
+        await observe(in: f.window) { folderSummary("1/2", in: f) && tiles(["Unchanged": true]) })
+      try await f.barrier()
+      #expect(tiles(["Album": false, "Unchanged": true]))
+      f.set(f.current, .done)
+      f.records.flushPendingNotifications()
+      #expect(
+        await observe(in: f.window) {
+          folderSummary("2/2", in: f) && tiles(["Album": true, "Unchanged": true])
+        })
+      let folder = try #require(f.currentTree.first)
+      f.service.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: folder.id, localIdentifier: folder.localIdentifier, title: folder.title,
+          kind: .folder,
+          pathComponents: folder.pathComponents,
+          children: folder.children.map { child in
+            guard child.localIdentifier == "target" else { return child }
+            return PhotoCollectionDescriptor(
+              id: child.id, localIdentifier: child.localIdentifier,
+              title: "Renamed", kind: .album, pathComponents: child.pathComponents, children: [])
           })
-        try await f.barrier()
-        let view = try #require(f.window?.contentView)
-        func bitmap() throws -> NSBitmapImageRep {
-          view.layoutSubtreeIfNeeded()
-          let raw = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-          view.cacheDisplay(in: view.bounds, to: raw)
-          // PNG decoding normalizes extended-range host pixels before examining the real glyph.
-          return try #require(
-            raw.representation(using: .png, properties: [:]).flatMap(NSBitmapImageRep.init(data:)))
-        }
-        func pixels(_ image: NSBitmapImageRep, _ region: CGRect) throws -> Data {
-          let crop = try #require(image.cgImage?.cropping(to: region))
-          return try #require(
-            NSBitmapImageRep(cgImage: crop).representation(using: .png, properties: [:]))
-        }
-        let initial = try bitmap()
-        var points: [CGPoint] = []
-        for y in 0..<initial.pixelsHigh {
-          for x in (initial.pixelsWide / 2)..<initial.pixelsWide {
-            guard let color = initial.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-            if color.greenComponent > 0.35 && color.greenComponent > color.redComponent + 0.15
-              && color.greenComponent > color.blueComponent + 0.15
-            {
-              points.append(CGPoint(x: x, y: y))
-            }
-          }
-        }
-        let left = try #require(points.map(\.x).min()), top = try #require(points.map(\.y).min())
-        let right = try #require(points.map(\.x).max()),
-          bottom = try #require(points.map(\.y).max())
-        let stableRegion = CGRect(
-          x: left - 6, y: top - 6, width: right - left + 13, height: bottom - top + 13)
-        // Two 144pt covers share the 350pt pane's 16pt outer padding and inter-column gap.
-        let columnStep = (view.bounds.width - 32 - 16) / 2 + 16
-        let changedRegion = stableRegion.offsetBy(
-          dx: -columnStep * CGFloat(initial.pixelsWide) / view.bounds.width, dy: 0)
-        let stable = try pixels(initial, stableRegion), missing = try pixels(initial, changedRegion)
-        try #require(
-          missing != stable, "Only the unchanged album starts with a real completed badge")
-        f.set(f.current, .done)
-        f.records.flushPendingNotifications()
-        try #require(await observe(in: f.window) { folderSummary("2/2", in: f) })
-        try await f.barrier()
-        let completed = try bitmap()
-        #expect(try pixels(completed, changedRegion) == stable)
-        #expect(try pixels(completed, stableRegion) == stable)
-        let folder = try #require(f.currentTree.first)
-        f.service.collectionTree = [
-          PhotoCollectionDescriptor(
-            id: folder.id, localIdentifier: folder.localIdentifier, title: folder.title,
-            kind: .folder,
-            pathComponents: folder.pathComponents,
-            children: folder.children.map { child in
-              guard child.localIdentifier == "target" else { return child }
-              return PhotoCollectionDescriptor(
-                id: child.id, localIdentifier: child.localIdentifier,
-                title: "Renamed", kind: .album, pathComponents: child.pathComponents, children: [])
-            })
-        ]
-        f.library.invalidateCache(changedThumbnailAssetIDs: [])
-        f.library.libraryRefresh.flush()
-        try #require(await observe(in: f.window) { folderSummary("1/2", in: f) })
-        try await f.barrier()
-        let renamed = try bitmap()
-        #expect(try pixels(renamed, changedRegion) == missing)
-        #expect(try pixels(renamed, stableRegion) == stable)
-      } cleanup: {
-        f.close()
-        await images.releaseAll()
-      }
+      ]
+      f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      f.library.libraryRefresh.flush()
+      try #require(
+        await observe(in: f.window) { folderSummary("1/2", in: f) && tiles(["Renamed": false]) })
+      try await f.barrier()
+      #expect(tiles(["Renamed": false, "Unchanged": true]))
     }
 
     enum FolderCountSurface: CaseIterable { case folderPane, sidebarBadge }

@@ -107,7 +107,8 @@ struct LibraryGridSelectionLifecycleTests {
           .environment(timelineStore)
           .environment(collectionStore)
           .environment(manager)
-          .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults)))
+          .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
+          .environment(\.accessibilityEnabled, true))
       hostingView = hosted
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),
@@ -119,18 +120,9 @@ struct LibraryGridSelectionLifecycleTests {
 
     func show() { window.orderFront(nil) }
 
-    func gridPixels() throws -> Data {
-      hostingView.layoutSubtreeIfNeeded()
-      let top = NSRect(x: 16, y: 80, width: hostingView.bounds.width - 32, height: 160)
-      let region =
-        hostingView.isFlipped
-        ? top
-        : NSRect(
-          x: top.minX, y: hostingView.bounds.height - top.maxY, width: top.width, height: top.height
-        )
-      let image = try #require(hostingView.bitmapImageRepForCachingDisplay(in: region))
-      hostingView.cacheDisplay(in: region, to: image)
-      return try #require(image.representation(using: .png, properties: [:]))
+    /// The grid's ScrollView lists no accessibility children; hit-testing reaches each tile.
+    func selected(_ label: String) -> Bool? {
+      NativeViewAccess.hitTestButton(label, in: window)?.isAccessibilitySelected?()
     }
 
     func close() {
@@ -366,46 +358,30 @@ struct LibraryGridSelectionLifecycleTests {
   func parentOnlySelectionChangeRendersTheCurrentHighlight(grid: Grid) async throws {
     let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A", creationDate: nil)
-    let b = TestAssetFactory.makeAsset(id: "B", creationDate: nil)
-    let images = AsyncCheckpoint()
+    let b = TestAssetFactory.makeAsset(id: "B", creationDate: nil, mediaType: .video)
     fixture.service.progressiveStreamOverride = { _ in
       AsyncThrowingStream {
         $0.yield([a, b])
         $0.finish()
       }
     }
-    fixture.service.decodedThumbnailOverride = { _, _, _ in
-      await images.enter()
-      return nil
+    defer { fixture.close() }
+    fixture.show()
+    // Neither fake thumbnail loads, so each tile's label is fixed once its load settles.
+    func highlighted(first: Bool) -> Bool {
+      fixture.selected("Photo, not yet exported, thumbnail failed to load") == first
+        && fixture.selected("Video, not yet exported, thumbnail failed to load") == !first
     }
-    try await withCleanup {
-      fixture.show()
-      try #require(
-        await observe {
-          fixture.selection.asset == a && !fixture.service.startCachingCalls.isEmpty
-        })
-      // No thumbnail can change pixels while the selection moves between the two real cells.
-      try #require(await images.waitForEnter(count: 2))
-      let first = try fixture.gridPixels()
-      let secondBodies = fixture.counter.count(for: "thumbnail-body:B")
-      fixture.selection.asset = b
-      try #require(
-        await observe {
-          fixture.counter.count(for: "thumbnail-body:B") > secondBodies
-        })
-      #expect(
-        try fixture.gridPixels() != first, "The actual highlight must move to the second cell")
-      let firstBodies = fixture.counter.count(for: "thumbnail-body:A")
-      fixture.selection.asset = a
-      try #require(
-        await observe {
-          fixture.counter.count(for: "thumbnail-body:A") > firstBodies
-        })
-      #expect(try fixture.gridPixels() == first, "Returning to the first cell restores its pixels")
-    } cleanup: {
-      fixture.close()
-      await images.releaseAll()
-    }
+    try #require(
+      await observe(in: fixture.window) {
+        fixture.selection.asset == a && highlighted(first: true)
+      })
+    fixture.selection.asset = b
+    #expect(
+      await observe(in: fixture.window) { highlighted(first: false) },
+      "The actual highlight must move to the second cell")
+    fixture.selection.asset = a
+    #expect(await observe(in: fixture.window) { highlighted(first: true) })
   }
 
   enum RefreshMutation: CaseIterable { case metadata, removal, empty }

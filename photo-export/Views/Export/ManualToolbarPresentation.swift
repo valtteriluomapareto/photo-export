@@ -44,6 +44,9 @@ struct ManualToolbarPresentation {
     }
   }
 
+  /// Stays enabled while Auto Export runs, so a click can show the confirmation that replaces
+  /// that run. Manual work, import, or unavailable destination/history disables it.
+  /// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
   var isEnabled: Bool {
     availability.canStart && !isImporting
       && !(hasActiveExportWork && activeRunSource != .autoSync)

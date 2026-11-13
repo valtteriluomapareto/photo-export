@@ -123,17 +123,10 @@ struct CoverTileLifecycleTests {
     try await withCleanup {
       try #require(await gate.waitForEnter(count: 1))
       selection.year = 2026
+      // The old cover is held, so only the new year's load can clear "Loading preview".
       try #require(
         await observe(in: window) {
-          guard let view = window.contentView,
-            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-          else { return false }
-          view.cacheDisplay(in: view.bounds, to: bitmap)
-          guard
-            let color = bitmap.colorAt(
-              x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
-          else { return false }
-          return color.blueComponent > color.redComponent + 0.4
+          NativeViewAccess.containsText("Month, January 2026, 1 photo", in: window)
         })
       #expect(
         service.scopeFetchCalls == [
