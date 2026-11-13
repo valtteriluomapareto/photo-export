@@ -54,9 +54,9 @@ struct ThumbnailViewLifecycleTests {
     }
 
     func shows(_ color: NSColor) -> Bool {
-      lastColorDescription =
-        "actual \(String(describing: HostedViewHarness.centerColor(of: window)))"
-      return HostedViewHarness.centerShows(color, in: window)
+      let actual = HostedViewHarness.centerColor(of: window)
+      lastColorDescription = "actual \(String(describing: actual))"
+      return HostedViewHarness.sample(actual, shows: color)
     }
   }
 

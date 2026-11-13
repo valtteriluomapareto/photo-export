@@ -41,11 +41,10 @@ struct HostedViewHarness {
       .usingColorSpace(.sRGB)
   }
 
-  /// Whether the center shows a solid red or blue fixture. AppKit tone-maps HDR snapshots even
+  /// Whether a sampled color is a solid red or blue fixture. AppKit tone-maps HDR snapshots even
   /// for solid sRGB fixtures, so compare the clearly distinct channels rather than exact RGB.
-  static func centerShows(_ color: NSColor, in window: NSWindow) -> Bool {
-    guard let actual = centerColor(of: window), let expected = color.usingColorSpace(.sRGB)
-    else { return false }
+  static func sample(_ actual: NSColor?, shows color: NSColor) -> Bool {
+    guard let actual, let expected = color.usingColorSpace(.sRGB) else { return false }
     return expected.redComponent > expected.blueComponent
       ? actual.redComponent > actual.blueComponent + 0.4
       : actual.blueComponent > actual.redComponent + 0.4

@@ -123,7 +123,11 @@ struct CoverTileLifecycleTests {
     try await withCleanup {
       try #require(await gate.waitForEnter(count: 1))
       selection.year = 2026
-      try #require(await observe(in: window) { HostedViewHarness.centerShows(.blue, in: window) })
+      // The old cover is held, so only the new year's load can clear "Loading preview".
+      try #require(
+        await observe(in: window) {
+          NativeViewAccess.containsText("Month, January 2026, 1 photo", in: window)
+        })
       #expect(
         service.scopeFetchCalls == [
           .timeline(year: 2025, month: 1), .timeline(year: 2026, month: 1),

@@ -372,13 +372,16 @@ struct LibraryGridSelectionLifecycleTests {
       fixture.selected("Photo, not yet exported, thumbnail failed to load") == first
         && fixture.selected("Video, not yet exported, thumbnail failed to load") == !first
     }
-    try #require(await observe { fixture.selection.asset == a && highlighted(first: true) })
+    try #require(
+      await observe(in: fixture.window) {
+        fixture.selection.asset == a && highlighted(first: true)
+      })
     fixture.selection.asset = b
     #expect(
-      await observe { highlighted(first: false) },
+      await observe(in: fixture.window) { highlighted(first: false) },
       "The actual highlight must move to the second cell")
     fixture.selection.asset = a
-    #expect(await observe { highlighted(first: true) })
+    #expect(await observe(in: fixture.window) { highlighted(first: true) })
   }
 
   enum RefreshMutation: CaseIterable { case metadata, removal, empty }

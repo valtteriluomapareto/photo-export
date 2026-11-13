@@ -79,7 +79,9 @@ struct AssetDetailPreviewRevisionTests {
         "requests=\(requests), revision=\(manager.thumbnailContentRevision(for: "A")), \(rgb ?? "no pixel")"
     }
 
-    func shows(_ color: NSColor) -> Bool { HostedViewHarness.centerShows(color, in: window) }
+    func shows(_ color: NSColor) -> Bool {
+      HostedViewHarness.sample(HostedViewHarness.centerColor(of: window), shows: color)
+    }
 
     func invalidate(_ change: Change) {
       switch change {
