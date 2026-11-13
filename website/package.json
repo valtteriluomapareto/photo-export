@@ -26,7 +26,7 @@
 	},
 	"devDependencies": {
 		"@astrojs/check": "^0.9.10",
-		"linkinator": "7.6.1",
+		"linkinator": "8.1.0",
 		"oxlint": "^1.88.0",
 		"prettier": "^3.9.10",
 		"prettier-plugin-astro": "^1.1.1",
