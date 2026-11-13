@@ -82,18 +82,22 @@ import Testing
         "The recovery sheet must outlive its prompt to show the rebuild result")
     }
 
-    @Test func safetyConfirmationSheetRendersWithTheManager() async throws {
+    /// "Use This Destination" confirms the pending destination and closes the sheet. A completed
+    /// rebuild clears the prompt first instead, and the sheet must stay up for its result.
+    @Test(arguments: [false, true])
+    func safetyConfirmationSheetRendersWithTheManager(promptClearsFirst: Bool) async throws {
       let core = AppCoreTestHarness.makeCore(
         AppCoreTestHarness.makeTestComposition(label: "settings-safety-sheet"))
       await core.exportRecordStore.configureAndWait(for: "A")
       await core.collectionExportRecordStore.configureAndWait(for: "A")
       let identity = CurrentValueSubject<DestinationIdentity, Never>(
         DestinationIdentity(stableId: "A", fingerprint: nil))
+      let store = InMemoryDestinationSafetyConfirmationStore()
       let safety = DestinationSafetyMonitor(
         identityPublisher: identity.eraseToAnyPublisher(),
         exportRecordStore: core.exportRecordStore,
         collectionExportRecordStore: core.collectionExportRecordStore,
-        confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
+        confirmationStore: store, scanDirectory: { true })
       let counter = BodyInvalidationCounter()
       let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter, safety: safety)
       try await withCleanup {
@@ -104,13 +108,18 @@ import Testing
         try await press("Review…", in: window)
         try await expectHeader("Confirm This Destination", in: window)
         let sheet = try #require(window.attachedSheet)
-        try await expectSheetOutlivesPrompt("Review…", sheet: sheet, in: window) {
-          safety.confirmCurrentDestination()
+        if promptClearsFirst {
+          try await expectSheetOutlivesPrompt("Review…", sheet: sheet, in: window) {
+            safety.confirmCurrentDestination()
+          }
+        } else {
+          try #require(safety.needsSafetyConfirmation && !store.isConfirmed(destinationId: "A"))
         }
         try await press("Use This Destination", in: sheet)
         try #require(
           await observe(in: window) {
-            !safety.needsSafetyConfirmation && window.attachedSheet == nil
+            store.isConfirmed(destinationId: "A") && !safety.needsSafetyConfirmation
+              && window.attachedSheet == nil
           })
       } cleanup: {
         await close(window, core: core, counter: counter)
