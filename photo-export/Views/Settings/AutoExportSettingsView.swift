@@ -9,10 +9,22 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @Environment(LoginItemController.self) private var loginItemController
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
+  @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
+  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  @Environment(ExportManager.self) private var exportManagerFromEnvironment
+  // The Form presents the recovery sheets because a completed rebuild clears the prompt
+  // that opened them before the sheet shows its result and Done button.
+  @State private var isShowingMigrationRecoverySheet = false
+  @State private var isShowingSafetyConfirm = false
 
   var body: some View {
     Form {
-      AutoExportRecoveryPrompt()
+      AutoExportRecoveryPrompt(
+        hasMigrationConflict: lifecycleCoordinator.migrationConflict != nil,
+        needsSafetyConfirmation: safetyMonitor.needsSafetyConfirmation,
+        showMigrationRecovery: { isShowingMigrationRecoverySheet = true },
+        showSafetyConfirmation: { isShowingSafetyConfirm = true })
 
       Section {
         Toggle(
@@ -100,6 +112,32 @@ struct AutoExportSettingsView: View {
     .onAppear { loginItemController.refresh() }
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
+    .sheet(isPresented: $isShowingMigrationRecoverySheet) {
+      DestinationRecordRecoveryView(
+        mode: .migrationConflict,
+        onRebuildComplete: { lifecycleCoordinator.clearMigrationConflictAfterReconcile() },
+        onUseAsIs: nil
+      )
+      .environmentObject(lifecycleCoordinator)
+      .environment(exportManagerFromEnvironment)
+      .environmentObject(exportDestinationManager)
+    }
+    .sheet(isPresented: $isShowingSafetyConfirm) {
+      // The destination has files but no records. Offer to rebuild
+      // progress from the drive (so re-exports skip the existing files instead
+      // of creating ` (1)` duplicates) as well as the plain "these are my
+      // pre-existing files" confirm. Both resolve the safety prompt by
+      // confirming the destination; the rebuild path additionally restores the
+      // record store from the drive's contents first.
+      DestinationRecordRecoveryView(
+        mode: .orphanedProgress,
+        onRebuildComplete: { safetyMonitor.confirmCurrentDestination() },
+        onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
+      )
+      .environmentObject(lifecycleCoordinator)
+      .environment(exportManagerFromEnvironment)
+      .environmentObject(exportDestinationManager)
+    }
   }
 
   // MARK: - Scope binding helper
