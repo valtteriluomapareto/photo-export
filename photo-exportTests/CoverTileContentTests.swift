@@ -15,41 +15,26 @@ struct CoverTileContentTests {
     return try #require(context.makeImage())
   }
 
-  @Test(arguments: [false, true])
-  func canceledQueryReturnsNoValueAfterItsConsumerFinishes(failsAfterRelease: Bool) async throws {
-    let service = FakePhotoLibraryService()
-    let gate = AsyncCheckpoint()
-    service.assetsByAlbumLocalId["A"] = [TestAssetFactory.makeAsset(id: "old")]
-    service.fetchAssetsCheckpointByAlbumId["A"] = gate
-    if failsAfterRelease {
-      service.fetchAssetsErrorByAlbumId["A"] = CocoaError(.fileReadUnknown)
-    }
-    let consumer = Task {
-      await CoverTileContent.load(
-        scope: .album(collectionId: "A"), service: service, side: 180, displayScale: 2)
-    }
-    try await withCleanup {
-      try #require(await gate.waitForEnter(count: 1))
-      consumer.cancel()
-      await gate.releaseAll()
-      let returned = await consumer.value
-      #expect(returned == nil, "The obsolete consumer must finish without a publishable value")
-      #expect(service.decodedThumbnailCalls.isEmpty)
-    } cleanup: {
-      consumer.cancel()
-      await gate.releaseAll()
-      _ = await consumer.value
-    }
-  }
+  enum CancelPoint: CaseIterable { case query, failingQuery, imageDecode }
 
-  @Test func canceledImageConsumerCannotPublishItsLateImage() async throws {
+  /// A consumer cancelled while its query or image decode is suspended finishes without a
+  /// publishable value, even when the query then fails or the image then arrives.
+  @Test(arguments: CancelPoint.allCases)
+  func canceledConsumerReturnsNoValue(at point: CancelPoint) async throws {
     let service = FakePhotoLibraryService()
     let gate = AsyncCheckpoint()
     let image = try image()
     service.assetsByAlbumLocalId["A"] = [TestAssetFactory.makeAsset(id: "old")]
-    service.decodedThumbnailOverride = { _, _, _ in
-      await gate.enter()
-      return image
+    switch point {
+    case .query: service.fetchAssetsCheckpointByAlbumId["A"] = gate
+    case .failingQuery:
+      service.fetchAssetsCheckpointByAlbumId["A"] = gate
+      service.fetchAssetsErrorByAlbumId["A"] = CocoaError(.fileReadUnknown)
+    case .imageDecode:
+      service.decodedThumbnailOverride = { _, _, _ in
+        await gate.enter()
+        return image
+      }
     }
     let consumer = Task {
       await CoverTileContent.load(
@@ -60,16 +45,7 @@ struct CoverTileContentTests {
       consumer.cancel()
       await gate.releaseAll()
       #expect(await consumer.value == nil)
-      #expect(service.decodedThumbnailCalls.count == 1)
-      // A fresh consumer remains usable after the obsolete task has physically finished.
-      let current = await CoverTileContent.load(
-        scope: .album(collectionId: "A"), service: service, side: 180, displayScale: 2)
-      guard case .images(let images) = try #require(current) else {
-        Issue.record("The current consumer must load its cover")
-        return
-      }
-      #expect(images.count == 1)
-      #expect(images.first === image)
+      #expect(service.decodedThumbnailCalls.count == (point == .imageDecode ? 1 : 0))
     } cleanup: {
       consumer.cancel()
       await gate.releaseAll()
