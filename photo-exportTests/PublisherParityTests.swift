@@ -243,34 +243,6 @@ struct PublisherParityTests {
     }
   }
 
-  @Test func managerActiveRunContext() async {
-    let f = await ManagerFixture()
-    await withCleanup {
-      let context = ExportRunContext(
-        source: .manual, visibility: .userVisible, scope: .timelineFullLibrary,
-        selection: .edited)
-      await assertPublishedParity(
-        f.manager, \.activeRunContext, { $0.activeRunContextPublisher },
-        change: { _ = await f.manager.runExport(context: context) },
-        unchangedWrite: .notDrivable("set once when a run starts and cleared once when it ends"))
-    } cleanup: {
-      await f.close()
-    }
-  }
-
-  @Test func managerIsPreparingExport() async {
-    let f = await ManagerFixture()
-    await withCleanup {
-      await assertPublishedParity(
-        f.manager, \.isPreparingExport, { $0.isPreparingExportPublisher },
-        change: { await f.manager.startExportAll()?.value },
-        // Tearing down active work stores `false` unconditionally.
-        unchangedWrite: .before { f.manager.cancelAndClear() })
-    } cleanup: {
-      await f.close()
-    }
-  }
-
   /// AutoSync's run-state contract: `CombineLatest4` over the run context, the running flag,
   /// the queue depth and the bulk-enqueue flag, without repeats.
   @Test func managerExportRunState() async {

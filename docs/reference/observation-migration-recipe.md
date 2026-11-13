@@ -236,8 +236,8 @@ The four inputs of `exportRunStatePublisher` (`activeRunContext`, `isRunning`, `
 shows that each property, and each input of the derived reads views make
 (`hasActiveExportWork`, `canTogglePause`, `manualExportShouldConfirmSupersede`), registers a
 dependency, and that a view holding the manager as a plain `let` refreshes for queued work. An
-idle teardown rewrites every input with its current value: Observation stays silent while
-Combine still delivers each write. There is no manager `objectWillChange` publisher.
+idle teardown rewrites every input with its current value: Observation stays silent and
+`exportRunStatePublisher` drops the repeats. There is no manager `objectWillChange` publisher.
 
 Month queue readers observe the coordinator's per-placement `MonthQueueState.snapshot`.
 Queue count revisions refresh those snapshots, and active-placement changes refresh the old

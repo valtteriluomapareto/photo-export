@@ -252,9 +252,6 @@ struct ExportManagerRunExportTests {
       Task { await planned.enter() }
       return true
     }
-    let finished = AsyncStream<Void>.makeStream()
-    let observation = harness.manager.isPreparingExportPublisher.dropFirst().filter { !$0 }
-      .sink { _ in finished.continuation.yield(()) }
     harness.manager.livePhotosPairedExport = true
     harness.manager.videoLayout = .subfolder
     let context = ExportRunContext(
@@ -271,15 +268,13 @@ struct ExportManagerRunExportTests {
     harness.manager.versionSelection = .edited
     stream.continuation.yield([assets[1]])
     stream.continuation.finish()
-    var iterator = finished.stream.makeAsyncIterator()
-    _ = await iterator.next()
+    #expect(await eventually("the scan finishes queueing") { !harness.manager.isPreparingExport })
     #expect(harness.manager.pendingJobs.map(\.assetLocalIdentifier) == ["first", "second"])
     #expect(
       harness.manager.pendingJobs.allSatisfy {
         $0.selection == .editedWithOriginals && $0.livePhotosPaired && $0.videoLayout == .subfolder
       })
     #expect(harness.collectionStore.placements.count == 1)
-    observation.cancel()
     await planned.releaseAll()
     harness.manager.cancelAndClear()
     _ = await task.value
@@ -1642,30 +1637,14 @@ struct ExportManagerRunExportTests {
   // MARK: - Run context surfacing
 
   /// `activeRunContext` is set while a run is in flight and cleared once the awaitable
-  /// resolves. The published value flips through nil → ctx → nil; future SwiftUI views
-  /// can observe this directly.
+  /// resolves, so observing views see nil → ctx → nil.
   @Test func activeRunContextSurfacesAndClears() async {
     let harness = await makeHarness()
     await withCleanup {
-      var observedContexts: [ExportRunContext?] = []
-      let cancellable = harness.manager.activeRunContextPublisher.sink { ctx in
-        observedContexts.append(ctx)
-      }
-      defer { cancellable.cancel() }
-
+      let contexts = ObservedValues { harness.manager.activeRunContext }
       let context = makeContext(scope: .timelineFullLibrary)
       _ = await harness.manager.runExport(context: context)
-
-      // The publisher should emit: initial nil (Combine replays current value), then the
-      // run's context when set, then nil again when finalize clears it.
-      #expect(observedContexts.contains(where: { $0 == context }))
-      #expect(harness.manager.activeRunContext == nil)
-      // Last published value is nil — run cleared the context after finalize.
-      if let last = observedContexts.last {
-        #expect(last == nil)
-      } else {
-        Issue.record("Expected at least one observed value")
-      }
+      #expect(contexts.values == [context, nil])
     } cleanup: {
       await harness.cleanup()
     }

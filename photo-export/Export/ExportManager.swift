@@ -269,27 +269,6 @@ final class ExportManager {
       .eraseToAnyPublisher()
   }
 
-  // The diagnostic accessors below expose run inputs with
-  // `$property` semantics: synchronous, delivered before the value is stored, and replaying
-  // the current value (pinned by `PublisherParityTests`), from the contract bridges.
-  // Keep them raw: the deduplicated composite has different nested-subscriber delivery.
-
-  /// `activeRunContext`, from its bridge.
-  /// Test-only accessor for synchronous delivery characterization.
-  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
-  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
-  var activeRunContextPublisher: AnyPublisher<ExportRunContext?, Never> {
-    activeRunContextBridge.publisher
-  }
-
-  /// `isPreparingExport`, from its bridge.
-  /// Test-only accessor for synchronous delivery characterization.
-  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
-  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
-  var isPreparingExportPublisher: AnyPublisher<Bool, Never> {
-    isPreparingExportBridge.publisher
-  }
-
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
   /// terminal state. Retained for completion-seam characterization. Fire-and-forget
   /// manual UI actions do not build a run context
