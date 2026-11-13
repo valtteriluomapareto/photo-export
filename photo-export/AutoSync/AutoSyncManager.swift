@@ -40,8 +40,8 @@ final class AutoSyncManager: ObservableObject {
   private var retryTimerToken: AutoSyncCancellable?
   private var retryTimerDeferredDestinationId: String?
   /// The reducer retains these destinations' latest dirty snapshots, including
-  /// failed empty cleanup writes. Do not acknowledge or reload older disk state
-  /// until a later dirty save succeeds. Transient: startup still reconciles fully.
+  /// failed empty cleanup writes. Do not reload older disk state until a later
+  /// dirty save succeeds. Transient: startup still reconciles fully.
   private var failedDirtyStateDestinationIds: Set<String> = []
   /// The reducer cache remains authoritative for observations made while the
   /// saved retry baseline could not be read or updated. Merge before replacement.

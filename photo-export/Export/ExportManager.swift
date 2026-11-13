@@ -498,9 +498,8 @@ final class ExportManager {
   // MARK: - Internals
 
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
-  /// counters, and the drain loop. ExportManager forwards reads via computed properties
-  /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
-  /// `processQueueIfNeeded`). Synchronous sinks in `init` update the
+  /// counters, and the drain loop. ExportManager forwards `pendingJobs` and the control
+  /// calls (`pause`, `resume`, `processQueueIfNeeded`). Synchronous sinks in `init` update the
   /// manager's bridged running/depth values, tracked pause flag and progress-state
   /// counters, preserving the UI reads and AutoSync's named publisher contract.
   ///
@@ -517,7 +516,6 @@ final class ExportManager {
   @ObservationIgnored private var importCancellables: Set<AnyCancellable> = []
   @ObservationIgnored private var queueCancellables: Set<AnyCancellable> = []
 
-  /// Pending work remains owned by the queue coordinator.
   var pendingJobs: ArraySlice<ExportJob> { queueCoordinator.pendingJobs }
 
   @ObservationIgnored private(set) var currentJobAssetId: String?
