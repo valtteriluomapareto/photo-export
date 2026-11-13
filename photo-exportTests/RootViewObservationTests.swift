@@ -199,31 +199,6 @@ import Testing
         await quiesce()
       }
 
-      /// The fixed 1200×800 host puts the real first-run action row in this region.
-      /// Crop the buttons alone so count labels or unrelated root pixels cannot satisfy changes.
-      func onboardingActionPixels() throws -> Data {
-        let view = try #require(window?.contentView)
-        view.layoutSubtreeIfNeeded()
-        let top = NSRect(x: view.bounds.midX - 50, y: 615, width: 160, height: 70)
-        let region =
-          view.isFlipped
-          ? top
-          : NSRect(
-            x: top.minX, y: view.bounds.height - top.maxY, width: top.width, height: top.height)
-        let image = try #require(view.bitmapImageRepForCachingDisplay(in: region))
-        view.cacheDisplay(in: region, to: image)
-        var tones: Set<Int> = []
-        for y in stride(from: 0, to: image.pixelsHigh, by: 2) {
-          for x in stride(from: 0, to: image.pixelsWide, by: 2) {
-            if let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
-              tones.insert(Int(color.redComponent * 255))
-            }
-          }
-        }
-        try #require(tones.count > 3, "The crop must contain real button/text pixels")
-        return try #require(image.representation(using: .png, properties: [:]))
-      }
-
       /// Records an export for a month the library view does not show, then waits until the
       /// publication has rendered.
       func changeUnrelatedRecord() async throws {
@@ -268,6 +243,12 @@ import Testing
     private func exportControl(_ f: Fixture) -> AnyObject? {
       guard let window = f.window else { return nil }
       return NativeViewAccess.element("manual-export-primary", in: window)
+    }
+
+    /// The first-run ScrollView lists no accessibility children; hit-testing reaches its button.
+    private func startExportEnabled(_ f: Fixture) -> Bool? {
+      guard let window = f.window else { return nil }
+      return NativeViewAccess.hitTestButton("Start Export", in: window)?.isAccessibilityEnabled?()
     }
 
     private func settle(_ f: Fixture, key: String) async throws {
@@ -341,7 +322,7 @@ import Testing
         await f.destination.persistSelectionAndWait(f.folder)
         await f.destination.revalidateAndWait()
         try await f.barrier()
-        let readyPixels = try f.onboardingActionPixels()
+        try #require(startExportEnabled(f) == true)
         let rootBodies = f.counter.count(for: "content-root")
         let hostBodies = f.counter.count(for: "content-host")
         try #require(f.timeline.state == .ready)
@@ -362,12 +343,12 @@ import Testing
         try await f.barrier()
         #expect(f.counter.count(for: "content-root") > rootBodies)
         #expect(
-          try f.onboardingActionPixels() != readyPixels,
+          startExportEnabled(f) == false,
           "The actual mounted action row must reflect loading history")
         f.io.release(snapshot)
         await f.timeline.waitUntilSettled()
         try await f.barrier()
-        #expect(try f.onboardingActionPixels() == readyPixels)
+        #expect(startExportEnabled(f) == true)
         #expect(!f.defaults.bool(forKey: "hasCompletedOnboarding"))
       } cleanup: {
         await f.close()
@@ -818,7 +799,7 @@ import Testing
         if state == .neither {
           try #require(await observe(in: f.window) { f.counter.count(for: "content-root") > 0 })
           try await f.barrier()
-          _ = try f.onboardingActionPixels()
+          try #require(startExportEnabled(f) != nil)
           await f.quiesce()
           #expect(f.defaults.bool(forKey: "hasCompletedOnboarding") == false)
           #expect(f.counter.count(for: "library-root") == 0)
