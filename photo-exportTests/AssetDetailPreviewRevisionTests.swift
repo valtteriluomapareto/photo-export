@@ -71,32 +71,15 @@ struct AssetDetailPreviewRevisionTests {
       try? FileManager.default.removeItem(at: root)
     }
 
-    func sampledColor() -> NSColor? {
-      guard let view = window.contentView else { return nil }
-      view.layoutSubtreeIfNeeded()
-      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-      view.cacheDisplay(in: view.bounds, to: bitmap)
-      return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
-        .usingColorSpace(.sRGB)
-    }
-
     var diagnostics: String {
-      let rgb = sampledColor().map {
+      let rgb = HostedViewHarness.centerColor(of: window).map {
         "RGB=(\($0.redComponent),\($0.greenComponent),\($0.blueComponent))"
       }
       return
         "requests=\(requests), revision=\(manager.thumbnailContentRevision(for: "A")), \(rgb ?? "no pixel")"
     }
 
-    func shows(_ color: NSColor) -> Bool {
-      guard
-        let actual = sampledColor(),
-        let expected = color.usingColorSpace(.sRGB)
-      else { return false }
-      return expected.redComponent > expected.blueComponent
-        ? actual.redComponent > actual.blueComponent + 0.4
-        : actual.blueComponent > actual.redComponent + 0.4
-    }
+    func shows(_ color: NSColor) -> Bool { HostedViewHarness.centerShows(color, in: window) }
 
     func invalidate(_ change: Change) {
       switch change {

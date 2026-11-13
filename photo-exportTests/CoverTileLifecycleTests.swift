@@ -123,18 +123,7 @@ struct CoverTileLifecycleTests {
     try await withCleanup {
       try #require(await gate.waitForEnter(count: 1))
       selection.year = 2026
-      try #require(
-        await observe(in: window) {
-          guard let view = window.contentView,
-            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-          else { return false }
-          view.cacheDisplay(in: view.bounds, to: bitmap)
-          guard
-            let color = bitmap.colorAt(
-              x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
-          else { return false }
-          return color.blueComponent > color.redComponent + 0.4
-        })
+      try #require(await observe(in: window) { HostedViewHarness.centerShows(.blue, in: window) })
       #expect(
         service.scopeFetchCalls == [
           .timeline(year: 2025, month: 1), .timeline(year: 2026, month: 1),

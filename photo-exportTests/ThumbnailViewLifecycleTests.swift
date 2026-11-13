@@ -54,22 +54,9 @@ struct ThumbnailViewLifecycleTests {
     }
 
     func shows(_ color: NSColor) -> Bool {
-      guard let view = window.contentView else { return false }
-      view.layoutSubtreeIfNeeded()
-      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-      view.cacheDisplay(in: view.bounds, to: bitmap)
-      guard
-        let actual = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
-          .usingColorSpace(.sRGB),
-        let expected = color.usingColorSpace(.sRGB)
-      else { return false }
-      lastColorDescription = "actual \(actual), expected \(expected)"
-      // AppKit tone-maps HDR snapshots even for solid sRGB fixtures. Compare
-      // their clearly distinct red/blue channels rather than exact RGB values.
-      if expected.redComponent > expected.blueComponent {
-        return actual.redComponent > actual.blueComponent + 0.4
-      }
-      return actual.blueComponent > actual.redComponent + 0.4
+      lastColorDescription =
+        "actual \(String(describing: HostedViewHarness.centerColor(of: window)))"
+      return HostedViewHarness.centerShows(color, in: window)
     }
   }
 
