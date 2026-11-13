@@ -58,11 +58,6 @@ final class DestinationSafetyMonitor: ObservableObject {
   /// because all writes happen on @MainActor.
   private var evaluationGeneration: Int = 0
   private var observation: AnyCancellable?
-  /// Evaluations that ran to the end, current or superseded. Exists for tests, to wait on
-  /// progress.
-  #if DEBUG
-    private(set) var completedEvaluationCount = 0
-  #endif
 
   init(
     identityPublisher: AnyPublisher<DestinationIdentity, Never>,
@@ -165,10 +160,6 @@ final class DestinationSafetyMonitor: ObservableObject {
   private func evaluate(for identity: DestinationIdentity) {
     evaluationGeneration += 1
     let gen = evaluationGeneration
-    #if DEBUG
-      var finishesHere = true
-      defer { if finishesHere { completedEvaluationCount += 1 } }
-    #endif
 
     guard let id = identity.stableId else {
       verdict = Verdict(stableId: nil, needsConfirmation: false)
@@ -193,14 +184,8 @@ final class DestinationSafetyMonitor: ObservableObject {
     // Records empty — scan the destination directory. Async because the
     // scoped-access dance crosses an actor hop and the filesystem read
     // touches an external drive.
-    #if DEBUG
-      finishesHere = false
-    #endif
     Task { @MainActor [weak self] in
       guard let self else { return }
-      #if DEBUG
-        defer { self.completedEvaluationCount += 1 }
-      #endif
       let hasUserFiles = await self.scanDirectory()
       // Judge the loaded history, not the empty one a loading store shows.
       await self.exportRecordStore.waitUntilSettled()

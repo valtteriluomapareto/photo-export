@@ -185,6 +185,7 @@ struct DestinationSafetyMonitorTests {
         scanCallsRef.callCount += 1
         if scanCallsRef.callCount == 1 {
           await oldScan.enter()
+          scanCallsRef.oldScanReturned = true
           return true
         }
         return false
@@ -195,18 +196,15 @@ struct DestinationSafetyMonitorTests {
       let new = fingerprint(id: "new")
       identitySubject.send(DestinationIdentity(stableId: old.id, fingerprint: old))
       try #require(await oldScan.waitForEnter(count: 1))
-      let baseline = monitor.completedEvaluationCount
       identitySubject.send(DestinationIdentity(stableId: new.id, fingerprint: new))
       try #require(
         await eventually("the newer scan finishes") {
-          monitor.completedEvaluationCount == baseline + 1
-            && monitor.verdict == .init(stableId: new.id, needsConfirmation: false)
+          monitor.verdict == .init(stableId: new.id, needsConfirmation: false)
         })
       await oldScan.releaseAll()
-      try #require(
-        await eventually("the stale scan actually finishes") {
-          monitor.completedEvaluationCount == baseline + 2
-        })
+      // Both stores are settled, so each `waitUntilSettled()` returns without suspending and
+      // the stale evaluation ends in the main-actor turn in which its scan returns.
+      try #require(await eventually("the stale scan returns") { scanCallsRef.oldScanReturned })
       #expect(monitor.verdict == .init(stableId: new.id, needsConfirmation: false))
     } cleanup: {
       await oldScan.releaseAll()
@@ -330,15 +328,15 @@ struct DestinationSafetyMonitorTests {
 
     // The scan finds files while the history is still held.
     try #require(await scan.waitForEnter(count: 1))
-    #expect(monitor.completedEvaluationCount == 0)
+    #expect(monitor.verdict.stableId == nil)
     await scan.release()
     #expect(
       await eventually("the evaluation waits for the history or finishes") {
-        recordStore.pendingSettleWaiterCount == 1 || monitor.completedEvaluationCount == 1
+        recordStore.pendingSettleWaiterCount == 1 || monitor.verdict.stableId == fp.id
       })
     #expect(recordStore.state == .loading)
     io.release(snapshot)
-    #expect(await eventually("the evaluation finishes") { monitor.completedEvaluationCount == 1 })
+    #expect(await eventually("the evaluation finishes") { monitor.verdict.stableId == fp.id })
 
     #expect(recordStore.state == .ready)
     #expect(recordStore.recordsById.isEmpty == !hasHistory)
@@ -391,5 +389,6 @@ struct DestinationSafetyMonitorTests {
   @MainActor
   private final class ScanCallsRef {
     var callCount: Int = 0
+    var oldScanReturned = false
   }
 }

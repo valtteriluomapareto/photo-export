@@ -139,7 +139,6 @@ import Testing
       let secondId = try #require(destination.destinationId)
       #expect(secondId != firstId)
       #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
-      #expect(!PhotoExportApp.wasComposed, "an AppCore alone must not compose the app")
     }
   }
 

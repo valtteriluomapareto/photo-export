@@ -88,12 +88,15 @@ struct DestinationIdentityIntegrationTests {
     #expect(collectionStore.state == .ready)
     #expect(
       await eventually("the safety check of S finishes") {
-        safetyMonitor.completedEvaluationCount == 1
+        safetyMonitor.verdict == .init(stableId: stableId, needsConfirmation: false)
       })
 
     var snapshots: [DestinationSnapshot] = []
     let cancellable = adapter.destinationSnapshotPublisher.sink { snapshots.append($0) }
     defer { cancellable.cancel() }
+    var verdicts: [DestinationSafetyMonitor.Verdict] = []
+    let verdictCancellable = safetyMonitor.verdictPublisher.sink { verdicts.append($0) }
+    defer { verdictCancellable.cancel() }
 
     // Baseline: configured once for S; the adapter is emitting S.
     #expect(configureCalls == [stableId])
@@ -118,7 +121,7 @@ struct DestinationIdentityIntegrationTests {
     // `confirmationPersistsAcrossRemountDrift` covers the keying directly; here we assert the
     // wired monitor stays quiet.)
     #expect(confirmationStore.isConfirmed(destinationId: stableId))
-    #expect(safetyMonitor.completedEvaluationCount == 1)
+    #expect(verdicts == [.init(stableId: stableId, needsConfirmation: false)])
     #expect(safetyMonitor.needsSafetyConfirmation == false)
   }
 }
