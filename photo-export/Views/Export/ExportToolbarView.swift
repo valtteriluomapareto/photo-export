@@ -117,7 +117,7 @@ struct ExportToolbarView: ToolbarContent {
   @State private var isShowingSupersedeConfirm = false
 
   private var primaryActions: some View {
-    let exportHelp = primaryActionHelpText
+    let presentation = self.presentation
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("export-toolbar-actions")
@@ -127,7 +127,7 @@ struct ExportToolbarView: ToolbarContent {
     // packs the pause + cancel glyphs flush against the prominent Export
     // All button; 12pt gives them room to read as separate controls.
     return HStack(alignment: .center, spacing: 12) {
-      Button(primaryActionLabel) {
+      Button(presentation.label) {
         handlePrimaryAction()
       }
       .buttonStyle(.borderedProminent)
@@ -135,14 +135,14 @@ struct ExportToolbarView: ToolbarContent {
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
       .accessibilityIdentifier("manual-export-primary")
-      .disabled(!isPrimaryActionEnabled)
-      .help(exportHelp)
+      .disabled(!presentation.isEnabled)
+      .help(presentation.help)
       .confirmationDialog(
         "Auto Export is running",
         isPresented: $isShowingSupersedeConfirm,
         titleVisibility: .visible
       ) {
-        Button("Run \(primaryActionLabel) Now", role: .destructive) {
+        Button("Run \(presentation.label) Now", role: .destructive) {
           exportManager.supersedeForManualRun()
           startManualExport()
         }
@@ -218,10 +218,6 @@ struct ExportToolbarView: ToolbarContent {
       hasActiveExportWork: exportManager.hasActiveExportWork,
       activeRunSource: exportManager.activeRunContext?.source)
   }
-
-  private var isPrimaryActionEnabled: Bool { presentation.isEnabled }
-  private var primaryActionLabel: String { presentation.label }
-  private var primaryActionHelpText: String { presentation.help }
 
   private func handlePrimaryAction() {
     if exportManager.manualExportShouldConfirmSupersede {
