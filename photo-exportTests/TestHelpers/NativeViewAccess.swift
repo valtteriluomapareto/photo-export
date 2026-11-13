@@ -94,9 +94,26 @@ enum NativeViewAccess {
   }
 
   static func button(_ title: String, in window: NSWindow) -> AnyObject? {
-    elements(in: window).first {
-      $0.accessibilityRole?() == .button
-        && ($0.accessibilityTitle?() == title || $0.accessibilityLabel?() == title)
+    elements(in: window).first { isButton($0, titled: title) }
+  }
+
+  /// A scrollable Form does not list its rows as accessibility children, but hit-testing
+  /// its hosting view still reaches each row's real control.
+  static func hitTestButton(_ title: String, in window: NSWindow) -> AnyObject? {
+    guard let content = window.contentView else { return nil }
+    let frame = window.frame
+    let step: CGFloat = 10
+    for y in stride(from: frame.maxY - step / 2, to: frame.minY, by: -step) {
+      for x in stride(from: frame.minX + step / 2, to: frame.maxX, by: step) {
+        let hit = content.accessibilityHitTest(NSPoint(x: x, y: y)) as AnyObject?
+        if let hit, isButton(hit, titled: title) { return hit }
+      }
     }
+    return nil
+  }
+
+  private static func isButton(_ element: AnyObject, titled title: String) -> Bool {
+    element.accessibilityRole?() == .button
+      && (element.accessibilityTitle?() == title || element.accessibilityLabel?() == title)
   }
 }

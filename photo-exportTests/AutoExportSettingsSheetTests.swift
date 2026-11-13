@@ -174,6 +174,79 @@ import Testing
       }
     }
 
+    /// A completed rebuild clears its prompt before the sheet shows the result and its Done
+    /// button, so the actual Settings view must keep presenting the sheet without the banner.
+    private func expectSheetOutlivesPrompt(
+      opening control: String, header: String, in window: NSWindow, clearPrompt: () -> Void
+    ) async throws {
+      window.orderFront(nil)
+      #expect(window.attachedSheet == nil)
+      try #require(
+        await observe(in: window) { NativeViewAccess.hitTestButton(control, in: window) != nil })
+      let button = try #require(NativeViewAccess.hitTestButton(control, in: window))
+      let press: (() -> Bool)? = button.accessibilityPerformPress
+      let action = try #require(press)
+      _ = action()
+      try await expectHeader(header, in: window)
+      let sheet = try #require(window.attachedSheet)
+      clearPrompt()
+      try #require(
+        await observe(in: window) { NativeViewAccess.hitTestButton(control, in: window) == nil },
+        "The banner must leave Settings once its prompt clears")
+      #expect(
+        window.attachedSheet === sheet && sheet.isVisible,
+        "The recovery sheet must outlive its prompt to show the rebuild result")
+    }
+
+    @Test func safetySheetOutlivesItsPromptInActualSettings() async throws {
+      let core = AppCoreTestHarness.makeCore(
+        AppCoreTestHarness.makeTestComposition(label: "settings-safety-sheet-host"))
+      await core.exportRecordStore.configureAndWait(for: "A")
+      await core.collectionExportRecordStore.configureAndWait(for: "A")
+      let identity = CurrentValueSubject<DestinationIdentity, Never>(
+        DestinationIdentity(stableId: "A", fingerprint: nil))
+      let safety = DestinationSafetyMonitor(
+        identityPublisher: identity.eraseToAnyPublisher(),
+        exportRecordStore: core.exportRecordStore,
+        collectionExportRecordStore: core.collectionExportRecordStore,
+        confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
+      let counter = BodyInvalidationCounter()
+      let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter, safety: safety)
+      try await withCleanup {
+        safety.attach()
+        try #require(await eventually("safety scan completed") { safety.needsSafetyConfirmation })
+        try await expectSheetOutlivesPrompt(
+          opening: "Review…", header: "Confirm This Destination", in: window
+        ) { safety.confirmCurrentDestination() }
+      } cleanup: {
+        await close(window, core: core, counter: counter)
+      }
+    }
+
+    @Test func migrationSheetOutlivesItsPromptInActualSettings() async throws {
+      let core = AppCoreTestHarness.makeCore(
+        AppCoreTestHarness.makeTestComposition(label: "settings-migration-sheet-host"))
+      var result = ConfigureRecordStoresResult.success
+      let lifecycle = AppLifecycleCoordinator(
+        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
+        configureRecordStores: { _ in result })
+      lifecycle.apply(destination: .init(identity: .init(stableId: "A", fingerprint: nil)))
+      result = .migrationConflict(newId: "new", legacyId: "legacy")
+      lifecycle.apply(destination: .init(identity: .init(stableId: "B", fingerprint: nil)))
+      let counter = BodyInvalidationCounter()
+      let window = AppCoreTestHarness.settingsWindow(
+        core: core, counter: counter, lifecycle: lifecycle)
+      try await withCleanup {
+        try #require(lifecycle.migrationConflict != nil)
+        try #require(!core.destinationSafetyMonitor.needsSafetyConfirmation)
+        try await expectSheetOutlivesPrompt(
+          opening: "Resolve…", header: "Destination Has Unresolved Issues", in: window
+        ) { lifecycle.clearMigrationConflictAfterReconcile() }
+      } cleanup: {
+        await close(window, core: core, counter: counter)
+      }
+    }
+
     @Test func actualSettingsRendersAndRemovesTheRecoveryPrompt() async throws {
       let core = AppCoreTestHarness.makeCore(
         AppCoreTestHarness.makeTestComposition(label: "settings-prompt-mounted"))
