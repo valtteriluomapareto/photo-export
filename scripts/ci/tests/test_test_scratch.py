@@ -108,7 +108,7 @@ class TestScratchGuardTests(unittest.TestCase):
             "  func t() {\n"
             "    let core = AppCore(composition: .fixture(label: \"x\"))\n"
             "    let other = AppCore(composition: .productionLike)\n"
-            "    let flag = PhotoExportApp.wasComposed\n  }\n}\n")
+            "    let report = PhotoExportApp.saveDiagnosticReport\n  }\n}\n")
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -145,7 +145,7 @@ class TestScratchGuardTests(unittest.TestCase):
             "      .init()\n"
             "    PhotoExportApp.main()\n"
             "    let typed: PhotoExportApp = .init()\n"
-            "    let flag = PhotoExportApp.wasComposed\n  }\n}\n")
+            "    let report = PhotoExportApp.saveDiagnosticReport\n  }\n}\n")
         result = self.run_guard()
         self.assertEqual(result.returncode, 1)
         self.assertIn("AppTests.swift:3: composes the real app", result.stdout)
