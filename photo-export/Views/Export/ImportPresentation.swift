@@ -9,35 +9,12 @@ enum ImportPresentation {
     var id: String { label }
   }
 
-  static func stageLabel(_ stage: BackupScanner.ImportStage?) -> String {
-    switch stage {
-    case .scanningBackupFolder: return "Scanning backup folder…"
-    case .readingPhotosLibrary: return "Reading Photos library…"
-    case .matchingAssets(let matched, let total):
-      return "Matching assets… \(matched) found of \(total) files"
-    case .rebuildingLocalState: return "Rebuilding local state…"
-    case .reconcilingDiskState: return "Pruning records for missing files…"
-    case .done: return "Done"
-    case .none: return "Preparing…"
-    }
-  }
-
   static func canRetry(
     destinationCanImport: Bool, timeline: RecordStoreState, collections: RecordStoreState,
     importing: Bool, activeExport: Bool
   ) -> Bool {
     destinationCanImport && timeline == .ready && !collections.needsRecovery
       && !importing && !activeExport
-  }
-
-  static func recoveryGuidance(timeline: RecordStoreState, collections: RecordStoreState) -> String
-  {
-    if timeline.needsRecovery || collections.needsRecovery {
-      return
-        "Close this sheet and resolve the export history alert before retrying. Keep the app open to preserve unsaved progress."
-    }
-    return
-      "Check that your backup drive is connected. Close this sheet to reselect the export folder if access needs renewing, then try again."
   }
 
   static let collectionsSkippedGuidance =

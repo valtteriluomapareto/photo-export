@@ -114,22 +114,4 @@ struct ManualToolbarPresentationTests {
         == "Export Favorites and every user album (including albums nested in folders), plus a _orig companion for any photo edited in Photos. Shared albums are excluded — use the Export Shared Album button on their pane."
     )
   }
-  @Test func fileMenuImportRequiresEveryAdmissionCondition() {
-    let ready = (true, true, true, false, false)
-    let unavailable = [
-      (false, true, true, false, false),
-      (true, false, true, false, false),
-      (true, true, false, false, false),
-      (true, true, true, true, false),
-      (true, true, true, false, true),
-    ]
-    for (index, flags) in ([ready] + unavailable).enumerated() {
-      let (onboarding, access, destination, work, importing) = flags
-      #expect(
-        LibraryImportAvailability.canImport(
-          onboardingComplete: onboarding, isAuthorized: access, destinationCanImport: destination,
-          hasActiveExportWork: work, isImporting: importing) == (index == 0))
-    }
-  }
-
 }

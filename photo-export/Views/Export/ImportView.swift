@@ -67,7 +67,18 @@ struct ImportView: View {
     }
   }
 
-  private var stageLabel: String { ImportPresentation.stageLabel(exportManager.importStage) }
+  private var stageLabel: String {
+    switch exportManager.importStage {
+    case .scanningBackupFolder: return "Scanning backup folder…"
+    case .readingPhotosLibrary: return "Reading Photos library…"
+    case .matchingAssets(let matched, let total):
+      return "Matching assets… \(matched) found of \(total) files"
+    case .rebuildingLocalState: return "Rebuilding local state…"
+    case .reconcilingDiskState: return "Pruning records for missing files…"
+    case .done: return "Done"
+    case .none: return "Preparing…"
+    }
+  }
 
   private var timelineExportAvailability: ManualExportAvailability {
     ManualExportAvailability(
@@ -83,8 +94,12 @@ struct ImportView: View {
   }
 
   private var recoveryGuidance: String {
-    ImportPresentation.recoveryGuidance(
-      timeline: exportRecordStore.state, collections: collectionExportRecordStore.state)
+    if exportRecordStore.state.needsRecovery || collectionExportRecordStore.state.needsRecovery {
+      return
+        "Close this sheet and resolve the export history alert before retrying. Keep the app open to preserve unsaved progress."
+    }
+    return
+      "Check that your backup drive is connected. Close this sheet to reselect the export folder if access needs renewing, then try again."
   }
 
   private func terminalView(error: String?) -> some View {

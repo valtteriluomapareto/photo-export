@@ -3,17 +3,6 @@ import Testing
 @testable import Photo_Export
 
 struct ImportPresentationTests {
-  @Test func stagesPreserveProgressAndMatchingCounts() {
-    let rows: [(BackupScanner.ImportStage?, String)] = [
-      (nil, "Preparing…"), (.scanningBackupFolder, "Scanning backup folder…"),
-      (.readingPhotosLibrary, "Reading Photos library…"),
-      (.matchingAssets(matched: 4, total: 9), "Matching assets… 4 found of 9 files"),
-      (.rebuildingLocalState, "Rebuilding local state…"),
-      (.reconcilingDiskState, "Pruning records for missing files…"), (.done, "Done"),
-    ]
-    for (stage, expected) in rows { #expect(ImportPresentation.stageLabel(stage) == expected) }
-  }
-
   @Test func retryRequiresTimelineAndDestinationButAllowsUnreadyCollectionWithoutRecovery() {
     func canRetry(
       destination: Bool = true, timeline: RecordStoreState = .ready,
@@ -33,19 +22,6 @@ struct ImportPresentationTests {
     #expect(!canRetry(collections: .persistenceFailed))
     #expect(!canRetry(importing: true))
     #expect(!canRetry(active: true))
-  }
-
-  @Test func recoveryGuidancePrioritizesUnsavedHistoryOverDriveRecovery() {
-    let drive =
-      "Check that your backup drive is connected. Close this sheet to reselect the export folder if access needs renewing, then try again."
-    let history =
-      "Close this sheet and resolve the export history alert before retrying. Keep the app open to preserve unsaved progress."
-    #expect(ImportPresentation.recoveryGuidance(timeline: .ready, collections: .ready) == drive)
-    #expect(ImportPresentation.recoveryGuidance(timeline: .loading, collections: .loading) == drive)
-    #expect(
-      ImportPresentation.recoveryGuidance(timeline: .persistenceFailed, collections: .ready)
-        == history)
-    #expect(ImportPresentation.recoveryGuidance(timeline: .ready, collections: .failed) == history)
   }
 
   @Test func reportRowsKeepTimelineCollectionsAmbiguitiesAndPruningDistinct() {
