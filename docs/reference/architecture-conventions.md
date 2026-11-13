@@ -907,7 +907,8 @@ Every fire-and-forget export entry point on `ExportManager` has this shape:
 
 ```text
 func startExportX(...) {
-  // 1. canStartExport(in:logTag:): import conflict, then the timeline or collection store.
+  // 1. canStartExport(in:logTag:): an import in progress, then a pending `previousBackupMissing`
+  //    decision, then the timeline or collection store.
   // 2. Entry-specific checks: a bulk start refuses while a scan is preparing, empty input
   //    shows its message, and Month resumes an authorized paused queue instead of scanning.
   //    A rejected start keeps messages and counters.
@@ -926,14 +927,15 @@ and a throw records the failure through `handleScanFailure`. Favorites is the on
 single-scope start AutoSync runs through `runExport`.
 
 Bulk starts (`startExportAll`, `startExportTimelineSelection` and the collection entry points
-through `startCollectionBulkExport`) pass their log tag and messages to `runBulkExportTask`.
-It runs the body at utility priority, shows the zero-work message the body returns, and warns
-on a throw when jobs were already queued. `runBulkEnqueueLoop` releases the asset cache and
-yields per item, checks the generation and accumulates `BulkExportTotals`; an unauthorized
-item marks the run incomplete, so the drain resolves `.failed` while queued jobs still export.
-`CollectionBulkSource` orders its targets Favorites, user albums, then shared albums. Explicit
-IDs keep the caller's order and load no inventory; folder and explicit sources are
-user-album-only.
+through `startCollectionBulkExport`) pass `runBulkExportTask` their log tag and partial-scan
+warning; the body returns its zero-work message with its totals. The helper runs the body at
+utility priority, shows that message when nothing was queued and no item was unauthorized,
+and warns on a throw when jobs were already queued. `runBulkEnqueueLoop` releases the asset
+cache and yields per item, checks the generation and accumulates `BulkExportTotals`; an
+unauthorized item marks the run incomplete, so the drain resolves `.failed` while queued jobs
+still export. `CollectionBulkSource` orders its targets Favorites, user albums, then shared
+albums. Explicit IDs keep the caller's order and load no inventory before their per-album
+resolver; folder and explicit sources are user-album-only.
 
 The typed planners share `planAssetsProgressively`. Month uses one timeline placement, Year
 assigns a month per dated asset, and a collection resolves one placement and derives its fetch
