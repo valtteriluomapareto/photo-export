@@ -17,14 +17,6 @@ enum ExportProgressPresentation {
     return source.emptyRunMessage.map(Content.empty) ?? .hidden
   }
 
-  static func renderActivityHint(_ activity: RenderActivity?) -> String? {
-    switch activity {
-    case .none: return nil
-    case .downloading: return "(downloading…)"
-    case .rendering: return "(rendering…)"
-    }
-  }
-
   static func currentAssetLabel(filename: String?, activity: RenderActivity?) -> String {
     let filename = filename ?? ""
     switch activity {
@@ -37,19 +29,4 @@ enum ExportProgressPresentation {
       return filename.isEmpty ? "Rendering edited video" : "Rendering edited \(filename)"
     }
   }
-
-  static func countTooltip(for selection: ExportVersionSelection) -> String {
-    switch selection {
-    case .editedWithOriginals:
-      return
-        "Counts assets, not files. Each adjusted asset writes both an edited file and a "
-        + "_orig companion but counts once. The filename is whichever file is currently "
-        + "being written."
-    case .edited:
-      return
-        "Counts assets. The filename is the file currently being written for the asset "
-        + "in progress."
-    }
-  }
-
 }

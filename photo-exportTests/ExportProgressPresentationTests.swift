@@ -19,9 +19,6 @@ struct ExportProgressPresentationTests {
   }
 
   @Test func activityLabelsDescribeTheCurrentOperationWithoutInventingAFilename() {
-    #expect(ExportProgressPresentation.renderActivityHint(nil) == nil)
-    #expect(ExportProgressPresentation.renderActivityHint(.downloading) == "(downloading…)")
-    #expect(ExportProgressPresentation.renderActivityHint(.rendering) == "(rendering…)")
     #expect(ExportProgressPresentation.currentAssetLabel(filename: nil, activity: nil) == "")
     #expect(
       ExportProgressPresentation.currentAssetLabel(filename: nil, activity: .downloading)
@@ -35,8 +32,5 @@ struct ExportProgressPresentationTests {
     #expect(
       ExportProgressPresentation.currentAssetLabel(filename: "A.MOV", activity: .rendering)
         == "Rendering edited A.MOV")
-    #expect(
-      ExportProgressPresentation.countTooltip(for: .editedWithOriginals).contains(
-        "Counts assets, not files"))
   }
 }
