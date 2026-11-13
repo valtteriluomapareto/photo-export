@@ -94,7 +94,7 @@ import Testing
         probes.append(
           Probe(
             event: event,
-            storesConfigured: core.lifecycleCoordinator.lastConfiguredDestinationId == firstId,
+            storesConfigured: core.lifecycleCoordinator.currentDestination.id == firstId,
             safetyAttached: core.destinationSafetyMonitor.isAttached,
             launchInProgress: AppDiagnostics.isLaunchInProgress))
       }
@@ -107,7 +107,7 @@ import Testing
       }
 
       AppDiagnostics.beginLaunch()
-      #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == nil)
+      #expect(core.lifecycleCoordinator.currentDestination.id == nil)
       #expect(!core.destinationSafetyMonitor.isAttached)
 
       core.start()
@@ -138,7 +138,7 @@ import Testing
       await destination.persistSelectionAndWait(try makeDestinationFolder("app-core-second"))
       let secondId = try #require(destination.destinationId)
       #expect(secondId != firstId)
-      #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
+      #expect(core.lifecycleCoordinator.currentDestination.id == secondId)
     }
   }
 

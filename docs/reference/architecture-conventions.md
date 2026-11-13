@@ -1063,8 +1063,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 Read-only Photos access is enforced separately by the static CI guard
 `check-read-only-photos.py` and its self-tests. Destination tests inject only scope
 acquisition/release setup; their identity, bookmarks, filesystem and loader operations remain
-production code. Native getter wrappers in the test target expose the same production
-publishers for parity assertions. A suite gate rejects skipped/failing current members but
+production code. A suite gate rejects skipped/failing current members but
 cannot notice silent deletion of a method; the two canonical AutoSync methods remain reviewed
 suite members after removing their duplicate symbol rows.
 

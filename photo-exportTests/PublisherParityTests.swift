@@ -73,18 +73,6 @@ struct PublisherParityTests {
 
   // MARK: - AppLifecycleCoordinator
 
-  @Test func lifecycleCurrentDestination() async {
-    let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-      configureRecordStores: { _ in .success })
-    await assertPublishedParity(
-      coordinator, \.currentDestination, { $0.currentDestinationPublisher },
-      change: { coordinator.apply(destination: Self.snapshot("A")) },
-      // `apply` skips a snapshot equal to the current one.
-      unchangedWrite: .after { coordinator.apply(destination: Self.snapshot("A")) },
-      unchangedWriteDelivery: .isDropped)
-  }
-
   @Test func lifecycleMigrationConflict() async {
     var result = ConfigureRecordStoresResult.success
     let coordinator = AppLifecycleCoordinator(
@@ -286,34 +274,6 @@ struct PublisherParityTests {
       store, \.selection, { $0.scopeSelectionPublisher },
       change: { store.setSelection(AutoExportScopeSelection(timeline: true)) },
       unchangedWrite: .before { store.setSelection(store.selection) })
-  }
-
-  // MARK: - AutoSyncManager
-
-  @Test func autoSyncLastRunSummary() async throws {
-    let manager = AutoSyncManager()
-    let builder = FakeAutoSyncEnvironmentBuilder()
-    let destination = DestinationSnapshot(
-      fingerprint: Self.fingerprint("A"), isAvailable: true, safety: .safe)
-    let other = DestinationSnapshot(
-      fingerprint: Self.fingerprint("B"), isAvailable: true, safety: .safe)
-    let summary = ExportRunSummary(
-      context: ExportRunContext(
-        source: .autoSync, visibility: .background, reason: .appLaunch,
-        scope: .autoExport(AutoExportScopeSelection(timeline: true)), selection: .edited),
-      endedAt: Date(), enqueuedCount: 1, completedCount: 1, failedCount: 0, skippedCount: 0,
-      cancelReason: nil, result: .completed)
-    try builder.runSummaryStore.save(summary, destinationId: try #require(destination.id))
-    try builder.runSummaryStore.save(summary, destinationId: try #require(other.id))
-    manager.attach(to: builder.environment)
-    await assertPublishedParity(
-      manager, \.lastRunSummary, { $0.lastRunSummaryPublisher },
-      change: { builder.destination.subject.send(destination) },
-      // Switching to a destination whose stored summary is equal: `lastRunSummary != summary`
-      // skips the write.
-      unchangedWrite: .after { builder.destination.subject.send(other) },
-      unchangedWriteDelivery: .isDropped)
-    #expect(manager.lastRunSummary == summary)
   }
 
   // MARK: - DestinationSnapshotAdapter
