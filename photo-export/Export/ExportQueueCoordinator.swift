@@ -333,7 +333,6 @@ final class ExportQueueCoordinator: ObservableObject {
       isRunning = false
       host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
-      refreshMonthStates(since: previous)
       logger.info("Queue paused; not starting next job")
       return
     }
@@ -342,7 +341,6 @@ final class ExportQueueCoordinator: ObservableObject {
       isRunning = false
       host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
-      refreshMonthStates(since: previous)
       logger.info("Export queue drained")
       host?.didDrainQueue()
       return
