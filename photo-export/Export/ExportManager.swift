@@ -1224,12 +1224,23 @@ final class ExportManager {
     // collection tree to find the descriptor and any colliding siblings; for
     // `.favorites` the resolver returns a fixed placement.
     let collections: [PhotoCollectionDescriptor]
+    let scope: PhotoFetchScope
     switch selection {
-    case .album, .sharedAlbum:
+    case .favorites:
+      collections = []
+      scope = .favorites
+    case .album(let id):
       collections = try await photoLibraryService.loadCollectionTree()
       try throwIfCancelledOrStale(gen)
-    default:
-      collections = []
+      scope = .album(collectionId: id)
+    case .sharedAlbum(let id):
+      collections = try await photoLibraryService.loadCollectionTree()
+      try throwIfCancelledOrStale(gen)
+      scope = .sharedAlbum(collectionId: id)
+    case .timelineYear(let year), .timelineMonth(let year, _):
+      throw ExportPlacementResolver.ResolutionError.timelineYearNotResolvable(year: year)
+    case .folder(let id):
+      throw ExportPlacementResolver.ResolutionError.folderNotResolvable(collectionId: id)
     }
     let existingPlacements = collectionExportRecordStore.placements
       .values.map { $0 }
@@ -1239,14 +1250,6 @@ final class ExportManager {
       collections: collections,
       existingPlacements: Array(existingPlacements)
     )
-    let scope: PhotoFetchScope
-    switch selection {
-    case .favorites: scope = .favorites
-    case .album(let id): scope = .album(collectionId: id)
-    case .sharedAlbum(let id): scope = .sharedAlbum(collectionId: id)
-    case .timelineMonth(let year, let month): scope = .timeline(year: year, month: month)
-    case .timelineYear, .folder: preconditionFailure("The placement resolver rejects \(selection)")
-    }
 
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(in: scope, generation: gen) { assets in
