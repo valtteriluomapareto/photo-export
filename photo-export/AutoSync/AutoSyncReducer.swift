@@ -587,8 +587,8 @@ enum AutoSyncReducer {
     pending == .userExportNow && incoming != .userExportNow && suppressibleRunInProgress(previous)
   }
 
-  /// The states a destination stop's summary can arrive in before its run goes idle: an
-  /// Auto Export run, or a manual export that AutoSync waits for.
+  /// An export not yet idle: an Auto Export run, whose destination-stop summary can come first,
+  /// or a manual export AutoSync waits for. Export Now pressed during either stays pending.
   private static func suppressibleRunInProgress(_ current: AutoSyncState) -> Bool {
     switch current {
     case .running, .waiting(.manualExportActive): return true
