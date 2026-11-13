@@ -1,58 +1,29 @@
 import SwiftUI
 
-/// Owns the actual recovery controls and their sheet composition, independently of Form layout.
+/// Shows the pending destination prompt. Its buttons open recovery sheets that Settings
+/// presents from its Form.
 struct AutoExportRecoveryPrompt: View {
-  @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
-  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @Environment(ExportManager.self) private var exportManagerFromEnvironment
-  @State private var isShowingMigrationRecoverySheet = false
-  @State private var isShowingSafetyConfirm = false
+  let hasMigrationConflict: Bool
+  let needsSafetyConfirmation: Bool
+  let showMigrationRecovery: () -> Void
+  let showSafetyConfirmation: () -> Void
 
   var body: some View {
     Group {
-      if lifecycleCoordinator.migrationConflict != nil {
-        let showRecovery = { isShowingMigrationRecoverySheet = true }
+      if hasMigrationConflict {
         Section {
-          MigrationConflictBanner(onTap: showRecovery)
+          MigrationConflictBanner(onTap: showMigrationRecovery)
             .accessibilityIdentifier("auto-export-destination-prompt")
             .listRowInsets(EdgeInsets())
         }
-      } else if safetyMonitor.needsSafetyConfirmation {
-        let showConfirmation = { isShowingSafetyConfirm = true }
+      } else if needsSafetyConfirmation {
         Section {
-          SafetyConfirmationBanner(onTap: showConfirmation)
+          SafetyConfirmationBanner(onTap: showSafetyConfirmation)
             .accessibilityIdentifier("auto-export-destination-prompt")
             .listRowInsets(EdgeInsets())
         }
       }
 
-    }
-    .sheet(isPresented: $isShowingMigrationRecoverySheet) {
-      DestinationRecordRecoveryView(
-        mode: .migrationConflict,
-        onRebuildComplete: { lifecycleCoordinator.clearMigrationConflictAfterReconcile() },
-        onUseAsIs: nil
-      )
-      .environmentObject(lifecycleCoordinator)
-      .environment(exportManagerFromEnvironment)
-      .environmentObject(exportDestinationManager)
-    }
-    .sheet(isPresented: $isShowingSafetyConfirm) {
-      // The destination has files but no records. Offer to rebuild
-      // progress from the drive (so re-exports skip the existing files instead
-      // of creating ` (1)` duplicates) as well as the plain "these are my
-      // pre-existing files" confirm. Both resolve the safety prompt by
-      // confirming the destination; the rebuild path additionally restores the
-      // record store from the drive's contents first.
-      DestinationRecordRecoveryView(
-        mode: .orphanedProgress,
-        onRebuildComplete: { safetyMonitor.confirmCurrentDestination() },
-        onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
-      )
-      .environmentObject(lifecycleCoordinator)
-      .environment(exportManagerFromEnvironment)
-      .environmentObject(exportDestinationManager)
     }
   }
 }

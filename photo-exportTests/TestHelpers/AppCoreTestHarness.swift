@@ -40,21 +40,18 @@ enum AppCoreTestHarness {
   #if DEBUG
     static func settingsWindow(
       core: AppCore, counter: BodyInvalidationCounter,
-      lifecycle: AppLifecycleCoordinator? = nil, safety: DestinationSafetyMonitor? = nil,
-      recoveryPromptOnly: Bool = false
+      lifecycle: AppLifecycleCoordinator? = nil, safety: DestinationSafetyMonitor? = nil
     ) -> NSWindow {
       let window = HostedViewHarness.makeWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 900),
         styleMask: [.titled, .closable])
       window.contentView = NSHostingView(
-        rootView: Group {
-          if recoveryPromptOnly { AutoExportRecoveryPrompt() } else { AutoExportSettingsView() }
-        }
-        .environmentObject(lifecycle ?? core.lifecycleCoordinator)
-        .environmentObject(safety ?? core.destinationSafetyMonitor)
-        .photoExportEnvironment(core)
-        .environment(\.accessibilityEnabled, true)
-        .environment(\.bodyInvalidationCounter, counter))
+        rootView: AutoExportSettingsView()
+          .environmentObject(lifecycle ?? core.lifecycleCoordinator)
+          .environmentObject(safety ?? core.destinationSafetyMonitor)
+          .photoExportEnvironment(core)
+          .environment(\.accessibilityEnabled, true)
+          .environment(\.bodyInvalidationCounter, counter))
       return window
     }
   #endif

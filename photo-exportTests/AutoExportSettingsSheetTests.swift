@@ -32,14 +32,15 @@ import Testing
         }, "The attached recovery sheet must render its actual header")
     }
 
+    /// Sheet buttons are listed accessibility children; a banner button inside the Settings
+    /// Form is reached by hit-testing.
     private func press(_ title: String, in window: NSWindow) async throws {
-      if title == "Review…" || title == "Resolve…" {
-        let heading =
-          title == "Review…" ? "Confirm This Destination" : "Destination Has Unresolved Issues"
-        try #require(
-          await observe(in: window) { NativeViewAccess.containsText(heading, in: window) })
+      func find() -> AnyObject? {
+        NativeViewAccess.button(title, in: window)
+          ?? NativeViewAccess.hitTestButton(title, in: window)
       }
-      let button = try #require(NativeViewAccess.button(title, in: window))
+      try #require(await observe(in: window) { find() != nil })
+      let button = try #require(find())
       #expect(button.isAccessibilityEnabled?() == true)
       let press: (() -> Bool)? = button.accessibilityPerformPress
       let action = try #require(press)
@@ -76,8 +77,7 @@ import Testing
         collectionExportRecordStore: core.collectionExportRecordStore,
         confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
       let counter = BodyInvalidationCounter()
-      let window = AppCoreTestHarness.settingsWindow(
-        core: core, counter: counter, safety: safety, recoveryPromptOnly: true)
+      let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter, safety: safety)
       try await withCleanup {
         safety.attach()
         try #require(await eventually("safety scan completed") { safety.needsSafetyConfirmation })
@@ -122,8 +122,7 @@ import Testing
           identity: DestinationIdentity(stableId: "C", fingerprint: nil)))
       let counter = BodyInvalidationCounter()
       let window = AppCoreTestHarness.settingsWindow(
-        core: core, counter: counter, lifecycle: lifecycle, safety: safety, recoveryPromptOnly: true
-      )
+        core: core, counter: counter, lifecycle: lifecycle, safety: safety)
       try await withCleanup {
         safety.attach()
         try #require(
@@ -181,12 +180,7 @@ import Testing
     ) async throws {
       window.orderFront(nil)
       #expect(window.attachedSheet == nil)
-      try #require(
-        await observe(in: window) { NativeViewAccess.hitTestButton(control, in: window) != nil })
-      let button = try #require(NativeViewAccess.hitTestButton(control, in: window))
-      let press: (() -> Bool)? = button.accessibilityPerformPress
-      let action = try #require(press)
-      _ = action()
+      try await press(control, in: window)
       try await expectHeader(header, in: window)
       let sheet = try #require(window.attachedSheet)
       clearPrompt()
