@@ -34,13 +34,14 @@ import Testing
 
     /// Sheet buttons are listed accessibility children; a banner button inside the Settings
     /// Form is reached by hit-testing.
+    private func control(_ title: String, in window: NSWindow) -> AnyObject? {
+      NativeViewAccess.button(title, in: window)
+        ?? NativeViewAccess.hitTestButton(title, in: window)
+    }
+
     private func press(_ title: String, in window: NSWindow) async throws {
-      func find() -> AnyObject? {
-        NativeViewAccess.button(title, in: window)
-          ?? NativeViewAccess.hitTestButton(title, in: window)
-      }
-      try #require(await observe(in: window) { find() != nil })
-      let button = try #require(find())
+      try #require(await observe(in: window) { control(title, in: window) != nil })
+      let button = try #require(control(title, in: window))
       #expect(button.isAccessibilityEnabled?() == true)
       let press: (() -> Bool)? = button.accessibilityPerformPress
       let action = try #require(press)
@@ -62,6 +63,23 @@ import Testing
       try? await core.exportRecordStore.flush()
       try? await core.collectionExportRecordStore.flush()
       try? FileManager.default.removeItem(at: core.composition.appStateRoot)
+    }
+
+    /// A completed rebuild clears its prompt before the sheet shows the result and its Done
+    /// button, so Settings must keep presenting the sheet once the banner is gone.
+    private func expectSheetOutlivesPrompt(
+      _ banner: String, sheet: NSWindow, in window: NSWindow, clearPrompt: () -> Void
+    ) async throws {
+      try #require(
+        await observe(in: window) { control(banner, in: window) != nil },
+        "The banner must still be shown while its sheet is open")
+      clearPrompt()
+      try #require(
+        await observe(in: window) { control(banner, in: window) == nil },
+        "The banner must leave Settings once its prompt clears")
+      try #require(
+        window.attachedSheet === sheet && sheet.isVisible,
+        "The recovery sheet must outlive its prompt to show the rebuild result")
     }
 
     @Test func safetyConfirmationSheetRendersWithTheManager() async throws {
@@ -86,6 +104,9 @@ import Testing
         try await press("Review…", in: window)
         try await expectHeader("Confirm This Destination", in: window)
         let sheet = try #require(window.attachedSheet)
+        try await expectSheetOutlivesPrompt("Review…", sheet: sheet, in: window) {
+          safety.confirmCurrentDestination()
+        }
         try await press("Use This Destination", in: sheet)
         try #require(
           await observe(in: window) {
@@ -102,13 +123,6 @@ import Testing
       await core.exportRecordStore.configureAndWait(for: "A")
       await core.collectionExportRecordStore.configureAndWait(for: "A")
       core.exportDestinationManager.configureForScreenshotMode()
-      let identity = CurrentValueSubject<DestinationIdentity, Never>(
-        DestinationIdentity(stableId: "A", fingerprint: nil))
-      let safety = DestinationSafetyMonitor(
-        identityPublisher: identity.eraseToAnyPublisher(),
-        exportRecordStore: core.exportRecordStore,
-        collectionExportRecordStore: core.collectionExportRecordStore,
-        confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
       var result = ConfigureRecordStoresResult.success
       let lifecycle = AppLifecycleCoordinator(
         cancelActiveWork: {}, interruptForDestinationUnavailable: {},
@@ -122,13 +136,9 @@ import Testing
           identity: DestinationIdentity(stableId: "C", fingerprint: nil)))
       let counter = BodyInvalidationCounter()
       let window = AppCoreTestHarness.settingsWindow(
-        core: core, counter: counter, lifecycle: lifecycle, safety: safety)
+        core: core, counter: counter, lifecycle: lifecycle)
       try await withCleanup {
-        safety.attach()
-        try #require(
-          await eventually("safety confirmation also pending") {
-            safety.needsSafetyConfirmation
-          })
+        try #require(!core.destinationSafetyMonitor.needsSafetyConfirmation)
         try #require(
           lifecycle.migrationConflict == MigrationConflictState(newId: "new", legacyId: "legacy"))
         window.orderFront(nil)
@@ -160,82 +170,13 @@ import Testing
           await observe(in: sheet) {
             NativeViewAccess.button(rebuildTitle, in: sheet)?.isAccessibilityEnabled?() == true
           })
-        lifecycle.clearMigrationConflictAfterReconcile()
+        try await expectSheetOutlivesPrompt("Resolve…", sheet: sheet, in: window) {
+          lifecycle.clearMigrationConflictAfterReconcile()
+        }
         try #require(
           await observe(in: sheet) {
             !NativeViewAccess.containsText("Show diagnostic details", in: sheet)
           })
-        #expect(
-          window.attachedSheet === sheet && sheet.isVisible,
-          "Clearing the banner condition must retain the sheet's presentation owner")
-      } cleanup: {
-        await close(window, core: core, counter: counter)
-      }
-    }
-
-    /// A completed rebuild clears its prompt before the sheet shows the result and its Done
-    /// button, so the actual Settings view must keep presenting the sheet without the banner.
-    private func expectSheetOutlivesPrompt(
-      opening control: String, header: String, in window: NSWindow, clearPrompt: () -> Void
-    ) async throws {
-      window.orderFront(nil)
-      #expect(window.attachedSheet == nil)
-      try await press(control, in: window)
-      try await expectHeader(header, in: window)
-      let sheet = try #require(window.attachedSheet)
-      clearPrompt()
-      try #require(
-        await observe(in: window) { NativeViewAccess.hitTestButton(control, in: window) == nil },
-        "The banner must leave Settings once its prompt clears")
-      #expect(
-        window.attachedSheet === sheet && sheet.isVisible,
-        "The recovery sheet must outlive its prompt to show the rebuild result")
-    }
-
-    @Test func safetySheetOutlivesItsPromptInActualSettings() async throws {
-      let core = AppCoreTestHarness.makeCore(
-        AppCoreTestHarness.makeTestComposition(label: "settings-safety-sheet-host"))
-      await core.exportRecordStore.configureAndWait(for: "A")
-      await core.collectionExportRecordStore.configureAndWait(for: "A")
-      let identity = CurrentValueSubject<DestinationIdentity, Never>(
-        DestinationIdentity(stableId: "A", fingerprint: nil))
-      let safety = DestinationSafetyMonitor(
-        identityPublisher: identity.eraseToAnyPublisher(),
-        exportRecordStore: core.exportRecordStore,
-        collectionExportRecordStore: core.collectionExportRecordStore,
-        confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { true })
-      let counter = BodyInvalidationCounter()
-      let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter, safety: safety)
-      try await withCleanup {
-        safety.attach()
-        try #require(await eventually("safety scan completed") { safety.needsSafetyConfirmation })
-        try await expectSheetOutlivesPrompt(
-          opening: "Review…", header: "Confirm This Destination", in: window
-        ) { safety.confirmCurrentDestination() }
-      } cleanup: {
-        await close(window, core: core, counter: counter)
-      }
-    }
-
-    @Test func migrationSheetOutlivesItsPromptInActualSettings() async throws {
-      let core = AppCoreTestHarness.makeCore(
-        AppCoreTestHarness.makeTestComposition(label: "settings-migration-sheet-host"))
-      var result = ConfigureRecordStoresResult.success
-      let lifecycle = AppLifecycleCoordinator(
-        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-        configureRecordStores: { _ in result })
-      lifecycle.apply(destination: .init(identity: .init(stableId: "A", fingerprint: nil)))
-      result = .migrationConflict(newId: "new", legacyId: "legacy")
-      lifecycle.apply(destination: .init(identity: .init(stableId: "B", fingerprint: nil)))
-      let counter = BodyInvalidationCounter()
-      let window = AppCoreTestHarness.settingsWindow(
-        core: core, counter: counter, lifecycle: lifecycle)
-      try await withCleanup {
-        try #require(lifecycle.migrationConflict != nil)
-        try #require(!core.destinationSafetyMonitor.needsSafetyConfirmation)
-        try await expectSheetOutlivesPrompt(
-          opening: "Resolve…", header: "Destination Has Unresolved Issues", in: window
-        ) { lifecycle.clearMigrationConflictAfterReconcile() }
       } cleanup: {
         await close(window, core: core, counter: counter)
       }

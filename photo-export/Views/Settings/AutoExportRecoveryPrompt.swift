@@ -9,21 +9,16 @@ struct AutoExportRecoveryPrompt: View {
   let showSafetyConfirmation: () -> Void
 
   var body: some View {
-    Group {
-      if hasMigrationConflict {
-        Section {
-          MigrationConflictBanner(onTap: showMigrationRecovery)
-            .accessibilityIdentifier("auto-export-destination-prompt")
-            .listRowInsets(EdgeInsets())
-        }
-      } else if needsSafetyConfirmation {
-        Section {
-          SafetyConfirmationBanner(onTap: showSafetyConfirmation)
-            .accessibilityIdentifier("auto-export-destination-prompt")
-            .listRowInsets(EdgeInsets())
-        }
+    if hasMigrationConflict {
+      Section {
+        MigrationConflictBanner(onTap: showMigrationRecovery)
+          .listRowInsets(EdgeInsets())
       }
-
+    } else if needsSafetyConfirmation {
+      Section {
+        SafetyConfirmationBanner(onTap: showSafetyConfirmation)
+          .listRowInsets(EdgeInsets())
+      }
     }
   }
 }
@@ -49,7 +44,6 @@ private struct MigrationConflictBanner: View {
           Spacer()
           Button("Resolve\u{2026}") { onTap() }
             .controlSize(.regular)
-            .accessibilityIdentifier("auto-export-resolve-destination")
         }
       }
     }
@@ -89,7 +83,6 @@ private struct SafetyConfirmationBanner: View {
           Spacer()
           Button("Review\u{2026}") { onTap() }
             .controlSize(.regular)
-            .accessibilityIdentifier("auto-export-review-destination")
         }
       }
     }
