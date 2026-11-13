@@ -1060,9 +1060,6 @@ canonical AutoSync cases and expectations when editing that suite. Destination t
 scope acquisition and release; their identity, bookmark, filesystem and loader operations are
 production code.
 
-Where a row's last column is empty, restore the production behavior rather than weakening or
-skipping the gate.
-
 | Test | Fires when… | What to do |
 | --- | --- | --- |
 | [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) | The emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, or `completedRunsPublisher` changes | Audit. Keep `[idle, autoSyncActive, idle]` for an automatic run and `[idle, autoSyncActive, idle, manualActive, idle]` when manual work supersedes it; the abandoned summary is `.superseded` / `.supersededByManualRun`, with no mixed active source. Re-record only after auditing a deliberate behavior change. |
@@ -1079,14 +1076,14 @@ skipping the gate.
 | [`IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`](../../photo-exportTests/IdenticalFileAdoptionTests.swift) | Re-exporting a month after its history is lost writes `IMG_0001 (1).JPG` beside an identical `IMG_0001.JPG`, records another name, or moves or re-timestamps the existing file | Restore adoption: an unclaimed regular file with the staged size and bytes is recorded under its stored name, with no move and no timestamps (§Final file commit boundary). |
 | `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` | Two byte-identical assets, re-exported after lost history in either order, end up recorded against one file, or write new ` (n)` copies | Restore the claim rule. A file another record names is never adopted, so each asset's record keeps a file of its own. |
 | `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` | After an exported file is deleted, another asset with the same filename takes its name, or Import Existing Backup keeps the deleted file's record, or the next export does not write the first asset back at its own name, leaving the folder without exactly two files | Restore the claim rule for empty names. A name another record names is taken even with nothing at it, so the reconcile can see its file is gone and drop the record. |
-| `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` | Remount fingerprint drift changes a stable destination key, reconfigures history under another id, or prompts for safety again. | |
-| `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` | Selecting a genuinely different folder through real bookmark/file-identity evidence keeps the old id or yields no usable new id. | |
-| `ExportDestinationEscapeProtectionTests` | Directory resolution accepts a path outside the export root, including a symlink or reparented cached directory, or refuses a valid control path. | |
-| `JSONLRecordFileIOFailureTests` | Flush acknowledges failed I/O or a mutation submitted during its await, or snapshot recovery loses queued work. | |
-| `RecordStorePersistenceHealthTests` | An unflushed or failed record is acknowledged for retry, or history recovery loses pending or in-flight records. | |
-| `HistoricalPersistenceFixtureTests` | Shipping loaders fail to replay released snapshots/logs, change their history/placement semantics, or the immutable fixture inventory drifts. | |
-| `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` | Shipping dirty/retry/summary/safety loaders fail to reopen released state or lose targeted/manual summary compatibility. | |
-| `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` | An import reports success after a history append fails, or its successful control cannot reopen all durable records. | |
+| `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` | Remount fingerprint drift changes a stable destination key, reconfigures history under another id, or prompts for safety again. | Keep history and safety confirmations keyed on the stable id across fingerprint drift (§Destination identity). |
+| `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` | Selecting a genuinely different folder through real bookmark/file-identity evidence keeps the old id or yields no usable new id. | Mint a new stable id only from real different-folder evidence (§Destination identity). |
+| `ExportDestinationEscapeProtectionTests` | Directory resolution accepts a path outside the export root, including a symlink or reparented cached directory, or refuses a valid control path. | Keep the root containment check in directory resolution; never follow a symlink or cached directory out of the root. |
+| `JSONLRecordFileIOFailureTests` | Flush acknowledges failed I/O or a mutation submitted during its await, or snapshot recovery loses queued work. | Acknowledge only writes that reached disk, and carry queued work through snapshot recovery. |
+| `RecordStorePersistenceHealthTests` | An unflushed or failed record is acknowledged for retry, or history recovery loses pending or in-flight records. | Keep failed records retained for Retry; never acknowledge unflushed work. |
+| `HistoricalPersistenceFixtureTests` | Shipping loaders fail to replay released snapshots/logs, change their history/placement semantics, or the immutable fixture inventory drifts. | Keep the loaders backward compatible. Never edit the fixtures to make a loader pass. |
+| `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` | Shipping dirty/retry/summary/safety loaders fail to reopen released state or lose targeted/manual summary compatibility. | Keep the stores decoding released files. Never edit the fixtures to make a loader pass. |
+| `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` | An import reports success after a history append fails, or its successful control cannot reopen all durable records. | Report the failed append to the user, and keep every record that did reach disk. |
 
 ## Extension recipes
 

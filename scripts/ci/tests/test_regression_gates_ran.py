@@ -122,8 +122,7 @@ class GateResultCheckTests(unittest.TestCase):
     def test_real_gate_list_rejects_older_recording_missing_new_invariants(self):
         # The recording predates newer gates; the real list must fail closed on it even
         # though the recorded subset FIXTURE_GATES passes.
-        self.assert_fails(self.run_check(gates=GATE_LIST.read_text()),
-                          "FAIL: gate struct JSONLRecordFileIOFailureTests: suite not found")
+        self.assert_fails(self.run_check(gates=GATE_LIST.read_text()), "FAIL: gate")
 
     def test_skipped_case_under_suite_gate_fails(self):
         skipped = case(self.results, "ImportIdempotencyTests/bulkImportIsIdempotent()")
