@@ -411,6 +411,12 @@ import Testing
     let unknown = try decoded("collections-typo")
     #expect(unknown["window"] as? Int == 42)
     #expect(unknown["surface"] is NSNull)
+    #expect(unknown["error"] == nil)
+    // No window on screen: the script fails with this reason instead of timing out.
+    let data = AppCore.screenshotWindowRecord(windowNumber: nil, surfaceKey: "timeline")
+    let missing = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(missing["window"] is NSNull)
+    #expect((missing["error"] as? String)?.contains("window") == true)
   }
 
   @Test func screenshotSurfaceIsReadFromTheLaunchArgumentsInEveryMode() {

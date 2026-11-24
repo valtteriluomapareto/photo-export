@@ -8,13 +8,13 @@ and pads it to 2880x1800 with no alpha. The installed app's settings and data ar
 read or written, even while it is running.
 
 Usage:
-  scripts/screenshots/capture.py                      # the five store surfaces
-  scripts/screenshots/capture.py timeline collections-favorites
+  scripts/screenshots/capture.py                      # all five store surfaces
+  scripts/screenshots/capture.py collections-favorites  # recapture one, keep the rest
 
-Output: screenshots/app-store/NN-<surface>.png (gitignored).
+Output: screenshots/app-store/NN-<surface>.png (gitignored), numbered in store order.
 
-Needs a 2x (Retina) display with room for a 1360x850-point window, Pillow
-(`python3 -m pip install Pillow`) and Screen Recording permission for the terminal
+Needs an unlocked screen, a 2x (Retina) display with room for a 1360x850-point window,
+Pillow (`python3 -m pip install Pillow`) and Screen Recording permission for the terminal
 (System Settings > Privacy & Security > Screen Recording).
 """
 
@@ -38,6 +38,8 @@ EXECUTABLE = APP / "Contents/MacOS/Photo Export"
 OUTPUT = REPO / "screenshots/app-store"
 PAD_SCRIPT = REPO / "scripts/prepare-app-store-screenshot.py"
 
+# Keys from ScreenshotSurfaceResolver.resolve(key:), the source of truth. The app reports
+# the surface it opened, so a key that drifts from the resolver fails after the build.
 STORE_SURFACES = [
     "timeline",
     "timeline-multi-select",
@@ -45,26 +47,21 @@ STORE_SURFACES = [
     "collections-folder-trips",
     "collections-favorites",
 ]
-OTHER_SURFACES = [
-    "collections-album-porvoo",
-    "collections-album-london",
-    "collections-multi-select",
-    "collections-shared-album-family-stream",
-]
 WINDOW_POINTS = (1360, 850)
 RAW_PIXELS = (WINDOW_POINTS[0] * 2, WINDOW_POINTS[1] * 2)
 STORE_SIZE = "2880x1800"
 BACKGROUND = "E5E5EA"
 SURFACE_TIMEOUT = 30.0
 POLL_INTERVAL = 0.5
+MATCHING_FRAMES = 3
 
 
 class Failure(Exception):
     pass
 
 
-def run(arguments: list[str], **options) -> subprocess.CompletedProcess:
-    return subprocess.run(arguments, check=True, text=True, **options)
+def run(arguments: list[str], check: bool = True, **options) -> subprocess.CompletedProcess:
+    return subprocess.run(arguments, check=check, text=True, **options)
 
 
 def require_pillow() -> None:
@@ -85,13 +82,17 @@ def build() -> None:
                 stdout=handle, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as error:
             raise Failure(f"Release build failed; see {log}") from error
+    built = run(["plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-",
+                 str(APP / "Contents/Info.plist")], capture_output=True).stdout.strip()
+    if built != BUNDLE_ID:
+        raise Failure(f"The build has bundle id {built!r}, not {BUNDLE_ID}; refusing to run it")
 
 
 def quit_app() -> None:
-    subprocess.run(["pkill", "-f", str(EXECUTABLE)], check=False)
+    run(["pkill", "-f", str(EXECUTABLE)], check=False)
     for _ in range(20):
-        if subprocess.run(["pgrep", "-f", str(EXECUTABLE)], check=False,
-                          stdout=subprocess.DEVNULL).returncode != 0:
+        if run(["pgrep", "-f", str(EXECUTABLE)], check=False,
+               stdout=subprocess.DEVNULL).returncode != 0:
             return
         time.sleep(0.25)
     raise Failure("An earlier capture instance did not quit")
@@ -99,8 +100,8 @@ def quit_app() -> None:
 
 def reset_domain() -> None:
     """Start every launch from empty preferences, app data and saved window state."""
-    subprocess.run(["defaults", "delete", BUNDLE_ID], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run(["defaults", "delete", BUNDLE_ID], check=False,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     library = Path.home() / "Library"
     for path in (library / "Application Support" / BUNDLE_ID,
                  library / "Saved Application State" / f"{BUNDLE_ID}.savedState"):
@@ -126,37 +127,46 @@ def same_pixels(first: Path, second: Path) -> bool:
         return ImageChops.difference(a.convert("RGBA"), b.convert("RGBA")).getbbox() is None
 
 
-def wait_for_window(window_file: Path, key: str, deadline: float, sleep, monotonic) -> int:
-    while monotonic() < deadline:
+def wait_for_window(window_file: Path, key: str, deadline: float) -> int:
+    while time.monotonic() < deadline:
         if window_file.exists():
             record = json.loads(window_file.read_text())
+            if not isinstance(record.get("window"), int) or record["window"] <= 0:
+                raise Failure(f"[{key}] the app found no window: {record.get('error')}. "
+                              "Is the screen unlocked?")
             if record.get("surface") != key:
                 raise Failure(f"[{key}] the app opened surface {record.get('surface')!r} instead")
-            return int(record["window"])
-        sleep(POLL_INTERVAL)
-    raise Failure(f"[{key}] the app did not report its window within {SURFACE_TIMEOUT:.0f} s")
+            return record["window"]
+        time.sleep(POLL_INTERVAL)
+    raise Failure(f"[{key}] the app did not report its window within {SURFACE_TIMEOUT:.0f} s. "
+                  "Is the screen unlocked?")
 
 
-def capture_surface(key: str, destination: Path, *, sleep=time.sleep,
-                    monotonic=time.monotonic) -> None:
-    """Launch on `key` and save the first capture whose pixels match the one before it."""
+def capture_surface(key: str, destination: Path) -> None:
+    """Launch on `key` and save a capture once MATCHING_FRAMES captures in a row match."""
     quit_app()
     reset_domain()
     with tempfile.TemporaryDirectory(prefix="photo-export-capture-") as temporary:
         folder = Path(temporary)
         window_file = folder / "window.json"
-        deadline = monotonic() + SURFACE_TIMEOUT
+        deadline = time.monotonic() + SURFACE_TIMEOUT
         print(f"==> [{key}] launching")
         run(["open", "-n", str(APP), "--args", "--screenshot-mode",
              f"--screenshot-width={WINDOW_POINTS[0]}", f"--screenshot-height={WINDOW_POINTS[1]}",
              f"--screenshot-surface={key}", f"--screenshot-window-file={window_file}"])
-        window = wait_for_window(window_file, key, deadline, sleep, monotonic)
+        window = wait_for_window(window_file, key, deadline)
         previous = None
+        matches = 0
         attempt = 0
-        while monotonic() < deadline:
+        while time.monotonic() < deadline:
             attempt += 1
             shot = folder / f"shot-{attempt}.png"
-            run(["screencapture", "-x", "-o", "-t", "png", f"-l{window}", str(shot)])
+            try:
+                run(["screencapture", "-x", "-o", "-t", "png", f"-l{window}", str(shot)])
+            except subprocess.CalledProcessError as error:
+                raise Failure(f"[{key}] screencapture failed. Grant this terminal Screen "
+                              "Recording permission in System Settings > Privacy & Security."
+                              ) from error
             size = image_size(shot)
             if size != RAW_PIXELS:
                 raise Failure(
@@ -164,12 +174,13 @@ def capture_surface(key: str, destination: Path, *, sleep=time.sleep,
                     f"{RAW_PIXELS[0]}x{RAW_PIXELS[1]}. This needs a 2x display with room for a "
                     f"{WINDOW_POINTS[0]}x{WINDOW_POINTS[1]}-point window, and Screen Recording "
                     "permission for this terminal.")
-            if previous is not None and same_pixels(previous, shot):
+            matches = matches + 1 if previous and same_pixels(previous, shot) else 1
+            if matches == MATCHING_FRAMES:
                 shutil.move(shot, destination)
                 print(f"==> [{key}] stable after {attempt} captures")
                 return
             previous = shot
-            sleep(POLL_INTERVAL)
+            time.sleep(POLL_INTERVAL)
     raise Failure(f"[{key}] the window was still changing after {SURFACE_TIMEOUT:.0f} s")
 
 
@@ -182,11 +193,10 @@ def pad(raw: Path, output: Path) -> None:
 
 
 def surfaces_from(arguments: list[str]) -> list[str]:
-    known = STORE_SURFACES + OTHER_SURFACES
-    unknown = [key for key in arguments if key not in known]
+    unknown = [key for key in arguments if key not in STORE_SURFACES]
     if unknown:
-        raise SystemExit(f"Unknown surface: {', '.join(unknown)}\nKnown surfaces:\n  "
-                         + "\n  ".join(known))
+        raise SystemExit(f"Unknown surface: {', '.join(unknown)}\nStore surfaces:\n  "
+                         + "\n  ".join(STORE_SURFACES))
     return arguments or STORE_SURFACES
 
 
@@ -195,20 +205,21 @@ def main(arguments: list[str]) -> int:
     try:
         require_pillow()
         build()
-        shutil.rmtree(OUTPUT, ignore_errors=True)
-        OUTPUT.mkdir(parents=True)
+        if keys == STORE_SURFACES:
+            shutil.rmtree(OUTPUT, ignore_errors=True)
+        OUTPUT.mkdir(parents=True, exist_ok=True)
         try:
-            for number, key in enumerate(keys, start=1):
+            for key in keys:
                 raw = OUTPUT / f".raw-{key}.png"
                 capture_surface(key, raw)
-                pad(raw, OUTPUT / f"{number:02d}-{key}.png")
+                pad(raw, OUTPUT / f"{STORE_SURFACES.index(key) + 1:02d}-{key}.png")
                 raw.unlink()
         finally:
             quit_app()
     except Failure as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(f"\nDone. {len(keys)} screenshot(s) in {OUTPUT.relative_to(REPO)}:")
+    print(f"\nDone. {len(keys)} captured; {OUTPUT.relative_to(REPO)} holds:")
     for path in sorted(OUTPUT.glob("*.png")):
         print(f"  {path.name}")
     return 0

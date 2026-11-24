@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import SwiftUI
+import os
 
 /// The app's object graph, built from an `AppComposition`, and its startup sequence.
 ///
@@ -41,8 +42,8 @@ final class AppCore {
     if composition.isScreenshotMode {
       // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without this it would
       // show OnboardingView and the capture script would never reach the marketing surfaces.
-      // The capture script builds under its own bundle id and clears that domain before each
-      // launch, so this never reaches a real install's preferences.
+      // Under the capture script this lands in its own bundle id's domain, which the script
+      // clears before each launch. A plain `--screenshot-mode` launch keeps the value.
       defaults.set(true, forKey: "hasCompletedOnboarding")
     }
     // With an override (the curated screenshot library, or a test fake) the manager forwards
@@ -220,35 +221,62 @@ final class AppCore {
     AppDiagnostics.endLaunch()
   }
 
-  /// In screenshot mode, resize the main window to the requested size and, when the capture
-  /// script passed a window file, write the window's number and the surface that opened to
-  /// it. The script captures by window number (`screencapture -l`), which needs only Screen
-  /// Recording, not AppleScript, System Events or Accessibility.
+  /// In screenshot mode, once the main window is on screen: resize it to the requested size
+  /// and, when the capture script passed a window file, write the window's number and the
+  /// surface that opened. The script captures by window number (`screencapture -l`), which
+  /// needs only Screen Recording, not AppleScript, System Events or Accessibility. The window
+  /// can reach the screen after `start()`, so this looks for up to 5 seconds and then records
+  /// that it found none.
   private func prepareScreenshotWindow() {
-    // The titled window, not the menu bar item's. `canBecomeMain` would miss it: it is
-    // false until the window is on screen, which may be after `start()`.
-    guard composition.isScreenshotMode,
-      let window = NSApplication.shared.windows.first(where: { $0.styleMask.contains(.titled) })
-    else { return }
+    guard composition.isScreenshotMode else { return }
+    Task { @MainActor [weak self] in
+      for _ in 0..<50 {
+        // The titled window, not the menu bar item's.
+        if let window = NSApplication.shared.windows.first(where: {
+          $0.styleMask.contains(.titled) && $0.isVisible && $0.windowNumber > 0
+        }) {
+          self?.prepareScreenshotWindow(window)
+          return
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      self?.writeScreenshotWindowFile(windowNumber: nil)
+    }
+  }
+
+  private func prepareScreenshotWindow(_ window: NSWindow) {
     if let size = composition.screenshotWindowSize {
       let screenFrame = window.screen?.visibleFrame ?? .zero
       let origin = NSPoint(
         x: screenFrame.midX - size.width / 2, y: screenFrame.midY - size.height / 2)
       window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
     }
+    writeScreenshotWindowFile(windowNumber: window.windowNumber)
+  }
+
+  private func writeScreenshotWindowFile(windowNumber: Int?) {
     guard let file = composition.screenshotWindowFile else { return }
     let record = Self.screenshotWindowRecord(
-      windowNumber: window.windowNumber, surfaceKey: composition.screenshotSurfaceKey)
-    // After the resize settles. The script waits for stable pixels before it captures.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-      try? record.write(to: file, options: .atomic)
+      windowNumber: windowNumber, surfaceKey: composition.screenshotSurfaceKey)
+    do {
+      try record.write(to: file, options: .atomic)
+    } catch {
+      Logger.app(.screenshot).error(
+        "Could not write the screenshot window file: \(error.localizedDescription, privacy: .public)"
+      )
     }
   }
 
   /// `{"window": N, "surface": key}`. `surface` is null when the key resolves to no surface,
-  /// because the window then opens on the default Timeline month.
-  static func screenshotWindowRecord(windowNumber: Int, surfaceKey: String?) -> Data {
-    var object: [String: Any] = ["window": windowNumber, "surface": NSNull()]
+  /// because the window then opens on the default Timeline month. Without a window, `window`
+  /// is null and `error` says why.
+  static func screenshotWindowRecord(windowNumber: Int?, surfaceKey: String?) -> Data {
+    var object: [String: Any] = ["window": NSNull(), "surface": NSNull()]
+    if let windowNumber {
+      object["window"] = windowNumber
+    } else {
+      object["error"] = "No visible titled window within 5 seconds"
+    }
     if let surfaceKey, ScreenshotSurfaceResolver.resolve(key: surfaceKey) != nil {
       object["surface"] = surfaceKey
     }

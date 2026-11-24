@@ -29,7 +29,7 @@ The plan (Phase 2 trade-offs) deliberately chose to compile the photos
 into every build rather than `#if DEBUG`-gate them, so that:
 
 - Anyone who clones the repo and runs `scripts/screenshots/capture.py`
-  gets byte-equivalent output regardless of build configuration.
+  gets the same screenshot set regardless of build configuration.
 - The screenshot-mode binary stays bit-for-bit identical to the App
   Store binary modulo unlock via the `--screenshot-mode` launch arg,
   which means the reproducibility property survives across release
