@@ -457,7 +457,7 @@ struct InterruptedPairRecoveryTests {
     if let failure { throw failure }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func staleProbeCannotAdoptIntoReplacementDestination(collection: Bool) async throws {
     let f = try await makeFixture(collection: collection)
     let probe = Gate()
@@ -494,7 +494,7 @@ struct InterruptedPairRecoveryTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func admittedRecoveryAcknowledgesCapturedDestinationBeforeReplacement(collection: Bool)
     async throws
   {

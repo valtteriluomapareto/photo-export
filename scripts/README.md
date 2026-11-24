@@ -249,10 +249,10 @@ diagnostics, coverage and regression-gate steps read them.
 turns it on for its Debug build on the Xcode named in `.xcode-version`; the canary runs it as a
 last step; releases never set it. Locally: `SWIFT_WARNINGS_AS_ERRORS=1 bash scripts/ci/build-app.sh Debug`.
 
-`toolchain-canary.yml` builds and tests on other toolchains than `.xcode-version` (one lane per
-version, each naming its runner label) weekly, on demand, and on pull requests that change the version file
-or these scripts. One lane runs the next Xcode; another runs on `macos-15`, the oldest macOS the
-app supports, so a build made with the 26 SDK is tested where macOS 15 users run it. Its
+`toolchain-canary.yml` builds and tests on `macos-15`, the oldest macOS the app supports, with
+the newest Xcode that image has, so a build made with the 26 SDK is tested where macOS 15 users
+run it. It runs weekly, on demand, and on pull requests that change the version file or these
+scripts. Its
 `exclusive-rename-probe` job runs `probe-exclusive-rename.sh` on `macos-26` and `macos-15`,
 weekly and on demand only; it needs no Xcode. On pull requests, `test-guards.sh` checks that
 the script and its embedded Python parse and runs its `--folder` mode on a temporary folder.
@@ -263,17 +263,16 @@ missing, was built by another Xcode than `.xcode-version` (or the canary's lane 
 `ITSAppUsesNonExemptEncryption = false`, without which App Store Connect asks the encryption
 question for every build. It runs after the Release build in `build-and-test`, on the exported app
 before the DMG in `release-direct`, and on the archived app before packaging and upload in
-`release-app-store`. The canary is not part of the merge gate, so a red lane reports what
-a bump would break without blocking work. A lane that stays queued means no runner has its
-label; GitHub cancels it after 24 hours, and that is not a toolchain result.
+`release-app-store`. The canary is not part of the merge gate, so a red run reports a macOS 15
+problem without blocking work. A job that GitHub cancels because no macOS runner picked it up
+is not a result.
 
 ### CI validators
 
 [`install-ci-tools.sh`](ci/install-ci-tools.sh) installs SwiftLint 0.65.1, swift-format
 603.0.0, actionlint 1.7.12 and ShellCheck 0.11.0 from pinned upstream archives, verifying
 every SHA256 and version before publishing any path. [`check-workflows.sh`](ci/check-workflows.sh)
-validates all workflows with native actionlint and embedded-shell checking. Its config admits
-the exact existing preview runner `xcode-27`. [`check-shell-scripts.sh`](ci/check-shell-scripts.sh)
+validates all workflows with native actionlint and embedded-shell checking. [`check-shell-scripts.sh`](ci/check-shell-scripts.sh)
 checks all tracked shell scripts with filename boundaries preserved. Missing tools fail closed.
 See [local installation](../CONTRIBUTING.md#style-checks).
 

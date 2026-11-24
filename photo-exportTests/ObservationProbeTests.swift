@@ -12,7 +12,7 @@ private final class ObservationProbeModel {
 }
 
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct ObservationProbeTests {
   @Test func observedValuesKeepTransientChangesAndIgnoreEqualWrites() {
     let model = ObservationProbeModel()

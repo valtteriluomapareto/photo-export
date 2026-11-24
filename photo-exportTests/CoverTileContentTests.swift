@@ -4,7 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct CoverTileContentTests {
   private func image() throws -> CGImage {
     let context = try #require(

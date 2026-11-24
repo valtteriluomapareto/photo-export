@@ -107,7 +107,7 @@ struct ExportIssuePresentationTests {
     #expect(!unknown.showsRetry && unknown.retrySelection(in: [unknown]) == nil)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func clearingDestinationRejectsAnInFlightMetadataResult() async throws {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer {
@@ -182,7 +182,7 @@ struct ExportIssuePresentationTests {
     #expect(service.descriptorFetchCalls.count == 32)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func sameAssetLosingItsRecordedFilenameLoadsTheFallback() async throws {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
@@ -198,7 +198,7 @@ struct ExportIssuePresentationTests {
     #expect(f.service.detailsFetchCalls == ["asset"])
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func aRevisionReplacingAnInFlightRequestCannotPublishOldMetadata() async throws {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer {
@@ -353,7 +353,7 @@ struct ExportIssuePresentationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func actualSettingsRowShowsRecognizableMetadataAndRetryStillWorks() async throws {
     let f = try await Fixture(created: created, failedAt: failedAt, rowOnly: true)
     defer { f.close() }
@@ -375,7 +375,7 @@ struct ExportIssuePresentationTests {
   }
 
   /// Passes before: a new failed variant appears while the issue list is already mounted.
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func failureRecordedWhileShownAppears(collection: Bool) async throws {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }

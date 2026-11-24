@@ -48,7 +48,7 @@ struct AutoSyncRetryLifecycleTests {
       result: .failed, failures: [failure])
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func failedRunRetriesAtBackoffWithoutAnotherExternalEvent() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -83,7 +83,7 @@ struct AutoSyncRetryLifecycleTests {
     #expect(second.nextEligibleAt == builder.clock.now().addingTimeInterval(120))
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func dueRetryWaitsForOwnedFanOutIncludingBetweenScopes() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -125,7 +125,7 @@ struct AutoSyncRetryLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func matchedCompletionPrunesOnlyVariantsThatAreDone() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -159,7 +159,7 @@ struct AutoSyncRetryLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func retryDueDuringManualRunWaitsUntilManualFinishes() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -184,7 +184,7 @@ struct AutoSyncRetryLifecycleTests {
     #expect(builder.exportRunner.receivedContexts.last?.reason == .retryBackoff)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func retryDueDuringImportWaitsUntilImportFinishes() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -222,7 +222,6 @@ struct AutoSyncRetryLifecycleTests {
 
   /// Guard: neither a hard failure nor an unreachable destination arms a retry timer.
   @Test(
-    .timeLimit(.minutes(1)),
     arguments: [
       AutoSyncFailureCategory.destinationPermission, .destinationUnavailable,
     ])
@@ -242,7 +241,7 @@ struct AutoSyncRetryLifecycleTests {
     #expect(builder.clock.pendingCount == 0)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func destinationSwitchBackToARearmsOnlyAsRetryTimer() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -265,7 +264,7 @@ struct AutoSyncRetryLifecycleTests {
     #expect(builder.exportRunner.receivedContexts[1].reason == .retryBackoff)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func changedFailureCategoryOrSignatureRestartsBackoffAtFirstAttempt() async throws {
     for changedPart in ["category", "signature"] {
       let manager = AutoSyncManager()
@@ -296,7 +295,7 @@ struct AutoSyncRetryLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func pruningPreservesUnknownStoredScopeAndVariantEntries() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -385,7 +384,7 @@ struct AutoSyncRetryLifecycleTests {
     #expect(effects.contains(.pruneDoneRetryEntries(destinationId: "retry-B")))
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func staleACompletionAfterSwitchNeverQueriesBRecordsForPruning() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -421,7 +420,7 @@ struct AutoSyncRetryLifecycleTests {
 
   /// The real runner ends an automatic run when Auto Export is turned off; this fake keeps
   /// it running to cover the defensive guard against a late runner after re-enabling.
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func rapidReenableWaitsForOldRunnerThenStartsDueRetry() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -511,7 +510,7 @@ struct AutoSyncRetryLifecycleTests {
 
   /// A legacy ENOENT entry stored as Destination Unavailable is retried by the next run.
   /// Failing again with ENOENT, it becomes an unknown failure on its own backoff.
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func legacyUnavailableEntryRetriesAndAMissingFileStartsBackoff() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()

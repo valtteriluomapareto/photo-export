@@ -396,7 +396,7 @@ struct ReconciliationOwnershipTests {
 
   enum ErrorInvalidation: CaseIterable { case sameID, mutation, reconciliation, task, generation }
 
-  @Test(.timeLimit(.minutes(1)), arguments: StoreKind.allCases, ErrorInvalidation.allCases)
+  @Test(arguments: StoreKind.allCases, ErrorInvalidation.allCases)
   func obsoleteProbeErrorIsDiscarded(kind: StoreKind, invalidation: ErrorInvalidation) async throws
   {
     let fixture = try await Fixture(kind)

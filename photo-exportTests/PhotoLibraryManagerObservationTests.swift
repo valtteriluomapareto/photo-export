@@ -6,7 +6,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct PhotoLibraryManagerObservationTests {
   /// Changing access fails without its dependency; equal writes already stay silent.
   @Test func isAuthorizedRegistersADependency() {

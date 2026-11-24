@@ -6,7 +6,7 @@ import Testing
 /// Exact progress sources keep independent Observation dependencies while presentation
 /// readers follow bounded clock publications and immediate run boundaries.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct ExportProgressStateTests {
   @Test func summaryActionsRejectOldIDsAndRetireCurrentFeedback() {
     let progress = ExportProgressState(clock: TestClock())

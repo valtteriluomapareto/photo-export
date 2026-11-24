@@ -361,8 +361,8 @@ maintainer smoke run checks actual Photos callbacks and app lifecycle behavior.
   stores an equal value depends on the toolchain. `ObservationEqualWriteTests` records what
   the toolchain that builds the tests does: an equal `Equatable` write and an identical
   reference write do not notify, and a non-`Equatable` write does. Recorded on Xcode 27.1; CI
-  runs it on `.xcode-version` (26.6) and on the 27.1 canary, so a toolchain whose behaviour
-  differs fails it. The Combine side does not depend on it: the bridge publishes every write, as
+  runs it on `.xcode-version` (26.6) and on the macOS 15 canary (26.3), so a toolchain whose
+  behaviour differs fails it. The Combine side does not depend on it: the bridge publishes every write, as
   the parity tests require.
 - **Each flip runs:** the build (a missed `@EnvironmentObject` → `@Environment` swap is a
   compile error; a missed injection is not), the type's own tests, `PublisherParityTests`, the

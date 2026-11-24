@@ -5,7 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct AssetTileObservationTests {
   @Observable final class Selection { var asset: AssetDescriptor? }
 

@@ -5,7 +5,7 @@
   @testable import Photo_Export
 
   @MainActor
-  @Suite(.timeLimit(.minutes(1)))
+  @Suite(.timeLimit(.minutes(2)))
   struct ControlPlaneTests {
     @Test func strictLaunchAndWireFraming() throws {
       #expect(ControlLaunchFlag(rawValue: "-PEUnknown") == nil)

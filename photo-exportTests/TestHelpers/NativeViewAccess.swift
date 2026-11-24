@@ -100,13 +100,25 @@ enum NativeViewAccess {
   /// A scrollable Form does not list its rows as accessibility children, but hit-testing
   /// its hosting view still reaches each row's real control.
   static func hitTestButton(_ title: String, in window: NSWindow) -> AnyObject? {
+    hitTest(in: window) { isButton($0, titled: title) }
+  }
+
+  /// Matches the label alone. An asset tile is a container with the button trait, which
+  /// macOS 15 exposes as a group and macOS 26 and later as a button.
+  static func hitTestElement(labeled label: String, in window: NSWindow) -> AnyObject? {
+    hitTest(in: window) { $0.accessibilityLabel?() == label }
+  }
+
+  private static func hitTest(in window: NSWindow, where matches: (AnyObject) -> Bool)
+    -> AnyObject?
+  {
     guard let content = window.contentView else { return nil }
     let frame = window.frame
     let step: CGFloat = 10
     for y in stride(from: frame.maxY - step / 2, to: frame.minY, by: -step) {
       for x in stride(from: frame.minX + step / 2, to: frame.maxX, by: step) {
         let hit = content.accessibilityHitTest(NSPoint(x: x, y: y)) as AnyObject?
-        if let hit, isButton(hit, titled: title) { return hit }
+        if let hit, matches(hit) { return hit }
       }
     }
     return nil

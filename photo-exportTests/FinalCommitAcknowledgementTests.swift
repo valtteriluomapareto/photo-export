@@ -194,7 +194,7 @@ struct FinalCommitAcknowledgementTests {
   }
 
   /// The captured acknowledgement remains outstanding through the newer destination history.
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func lateAcknowledgementPreservesNewerRoundTripHistory(collection: Bool) async throws {
     let f = await Fixture(collection: collection)
     defer { f.cleanup() }

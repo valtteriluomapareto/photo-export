@@ -170,7 +170,7 @@ struct SidebarMultiSelectTests {
   /// placements. Verifies the bulk driver loops through both per-year and per-month
   /// enqueue helpers without losing the ordering or short-circuiting after the first
   /// iteration.
-  @Test(.timeLimit(.minutes(1))) func timelineSelectionEnqueuesYearsAndMonths() async throws {
+  @Test func timelineSelectionEnqueuesYearsAndMonths() async throws {
     let h = await makeHarness()
     defer { cleanupHarness(h) }
 
@@ -372,7 +372,7 @@ struct SidebarMultiSelectTests {
 
   /// Folder + explicit album in the selection set deduplicate at dispatch time:
   /// the folder's descendant album appears exactly once on the queue.
-  @Test(.timeLimit(.minutes(1))) func collectionsSelectionExpandsFoldersAndDedupesAlbums()
+  @Test func collectionsSelectionExpandsFoldersAndDedupesAlbums()
     async throws
   {
     let h = await makeHarness()

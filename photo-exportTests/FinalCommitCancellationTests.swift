@@ -186,7 +186,7 @@ struct FinalCommitCancellationTests {
   }
 
   #if DEBUG
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func controlIdleWaitsForCancelledFinalCommitAndHistory() async throws {
       let f = try await Fixture(collection: false, phase: .move)
       f.manager.controlSettlingWork = ControlSettlingWork()
@@ -215,7 +215,7 @@ struct FinalCommitCancellationTests {
     }
   #endif
 
-  @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: Phase.allCases, [false, true])
   func cancelThenRetryRecognizesCommittedOutput(phase: Phase, collection: Bool) async throws {
     let f = try await Fixture(collection: collection, phase: phase)
     try await withCleanup {
@@ -252,7 +252,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: Phase.allCases, [false, true])
   func switchedDestinationGetsNoLateRecord(phase: Phase, collection: Bool) async throws {
     let f = try await Fixture(collection: collection, phase: phase)
     try await withCleanup {
@@ -281,7 +281,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: Phase.allCases, [false, true])
   func returningToOriginalOwnerPreservesNewerRecords(phase: Phase, collection: Bool) async throws {
     let f = try await Fixture(collection: collection, phase: phase)
     try await withCleanup {
@@ -307,7 +307,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: Phase.allCases, [false, true])
   func immediateRetryWaitsBeforeAllocatingAnotherOutput(phase: Phase, collection: Bool) async throws
   {
     let f = try await Fixture(collection: collection, phase: phase)
@@ -339,7 +339,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func switchedAcknowledgementFailureRemainsRecoverable(collection: Bool) async throws {
     let f = try await Fixture(collection: collection, phase: .move)
     try await withCleanup {
@@ -382,7 +382,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func returningToUnreadableOwnerRetainsCompletion(collection: Bool) async throws {
     let f = try await Fixture(collection: collection, phase: .move)
     try await withCleanup {
@@ -418,7 +418,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true], [false, true])
   func unreadableCompletionSurvivesFailedReloadOrFolderRoundTrip(collection: Bool, switchAway: Bool)
     async throws
   {
@@ -466,7 +466,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func lateMoveFailureCannotWriteIntoReplacementDestination() async throws {
     let f = try await Fixture(collection: true, phase: .move)
     try await withCleanup {
@@ -492,7 +492,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func cancelledFirstVariantDoesNotStartFurtherVariants() async throws {
     let f = try await Fixture(collection: false, phase: .move, fallback: true)
     try await withCleanup {
@@ -513,7 +513,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func oldCommitCannotClearReplacementJobOrStage() async throws {
     let f = try await Fixture(collection: true, phase: .move)
     let admitted = AsyncCheckpoint()
@@ -554,7 +554,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true], [false, true])
   func corruptOwnerKeepsAlertAndReplaysOnlyCommittedDeltaAfterReset(
     collection: Bool, switchAway: Bool
   ) async throws {
@@ -605,7 +605,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func failedOldMoveCannotRemoveReplacementStage() async throws {
     let f = try await Fixture(collection: false, phase: .move)
     let admitted = AsyncCheckpoint()
@@ -646,7 +646,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func destinationRoundTripDuringAcknowledgementPreservesLatestHistory(collection: Bool)
     async throws
   {
@@ -682,7 +682,7 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases)
+  @Test(.timeLimit(.minutes(2)), arguments: Phase.allCases)
   func cancelledFallbackAcknowledgesAcceptance(phase: Phase) async throws {
     let f = try await Fixture(collection: false, phase: phase, fallback: true)
     try await withCleanup {

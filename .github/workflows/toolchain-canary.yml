@@ -1,9 +1,8 @@
 name: Toolchain canary
 
-# Builds and tests on the next Xcode, so a toolchain bump is a known list of fixes, and on the
-# oldest macOS the app supports. Also records, on the schedule and on dispatch, how an exclusive
-# rename behaves on HFS+, ExFAT and FAT disk images. Not part of the merge gate: build-and-test
-# in ci.yml never needs it.
+# Builds and tests on the oldest macOS the app supports, which ci.yml never runs on. Also
+# records, on the schedule and on dispatch, how an exclusive rename behaves on HFS+, ExFAT and
+# FAT disk images. Not part of the merge gate: build-and-test in ci.yml never needs it.
 on:
   workflow_dispatch:
   schedule:
@@ -29,16 +28,11 @@ jobs:
   canary:
     name: canary (Xcode ${{ matrix.xcode }})
     runs-on: ${{ matrix.runs-on }}
-    # Counts from when a runner picks the job up. A preview label with no runner leaves the
-    # job queued (GitHub cancels it after 24 hours); that is a missing runner, not a result.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          # The maintainer's local toolchain, on the public-preview image: the next bump.
-          - runs-on: xcode-27
-            xcode: "27.1"
           # The oldest macOS the app supports, with the newest Xcode that image has, so a
           # 26-SDK build is tested where macOS 15 users run it.
           - runs-on: macos-15

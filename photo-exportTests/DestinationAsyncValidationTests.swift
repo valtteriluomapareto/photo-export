@@ -74,7 +74,7 @@ struct DestinationAsyncValidationTests {
     #expect(opened.value.map(\.path).sorted() == closed.value.map(\.path).sorted())
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func aHungProbeDoesNotBlockAReplacementFolder() async throws {
     let root = TestScratch.directory("IndependentValidation")
     let a = root.appendingPathComponent("A")

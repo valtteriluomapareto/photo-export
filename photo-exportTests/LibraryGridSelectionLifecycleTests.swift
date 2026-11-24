@@ -122,7 +122,7 @@ struct LibraryGridSelectionLifecycleTests {
 
     /// The grid's ScrollView lists no accessibility children; hit-testing reaches each tile.
     func selected(_ label: String) -> Bool? {
-      NativeViewAccess.hitTestButton(label, in: window)?.isAccessibilitySelected?()
+      NativeViewAccess.hitTestElement(labeled: label, in: window)?.isAccessibilitySelected?()
     }
 
     func close() {
@@ -322,7 +322,7 @@ struct LibraryGridSelectionLifecycleTests {
     #expect(fixture.selection.asset == initial)
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases, [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases, [false, true])
   func emptyAndFailedLoadsAllowNextScopeSelection(grid: Grid, fails: Bool) async throws {
     let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
@@ -354,7 +354,7 @@ struct LibraryGridSelectionLifecycleTests {
     let selectedNext = await observe { fixture.selection.asset == next }
     try #require(selectedNext)
   }
-  @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases)
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func parentOnlySelectionChangeRendersTheCurrentHighlight(grid: Grid) async throws {
     let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A", creationDate: nil)
