@@ -10,22 +10,22 @@ import SwiftUI
 /// MonthContentView, `.equatable()` at every call site filters fresh action closures
 /// on unrelated queue publications. Record/library/destination observations stay live.
 struct CollectionContentView: View, Equatable {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
 
-  @StateObject private var viewModel: MonthViewModel
+  @State private var viewModel: MonthViewModel
 
   let selection: LibrarySelection
   let title: String
   let versionSelection: ExportVersionSelection
   let livePhotosPaired: Bool
   let onExportCollection: () -> Void
-  // Capture the value at construction: comparing two live Binding getters would
-  // read the same current value after a parent selection mutation.
+  /// Binding-only callers retain selection equality; the shared owner lets the window omit that read.
+  private let selectionOwner: AssetSelectionModel?
   private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
@@ -36,30 +36,27 @@ struct CollectionContentView: View, Equatable {
     livePhotosPaired: Bool,
     onExportCollection: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
-    photoLibraryService: any PhotoLibraryService
+    photoLibraryService: any PhotoLibraryService,
+    assetSelection: AssetSelectionModel? = nil
   ) {
     self.selection = selection
     self.title = title
     self.versionSelection = versionSelection
     self.livePhotosPaired = livePhotosPaired
     self.onExportCollection = onExportCollection
-    self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
-    _viewModel = StateObject(
-      wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
+    self.selectionOwner = assetSelection
+    self.selectedAssetId = assetSelection == nil ? selectedAsset.wrappedValue?.id : nil
+    _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {
     let exportHelp = exportButtonHelp
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "collection-export-help")
-    #endif
     let placement = currentPlacement
     #if DEBUG
       // Required as a declaration inside the ViewBuilder.
       // swiftlint:disable:next redundant_discardable_let
-      let _ = recordRenderingInputs()
+      let _ = bodyCounter?.record("collectionBody")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
@@ -74,12 +71,18 @@ struct CollectionContentView: View, Equatable {
       }
 
       HStack {
-        exportSummaryView(placement: placement)
+        CollectionGridSummary(
+          assets: viewModel.assets, hasCompleteSnapshot: viewModel.hasCompleteSnapshot,
+          versionSelection: versionSelection, livePhotosPaired: livePhotosPaired,
+          placement: placement
+        )
+        .equatable()
         Spacer()
         AutoSyncAwareExportButton(exportButtonTitle) {
           onExportCollection()
         }
         .buttonStyle(.bordered)
+        .accessibilityIdentifier("collection-export-primary")
         .disabled(!canExport)
         .help(exportHelp)
       }
@@ -90,27 +93,47 @@ struct CollectionContentView: View, Equatable {
         ]
         LazyVGrid(columns: columns, spacing: 10) {
           ForEach(viewModel.assets) { asset in
-            ThumbnailView(
-              asset: asset,
-              isSelected: asset.id == selectedAsset?.id,
-              isExported: isExported(asset: asset, placement: placement)
-            )
-            .frame(width: 120, height: 120)
-            .onTapGesture {
-              selectedAsset = asset
-              viewModel.select(assetId: asset.id)
-            }
+            CollectionAssetTile(
+              asset: asset, placement: placement, versionSelection: versionSelection,
+              livePhotosPaired: livePhotosPaired, selectedAsset: $selectedAsset,
+              onSelect: { viewModel.select(assetId: asset.id) })
           }
         }
+        .scrollTargetLayout()
         .padding(.top, 4)
+      }
+      .environment(\.gridThumbnailAssets, viewModel.thumbnailAssets)
+      .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+        Task { await viewModel.updateVisibleAssetIDs(ids) }
       }
     }
     .padding(.horizontal)
     .overlay(overlayViews)
+    .modifier(LibraryTreeLoading())
     .task(id: scopeTaskId) {
-      await viewModel.loadAssets(for: scope)
+      let query = PhotoLibraryQuery(scope: scope)
+      let source = photoLibraryManager.libraryRefresh.sourceRevision(for: query)
+      await viewModel.loadAssets(
+        for: scope,
+        isCurrent: {
+          photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
+        })
+      #if DEBUG
+        bodyCounter?.record("grid-load-finished")
+      #endif
     }
-    .onDisappear { viewModel.deactivate() }
+    .onAppear { photoLibraryManager.beginObservingQuery(PhotoLibraryQuery(scope: scope)) }
+    .onChange(of: PhotoLibraryQuery(scope: scope)) { old, new in
+      photoLibraryManager.endObservingQuery(old)
+      photoLibraryManager.beginObservingQuery(new)
+    }
+    .onDisappear {
+      photoLibraryManager.endObservingQuery(PhotoLibraryQuery(scope: scope))
+      viewModel.deactivate()
+      #if DEBUG
+        bodyCounter?.record("grid-disappeared")
+      #endif
+    }
     .onReceive(viewModel.selectionUpdates) { _ in
       // The model emits after an owned commit. Derive from the live binding
       // and write synchronously, so no queued pane can undo newer navigation.
@@ -123,32 +146,25 @@ struct CollectionContentView: View, Equatable {
         viewModel.select(assetId: update.asset?.id)
       }
     }
-    // Same iCloud-sync / Photos.app-edit refresh path as `MonthContentView`. The
-    // earlier note about `libraryRevision` blanking this grid no longer applies — the
-    // view model's `refresh(for:)` updates `assets` in place rather than clearing
-    // first, so adding the observer here is now safe.
-    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
+    // Query-specific refreshes merge in place instead of blanking the visible collection.
+    .onChange(
+      of: photoLibraryManager.libraryRefresh.queryRefresh(for: PhotoLibraryQuery(scope: scope))
+    ) { old, new in
+      guard old.query == new.query else { return }
       Task {
-        await viewModel.refresh(for: scope)
+        let query = PhotoLibraryQuery(scope: scope)
+        let source = photoLibraryManager.libraryRefresh.sourceRevision(for: query)
+        await viewModel.refresh(
+          for: scope,
+          isCurrent: {
+            photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
+          })
         #if DEBUG
           bodyCounter?.record("grid-refresh-finished")
         #endif
       }
     }
-    .measureBodyInvalidations("CollectionContentView")
   }
-
-  #if DEBUG
-    private func recordRenderingInputs() {
-      bodyCounter?.record("collectionBody")
-      bodyCounter?.record("scope:\(scopeTaskId)")
-      bodyCounter?.recordAction("collectionExport", action: onExportCollection)
-      bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
-      bodyCounter?.record("title:\(title)")
-      bodyCounter?.record("banner:\(showsReducedQualityBanner)")
-      bodyCounter?.record("canExport:\(canExport)")
-    }
-  #endif
 
   // MARK: - Scope plumbing
 
@@ -258,62 +274,10 @@ struct CollectionContentView: View, Equatable {
     if selection == .favorites {
       tree = []
     } else {
-      guard let current = try? photoLibraryManager.fetchCollectionTree() else { return nil }
+      guard let current = photoLibraryManager.libraryRefresh.tree else { return nil }
       tree = current
     }
-    return collectionExportRecordStore.currentPlacement(for: selection, collections: tree)
-  }
-
-  private func isExported(asset: AssetDescriptor, placement: ExportPlacement?) -> Bool {
-    guard let placement else { return false }
-    return collectionExportRecordStore.isExported(
-      asset: asset, placement: placement, selection: versionSelection,
-      livePhotosPaired: livePhotosPaired)
-  }
-
-  // MARK: - Header summary
-
-  private func exportSummaryView(placement: ExportPlacement?) -> some View {
-    let summary = makeSummary(placement: placement)
-    #if DEBUG
-      bodyCounter?.record("summary:\(summary.exportedCount)/\(summary.totalCount)")
-      bodyCounter?.recordText(
-        ["\(summary.exportedCount)/\(summary.totalCount)"], for: "collection-summary")
-    #endif
-    return HStack(spacing: 8) {
-      switch summary.status {
-      case .complete:
-        Label(
-          "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "checkmark.circle.fill"
-        ).foregroundColor(.green)
-      case .partial:
-        Label(
-          "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "circle.lefthalf.filled"
-        ).foregroundColor(.orange)
-      case .notExported:
-        Label("0/\(summary.totalCount) exported", systemImage: "circle")
-          .foregroundColor(.secondary)
-      }
-      Spacer()
-    }
-    .font(.subheadline)
-  }
-
-  private func makeSummary(placement: ExportPlacement?) -> MonthStatusSummary {
-    if let placement {
-      #if DEBUG
-        bodyCounter?.record("summaryScan")
-      #endif
-      return collectionExportRecordStore.monthSummary(
-        assets: viewModel.assets, placement: placement,
-        selection: versionSelection,
-        livePhotosPaired: livePhotosPaired)
-    }
-    return MonthStatusSummary(
-      year: 0, month: 0, exportedCount: 0,
-      totalCount: viewModel.assets.count, status: .notExported)
+    return collectionExportRecordStore.currentGridPlacement(for: selection, collections: tree)
   }
 
   // MARK: - Export button
@@ -361,11 +325,12 @@ struct CollectionContentView: View, Equatable {
     }
   }
 
-  static func == (lhs: Self, rhs: Self) -> Bool {
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.selection == rhs.selection
       && lhs.title == rhs.title
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
+      && lhs.selectionOwner === rhs.selectionOwner
       && lhs.selectedAssetId == rhs.selectedAssetId
   }
 

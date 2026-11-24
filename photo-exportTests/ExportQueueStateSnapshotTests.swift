@@ -4,11 +4,11 @@ import Testing
 
 @testable import Photo_Export
 
-/// Phase 4b prep regression-gate test. Records the queue-state tuple
+/// Queue-state regression gate. Records the queue-state tuple
 /// `(isRunning, isPaused, queueCount, hasCurrentTask)` at each transition during a
-/// multi-job run with `pause` → `resume` → `cancel`. The Phase 4b extraction moves
-/// `pendingJobs`, `isProcessing`, `isPaused`, `queueCount`, and the drain loop into
-/// `ExportQueueCoordinator`; the manager's published mirrors must keep emitting the
+/// multi-job run with `pause` → `resume` → `cancel`. `ExportQueueCoordinator` owns
+/// `pendingJobs`, `isProcessing`, `isPaused`, `queueCount`, and the drain loop;
+/// the manager's published mirrors must keep emitting the
 /// same canonical sequence so UI bindings and the AutoSync seam don't drift.
 ///
 /// The existing pause-resume tests assert on outcomes (counters, drain completion).
@@ -20,50 +20,26 @@ struct ExportQueueStateSnapshotTests {
 
   // MARK: - Harness (mirrors ExportManagerPauseResumeTests)
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let store: ExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() {
-      manager.cancelAndClear()
-      store.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let store = h.store
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    store.drainSynchronously()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportQueueSnapshot")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collections.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportQueueSnapshot")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, storeRoot: storeRoot)
+  private func makeHarness() async -> Harness {
+    await Harness(label: "ExportQueueSnapshot")
   }
 
-  /// Canonical queue-state at a single instant. The Phase 4b extraction must preserve
-  /// the sequence of these tuples observed at the same transition points.
+  /// Canonical queue-state at a single instant. Preserve the sequence of these tuples
+  /// observed at the same transition points.
   private struct Snapshot: Equatable, CustomStringConvertible {
     let isRunning: Bool
     let isPaused: Bool
@@ -101,13 +77,16 @@ struct ExportQueueStateSnapshotTests {
   // MARK: - Test
 
   /// Three-asset run with: gate-suspended start → pause mid-run → resume one ticket →
-  /// pause again → cancel. The canonical transition sequence must end identically
-  /// after the Phase 4b extraction.
+  /// pause again → cancel. The canonical transition sequence must remain stable.
   @Test func pauseResumeCancelStateSnapshot_canonicalTransitions() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
-    let assets = (1...3).map { TestAssetFactory.makeAsset(id: "snap-\($0)") }
+    let assets = (1...3).map {
+      TestAssetFactory.makeAsset(
+        id: "snap-\($0)",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
+    }
     h.photoLib.assetsByYearMonth["2025-7"] = assets
     for a in assets {
       h.photoLib.resourcesByAssetId[a.id] = [
@@ -178,13 +157,17 @@ struct ExportQueueStateSnapshotTests {
   /// today there's none — and the canonical-sequence test above would still pass.
   /// This test asserts synchronous propagation directly.
   @Test func teardownQueue_synchronouslyClearsManagerMirrors() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     // Force the coordinator into a running state cheaply by enqueueing one job and
     // gating its writer so the run loop is parked.
-    let asset = TestAssetFactory.makeAsset(id: "sink-sync")
-    let queued = TestAssetFactory.makeAsset(id: "sink-sync-queued")
+    let asset = TestAssetFactory.makeAsset(
+      id: "sink-sync",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
+    let queued = TestAssetFactory.makeAsset(
+      id: "sink-sync-queued",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset, queued]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(originalFilename: "X.JPG")

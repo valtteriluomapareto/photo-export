@@ -135,7 +135,7 @@ struct CaseInsensitivePlacementTests {
     let root = TestScratch.directory("CaseInsensitivePlacement")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = CollectionExportRecordStore(baseDirectoryURL: root)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
     let alpha = descriptor("alpha", "Trip", kind: kind)
     let beta = descriptor("beta", "trip", kind: kind)
     let tree = [beta, alpha]
@@ -151,7 +151,7 @@ struct CaseInsensitivePlacementTests {
     try await store.flush()
     let saved = store.placements
     let reopened = CollectionExportRecordStore(baseDirectoryURL: root)
-    reopened.configure(for: "test")
+    await reopened.configureAndWait(for: "test")
     for album in tree {
       let value = try resolve(album, tree: tree, existing: Array(reopened.placements.values))
       #expect(saved[value.id]?.relativePath == value.relativePath)

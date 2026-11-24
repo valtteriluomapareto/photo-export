@@ -49,13 +49,13 @@ struct ExportDestinationManagerIdentityTests {
   // MARK: - Stable derivation
 
   /// Re-deriving against the same folder yields the same id (no per-call randomness).
-  @Test func computeDestinationIdIsDeterministic() throws {
+  @Test func destinationFingerprintIdIsDeterministic() throws {
     let dir = TestScratch.directory("DestId-Stable")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let id1 = ExportDestinationManager.computeDestinationId(for: dir)
-    let id2 = ExportDestinationManager.computeDestinationId(for: dir)
+    let id1 = DestinationFingerprint.compute(for: dir)?.fingerprint.id
+    let id2 = DestinationFingerprint.compute(for: dir)?.fingerprint.id
     #expect(id1 != nil)
     #expect(id1 == id2)
   }
@@ -72,8 +72,8 @@ struct ExportDestinationManagerIdentityTests {
     try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
 
-    let idA = ExportDestinationManager.computeDestinationId(for: a)
-    let idB = ExportDestinationManager.computeDestinationId(for: b)
+    let idA = DestinationFingerprint.compute(for: a)?.fingerprint.id
+    let idB = DestinationFingerprint.compute(for: b)?.fingerprint.id
     #expect(idA != nil)
     #expect(idB != nil)
     #expect(idA != idB)
@@ -92,8 +92,8 @@ struct ExportDestinationManagerIdentityTests {
     let symlink = symlinkParent.appendingPathComponent("link")
     try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
 
-    let idDirect = ExportDestinationManager.computeDestinationId(for: target)
-    let idViaSymlink = ExportDestinationManager.computeDestinationId(for: symlink)
+    let idDirect = DestinationFingerprint.compute(for: target)?.fingerprint.id
+    let idViaSymlink = DestinationFingerprint.compute(for: symlink)?.fingerprint.id
     #expect(idDirect != nil)
     #expect(idDirect == idViaSymlink)
   }
@@ -104,12 +104,8 @@ struct ExportDestinationManagerIdentityTests {
   /// unchanged `destinationId`. Save a bookmark, restore it, refresh by calling save again
   /// — the id stays the same because it derives from the volume + path, not the bookmark
   /// bytes.
-  @Test(
-    .disabled(
-      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true (per Apple's docs) so this runs there."
-    ))
-  func destinationIdSurvivesBookmarkRefresh() throws {
+  @Test
+  func destinationIdSurvivesBookmarkRefresh() async throws {
     let dir = TestScratch.directory("DestId-BookmarkRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -122,16 +118,21 @@ struct ExportDestinationManagerIdentityTests {
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let firstId = writer.destinationId
 
     // "Refresh" by restoring from defaults (a fresh manager parses the bookmark again).
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
+    await restored.waitForValidation()
     let secondId = restored.destinationId
 
     #expect(firstId != nil)
@@ -155,7 +156,7 @@ struct ExportDestinationManagerIdentityTests {
 
   /// `currentLegacyDestinationId()` returns nil when no bookmark is stored, and the legacy
   /// hash of the bookmark bytes when one is.
-  @Test func currentLegacyDestinationIdReadsStoredBookmark() throws {
+  @Test func currentLegacyDestinationIdReadsStoredBookmark() async throws {
     let dir = TestScratch.directory("DestId-Legacy")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -175,9 +176,11 @@ struct ExportDestinationManagerIdentityTests {
     let mgr = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
-    mgr.persistSelectedFolderForTesting(dir)
+    await mgr.persistSelectionAndWait(dir)
     let legacyId = mgr.currentLegacyDestinationId()
     #expect(legacyId != nil)
     #expect(legacyId?.count == 64)
@@ -194,7 +197,7 @@ struct ExportDestinationManagerIdentityTests {
   /// `saveBookmark(for: url)` which writes bytes B over bytes A. Without the snapshot, the
   /// coordinator would call `currentLegacyDestinationId()` and get `hash(B)` — but the
   /// existing on-disk directory is named `hash(A)`.
-  @Test func legacyIdSnapshotSurvivesBookmarkRefresh() throws {
+  @Test func legacyIdSnapshotSurvivesBookmarkRefresh() async throws {
     let dir = TestScratch.directory("DestId-LegacyRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -208,16 +211,20 @@ struct ExportDestinationManagerIdentityTests {
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let originalBytes = defaults.data(forKey: bookmarkKey)!
     let originalLegacyId = ExportDestinationManager.legacyDestinationId(from: originalBytes)
 
     // Restore: the manager snapshots the legacy id from the original bytes.
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
     #expect(restored.currentLegacyDestinationId() == originalLegacyId)
 
@@ -241,7 +248,7 @@ struct ExportDestinationManagerIdentityTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let id = ExportDestinationManager.computeDestinationId(for: dir)
+    let id = DestinationFingerprint.compute(for: dir)?.fingerprint.id
     #expect(id != nil)
     #expect(id?.count == 64)
   }

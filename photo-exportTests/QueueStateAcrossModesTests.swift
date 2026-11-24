@@ -36,52 +36,24 @@ struct QueueStateAcrossModesTests {
 
   // MARK: - Fixtures
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let timelineStore: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    /// See note on `ExportAllAlbumsTests.Harness.cleanup` — same ordering: cancel,
-    /// flush, remove dirs, drop UserDefaults suite. Tests using checkpoints must
-    /// `await checkpoint.releaseAll()` first.
-    func cleanup() {
-      manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let timelineStore = h.timelineStore
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    timelineStore.drainSynchronously()
+    collectionStore.drainSynchronously()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("QueueAcrossModes")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("QueueAcrossModes")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+  private func makeHarness() async -> Harness {
+    await Harness(label: "QueueAcrossModes")
   }
 
   private func makeAsset(id: String, year: Int = 2025, month: Int = 4) -> AssetDescriptor {
@@ -145,8 +117,8 @@ struct QueueStateAcrossModesTests {
   /// `queueCount` must equal `pendingJobs.count` so the toolbar shows
   /// the same depth the run loop will actually drain.
   @Test func startingNewExportWhilePausedAccumulatesCounter() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     // Gate writes so we can deterministically observe the in-flight → paused
     // transition without racing a timer against the runner.
@@ -203,8 +175,8 @@ struct QueueStateAcrossModesTests {
   /// down so a future "auto-resume on enqueue" change cannot land
   /// without a test failing.
   @Test func pausedQueueStaysParkedWhenNewWorkIsAdded() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
 
@@ -236,8 +208,8 @@ struct QueueStateAcrossModesTests {
   /// "separate per-mode queues" refactor is intentional and updates
   /// every dependent assumption.
   @Test func pendingJobsHoldsMixedTimelineAndCollectionWork() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
 
@@ -267,8 +239,8 @@ struct QueueStateAcrossModesTests {
   /// reported symptom: visible state advertises one thing while the
   /// run loop actually does another.
   @Test func resumeDrainsFifoAcrossModes() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
 

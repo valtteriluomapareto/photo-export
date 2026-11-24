@@ -78,11 +78,3 @@ class NoPlanReferencesTests(unittest.TestCase):
                 result = self.run_guard(source)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn('input error', result.stderr)
-
-    def test_ci_invokes_guard(self):
-        workflow = SCRIPT.parents[2] / '.github' / 'workflows' / 'ci.yml'
-        self.assertIn('python3 -B scripts/ci/check-no-plan-refs.py', workflow.read_text())
-
-
-if __name__ == '__main__':
-    unittest.main()

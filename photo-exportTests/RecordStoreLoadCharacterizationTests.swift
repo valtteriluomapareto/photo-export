@@ -94,19 +94,19 @@ struct RecordStoreLoadCharacterizationTests {
 
   private func configureStore(
     collection: Bool, root: URL, io: FaultyReadIO
-  ) -> (state: RecordStoreState, error: String?, isEmpty: Bool) {
+  ) async -> (state: RecordStoreState, error: String?, isEmpty: Bool) {
     if collection {
       let store = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
-      store.configure(for: "A")
-      defer { store.flushForTesting() }
+      await store.configureAndWait(for: "A")
+      defer { store.drainSynchronously() }
       return (
         store.state, store.persistenceError,
         store.recordBodies.isEmpty && store.placements.isEmpty
       )
     }
     let store = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
-    store.configure(for: "A")
-    defer { store.flushForTesting() }
+    await store.configureAndWait(for: "A")
+    defer { store.drainSynchronously() }
     return (store.state, store.persistenceError, store.recordsById.isEmpty)
   }
 
@@ -115,7 +115,7 @@ struct RecordStoreLoadCharacterizationTests {
   /// An unreadable log outranks a corrupt snapshot: the store asks to retry storage access
   /// instead of offering to reset the history it could not read.
   @Test(arguments: [false, true])
-  func corruptSnapshotWithUnreadableLogIsAPersistenceFailure(collection: Bool) throws {
+  func corruptSnapshotWithUnreadableLogIsAPersistenceFailure(collection: Bool) async throws {
     let root = try makeDirectory("LoadPrecedence")
     defer { try? FileManager.default.removeItem(at: root) }
     let files = try seedStore(collection: collection, root: root)
@@ -123,7 +123,7 @@ struct RecordStoreLoadCharacterizationTests {
     let logFailure = ReadFailure(name: "log")
     let io = FaultyReadIO([files.log: logFailure])
 
-    let loaded = configureStore(collection: collection, root: root, io: io)
+    let loaded = await configureStore(collection: collection, root: root, io: io)
 
     #expect(loaded.state == .persistenceFailed)
     #expect(loaded.error == logFailure.errorDescription)
@@ -133,7 +133,7 @@ struct RecordStoreLoadCharacterizationTests {
 
   /// When both reads fail, the log's error is the one the store reports.
   @Test(arguments: [false, true])
-  func bothReadsFailingReportsTheLogError(collection: Bool) throws {
+  func bothReadsFailingReportsTheLogError(collection: Bool) async throws {
     let root = try makeDirectory("LoadPrecedence")
     defer { try? FileManager.default.removeItem(at: root) }
     let files = try seedStore(collection: collection, root: root)
@@ -142,7 +142,7 @@ struct RecordStoreLoadCharacterizationTests {
     let logFailure = ReadFailure(name: "log")
     let io = FaultyReadIO([files.snapshot: snapshotFailure, files.log: logFailure])
 
-    let loaded = configureStore(collection: collection, root: root, io: io)
+    let loaded = await configureStore(collection: collection, root: root, io: io)
 
     #expect(loaded.state == .persistenceFailed)
     #expect(loaded.error == logFailure.errorDescription)
@@ -172,12 +172,12 @@ struct RecordStoreLoadCharacterizationTests {
     let logURL = root.appendingPathComponent("log.jsonl")
     try Data(try line("a").dropLast()).write(to: logURL)
     let file = makeFile(root, io: FaultyReadIO())
-    _ = file.load()
+    _ = (await file.load())
 
     try FileManager.default.removeItem(at: logURL)
-    let absent = file.load()
+    let absent = (await file.load())
     #expect(absent.ops.isEmpty && absent.ioFailure == nil)
-    file.append(Entry(id: "c"), currentSnapshot: { Snapshot(ids: ["c"]) })
+    file.append(Entry(id: "c"))
     try await file.flush()
 
     #expect(try Data(contentsOf: logURL) == (try line("c")))
@@ -193,20 +193,19 @@ struct RecordStoreLoadCharacterizationTests {
     try seeded.write(to: logURL)
     let io = FaultyReadIO()
     let file = makeFile(root, io: io)
-    #expect(file.load().ops == [Entry(id: "a")])
+    #expect((await file.load()).ops == [Entry(id: "a")])
 
     io.fail(logURL, with: ReadFailure(name: "log"))
-    let unreadable = file.load()
+    let unreadable = (await file.load())
     #expect(unreadable.ioFailure is ReadFailure)
     #expect(unreadable.ops.isEmpty)
     io.heal()
-    file.append(Entry(id: "c"), currentSnapshot: { Snapshot(ids: ["a", "c"]) })
+    file.append(Entry(id: "c"))
     try await file.flush()
 
     let separator = earlierNeedsSeparator ? Data([0x0A]) : Data()
     #expect(try Data(contentsOf: logURL) == seeded + separator + (try line("c")))
-    let reloaded = makeFile(root, io: FaultyReadIO()).load()
+    let reloaded = (await makeFile(root, io: FaultyReadIO()).load())
     #expect(reloaded.ops == [Entry(id: "a"), Entry(id: "c")])
-    #expect(reloaded.malformedLineCount == 0)
   }
 }

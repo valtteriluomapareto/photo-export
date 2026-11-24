@@ -63,6 +63,21 @@ struct LoginItemControllerTests {
     #expect(service.unregistered == 1)
   }
 
+  /// The Settings toggle and footer read `status`; a refresh that finds the same status stores
+  /// an equal value and must not re-render them.
+  @Test func statusChangesNotifyReadersAndUnchangedRefreshesDoNot() {
+    let service = FakeService()
+    let controller = LoginItemController(service: service)
+    let probe = ObservationProbe { _ = controller.status }
+    controller.refresh()
+    #expect(probe.changeCount == 0)
+    service.status = .enabled
+    controller.refresh()
+    #expect(probe.changeCount == 1)
+    controller.openSystemLoginItems()
+    #expect(probe.changeCount == 1)
+  }
+
   @Test func statusMappingAndExactFooterCopy() {
     let statuses: [(SMAppService.Status, LoginItemController.Status)] = [
       (.enabled, .enabled), (.requiresApproval, .requiresApproval),

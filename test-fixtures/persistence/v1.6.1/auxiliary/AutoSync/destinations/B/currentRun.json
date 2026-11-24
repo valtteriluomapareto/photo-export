@@ -1,0 +1,7 @@
+{
+  "scopes" : [
+    "albums"
+  ],
+  "startedAt" : 700000100,
+  "trigger" : "appLaunch"
+}

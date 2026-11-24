@@ -65,7 +65,7 @@ struct SnapshotReadInjectionTests {
     return result
   }
 
-  @Test func snapshotReadFailureUsesTheInjectedBoundaryAndKeepsTheReadableLog() throws {
+  @Test func snapshotReadFailureUsesTheInjectedBoundaryAndKeepsTheReadableLog() async throws {
     let root = TestScratch.directory("SnapshotReadInjection")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -85,7 +85,7 @@ struct SnapshotReadInjectionTests {
       logger: Logger(subsystem: TestLogging.subsystem, category: "SnapshotReadInjection"), logIO: io
     )
 
-    let failed = file.load()
+    let failed = (await file.load())
     #expect(failed.ioFailure is SnapshotReadError)
     #expect(failed.snapshot == nil && failed.snapshotStatus != .corrupt)
     #expect(failed.ops == [mutation], "The log is still independently readable")
@@ -94,7 +94,7 @@ struct SnapshotReadInjectionTests {
     #expect(try Data(contentsOf: logURL) == logBytes)
 
     io.disableFault()
-    let recovered = file.load()
+    let recovered = (await file.load())
     #expect(recovered.ioFailure == nil && recovered.snapshotStatus == .loaded)
     #expect(recovered.snapshot == snapshot && recovered.ops == [mutation])
     #expect(try Data(contentsOf: snapshotURL) == snapshotBytes)
@@ -102,7 +102,7 @@ struct SnapshotReadInjectionTests {
   }
 
   @Test(arguments: [false, true])
-  func bothStoresPreserveSnapshotAndLogUntilReadRetry(collection: Bool) throws {
+  func bothStoresPreserveSnapshotAndLogUntilReadRetry(collection: Bool) async throws {
     let root = TestScratch.directory("SnapshotReadInjection")
     let directory = root.appendingPathComponent("A")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -140,11 +140,15 @@ struct SnapshotReadInjectionTests {
     let timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     defer {
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
     }
-    if collection { collections.configure(for: "A") } else { timeline.configure(for: "A") }
+    if collection {
+      await collections.configureAndWait(for: "A")
+    } else {
+      await timeline.configureAndWait(for: "A")
+    }
     #expect(
       collection ? collections.state == .persistenceFailed : timeline.state == .persistenceFailed)
     #expect(try Data(contentsOf: snapshotURL) == snapshotBytes)
@@ -152,7 +156,11 @@ struct SnapshotReadInjectionTests {
     #expect(io.reads() == [snapshotURL, logURL])
 
     io.disableFault()
-    if collection { collections.retryPersistence() } else { timeline.retryPersistence() }
+    if collection {
+      await collections.retryHistoryPersistence()
+    } else {
+      await timeline.retryHistoryPersistence()
+    }
     #expect(collection ? collections.state == .ready : timeline.state == .ready)
     let variants: [String: ExportVariantRecord]
     if collection {

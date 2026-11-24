@@ -2,8 +2,7 @@ import Foundation
 
 /// Side-effect emitted by the AutoSync reducer. The reducer is pure — every observable
 /// effect of an event is one of these cases. The effect runner (in `AutoSyncManager`)
-/// translates them into real timers, run starts, persistence writes, and token
-/// advances; tests assert the effect list directly without executing it.
+/// translates them into real timers, run starts, persistence writes; tests assert the effect list directly without executing it.
 ///
 /// To prevent synchronous re-entry, effects are returned as a list
 /// per `reduce` call and dispatched after the reducer returns; events produced by an
@@ -12,14 +11,6 @@ import Foundation
 /// (`cancelDebounce`, `cancelRetryTimer`), not a reducer side effect.
 /// See docs/reference/auto-export-behavior.md#event-dispatch.
 ///
-/// **Effect-list ordering is load-bearing.** The runner must process effects in the
-/// order returned. The reducer relies on this for at least one durability invariant:
-/// when a `photosChanged` event produces both `persistDirtyState` and
-/// `advancePersistentChangeToken`, the persist effect is emitted *before* the token
-/// advance. The runner must also withhold that destination's acknowledgement after
-/// a failed dirty save, including token-only events in later effect batches. These
-/// destination snapshots are advisory; the Photos adapter owns an independent global
-/// fetch cursor, so this ordering does not establish crash-safe PhotoKit replay.
 enum AutoSyncEffect: Equatable, Sendable {
   /// Schedule a debounce timer for `reason` to fire at `fireAt`. If a debounce for the
   /// same reason is already scheduled, the runner replaces it (the most recent
@@ -49,11 +40,6 @@ enum AutoSyncEffect: Equatable, Sendable {
 
   /// Persist a finished run's summary as `lastRunSummary` for the destination.
   case persistRunSummary(ExportRunSummary, destinationId: String)
-
-  /// Advance the per-destination persistent-change token snapshot. Called after the
-  /// destination has durably recorded its dirty IDs / full-reconciliation intent for
-  /// the change set. The runner withholds it while a dirty-state save is outstanding.
-  case advancePersistentChangeToken(Data, destinationId: String)
 
   /// Record per-variant failure detail into `AutoSyncRetryState` for the
   /// destination. The runner applies `recordFailure` with category-specific

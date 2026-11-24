@@ -35,8 +35,8 @@ final class ImportCoordinator: ObservableObject {
     var collectionExportRecordStore: CollectionExportRecordStore { get }
 
     /// Returns true if there is any active export work that should block an import
-    /// from starting. ExportManager's existing `hasActiveExportWork` already covers
-    /// the full set (run loop, enqueueing-all bulk-album task, pending jobs).
+    /// from starting. ExportManager's `hasActiveExportWork` covers the full set (run loop,
+    /// pending jobs, and any export scan that has not finished queueing).
     var hasActiveExportWork: Bool { get }
   }
 
@@ -193,7 +193,7 @@ final class ImportCoordinator: ObservableObject {
         defer { host.exportDestination.endScopedAccess(for: scopedURL) }
 
         if requiringPreviousBackup {
-          let isCurrent: @MainActor () -> Bool = { [weak self] in
+          let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
             self?.queueCoordinator?.isCurrent(importGen) == true
           }
           let timelineHas = try await host.exportRecordStore.containsCompletedFile(
@@ -240,7 +240,8 @@ final class ImportCoordinator: ObservableObject {
         // call below is a no-op for an empty matched list.
 
         self.importStage = .readingPhotosLibrary
-        let progress: @MainActor (BackupScanner.ImportStage) -> Void = { [weak self] stage in
+        let progress: @MainActor @Sendable (BackupScanner.ImportStage) -> Void = {
+          [weak self] stage in
           guard let self, self.isCurrentImport(operationID, generation: importGen) else { return }
           self.importStage = stage
         }
@@ -263,7 +264,9 @@ final class ImportCoordinator: ObservableObject {
         var collectionsSkipped = false
         if collectionFilesScanned > 0 {
           if collectionStore.state == .ready {
-            let tree = try host.photoLibraryService.fetchCollectionTree()
+            let tree = try await host.photoLibraryService.loadCollectionTree()
+            try Task.checkCancellation()
+            guard self.isCurrentImport(operationID, generation: importGen) else { return }
             collectionPlan = try await BackupScanner.matchCollectionFolders(
               scan.collections, collections: tree,
               existingPlacements: Array(collectionStore.placements.values),
@@ -323,14 +326,36 @@ final class ImportCoordinator: ObservableObject {
           $0.importBatch(exportedAt: now)
         }
 
-        // Commit both histories in one main-actor turn: nothing can change either store or
-        // supersede this import between the checks and the writes.
-        guard self.isCurrentImport(operationID, generation: importGen) else { return }
+        // Admit each history once; a failed collection history must not block the timeline.
+        let timelineTicket = host.exportRecordStore.mutationTicket
+        try await host.exportRecordStore.prepareForMutation()
+        guard host.exportRecordStore.mutationTicket == timelineTicket,
+          self.isCurrentImport(operationID, generation: importGen),
+          host.exportRecordStore.destinationId == timelineDestination,
+          collectionStore.destinationId == collectionDestination
+        else { throw CancellationError() }
         guard host.exportRecordStore.state == .ready else { throw RecordPersistenceUnavailable() }
+        host.exportRecordStore.mutationAdmission.perform {
+          host.exportRecordStore.bulkImportRecords(records)
+        }
+        host.exportRecordStore.requestCheckpointIfPressured()
+
+        let collectionTicket = collectionStore.mutationTicket
+        try await collectionStore.prepareForMutation()
+        guard host.exportRecordStore.mutationTicket == timelineTicket,
+          collectionStore.mutationTicket == collectionTicket,
+          self.isCurrentImport(operationID, generation: importGen),
+          host.exportRecordStore.destinationId == timelineDestination,
+          collectionStore.destinationId == collectionDestination
+        else { throw CancellationError() }
         let collectionsReady = collectionStore.state == .ready
         if !collectionsReady && !collectionBatches.isEmpty { collectionsSkipped = true }
-        host.exportRecordStore.bulkImportRecords(records)
-        if collectionsReady { collectionStore.bulkImportRecords(collectionBatches) }
+        if collectionsReady {
+          collectionStore.mutationAdmission.perform {
+            collectionStore.bulkImportRecords(collectionBatches)
+          }
+          collectionStore.requestCheckpointIfPressured()
+        }
 
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
@@ -354,7 +379,7 @@ final class ImportCoordinator: ObservableObject {
 
         try await host.exportRecordStore.flush()
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
-        if reconciledCollections {
+        if collectionsReady || reconciledCollections {
           try await host.collectionExportRecordStore.flush()
           guard self.isCurrentImport(operationID, generation: importGen) else { return }
         }
@@ -382,6 +407,8 @@ final class ImportCoordinator: ObservableObject {
             collectionsSkipped: collectionsSkipped
           ))
 
+        host.exportRecordStore.requestHistoryCheckpoint()
+        host.collectionExportRecordStore.requestHistoryCheckpoint()
         self.finishOwnedImport(operationID, stage: .done)
 
         self.logger.info(

@@ -16,12 +16,10 @@ import SwiftUI
 /// message. While hidden it occupies zero height — the content area
 /// keeps its full real estate when the queue is idle.
 struct ExportProgressBar: View {
-  @EnvironmentObject private var exportManager: ExportManager
-  /// Read frequently-mutating progress state from a dedicated observable so the
-  /// per-asset filename / per-job counter updates don't fan out as
-  /// `ExportManager.objectWillChange` storms across every observing view (sidebar,
-  /// year/month grids, etc.). See `ExportProgressState` for the rationale.
-  @EnvironmentObject private var progressState: ExportProgressState
+  @Environment(ExportManager.self) private var exportManager
+  /// Display progress through the owner's coalesced snapshot while actions validate
+  /// against the exact current summary identity.
+  @Environment(ExportProgressState.self) private var progressState
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var counter
@@ -41,76 +39,51 @@ struct ExportProgressBar: View {
     self.settingsOpener = settingsOpener
   }
 
-  private func observed(_ message: String) -> String {
-    #if DEBUG
-      counter?.recordText([message], for: "progress-message")
-    #endif
-    return message
-  }
-
-  private var isVisible: Bool {
-    if let summary = progressState.manualSummary { return !summary.isDismissed }
-    return progressState.totalJobsEnqueued > 0 || progressState.emptyRunMessage != nil
-  }
-
   var body: some View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
-      let _ = recordVisibility()
+      let _ = counter?.record("export-progress-body")
     #endif
     Group {
-      if let summary = progressState.manualSummary {
-        if !summary.isDismissed { terminalSummary(summary) }
-      } else if progressState.totalJobsEnqueued > 0 {
+      switch ExportProgressPresentation.content(for: progressState.presentation) {
+      case .hidden:
+        EmptyView()
+      case .summary(let summary):
+        terminalSummary(summary)
+      case .active:
         VStack(alignment: .leading, spacing: 0) {
-          if let warning = progressState.queueWarningMessage {
+          if let warning = progressState.presentation.queueWarningMessage {
             queueWarningBanner(message: warning)
           }
           progressContent
         }
-      } else if let message = progressState.emptyRunMessage {
+      case .empty(let message):
         emptyRunBanner(message: message)
       }
     }
-    .animation(.default, value: progressState.totalJobsEnqueued > 0)
-    .animation(.default, value: progressState.emptyRunMessage)
-    .animation(.default, value: progressState.queueWarningMessage)
-    .task(id: progressState.manualSummary?.id) {
-      guard let summary = progressState.manualSummary,
+    .transaction { $0.animation = nil }
+    .task(id: progressState.presentation.manualSummary?.id) {
+      guard let summary = progressState.presentation.manualSummary,
         !summary.isDismissed, summary.result == .completed
       else { return }
       do { try await successDelay() } catch { return }
       #if DEBUG
         counter?.record("progress-expiry-finished:\(summary.id)")
       #endif
-      guard !Task.isCancelled, progressState.manualSummary?.id == summary.id else { return }
-      progressState.manualSummary?.isDismissed = true
+      guard !Task.isCancelled else { return }
+      progressState.dismissManualSummary(id: summary.id)
     }
   }
 
-  #if DEBUG
-    private func recordVisibility() {
-      counter?.recordText([String(isVisible)], for: "progress-visible")
-      if !isVisible { counter?.recordText([], for: "progress-message") }
-    }
-  #endif
-
   private func terminalSummary(_ summary: ManualExportSummary) -> some View {
     let dismiss = {
-      guard progressState.manualSummary?.id == summary.id else { return }
-      progressState.manualSummary?.isDismissed = true
+      progressState.dismissManualSummary(id: summary.id)
     }
     let showIssues = {
-      guard progressState.manualSummary?.id == summary.id,
-        progressState.manualSummary?.isDismissed == false
-      else { return }
+      guard progressState.canShowIssues(for: summary.id) else { return }
       selectedSettingsTab = .exportIssues
       if let settingsOpener { settingsOpener() } else { openSettings() }
     }
-    #if DEBUG
-      counter?.recordAction("progress-dismiss", action: dismiss)
-      counter?.recordAction("progress-view-issues", action: showIssues)
-    #endif
     return VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 8) {
         Image(
@@ -118,7 +91,7 @@ struct ExportProgressBar: View {
             ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
         )
         .foregroundStyle(summary.result == .completed ? Color.green : .orange)
-        Text(observed(summary.message))
+        Text(summary.message)
         Spacer(minLength: 0)
         if summary.result == .failed { Button("View Issues", action: showIssues) }
         Button("Dismiss", systemImage: "xmark", action: dismiss)
@@ -133,6 +106,9 @@ struct ExportProgressBar: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 6)
     .frame(maxWidth: .infinity, alignment: .leading)
+    // Keep complete wrapped recovery text at its ideal height. A truncating fitted view
+    // can otherwise shrink its window again on each layout pass.
+    .fixedSize(horizontal: false, vertical: true)
     .background(.bar)
     .overlay(alignment: .bottom) { Divider() }
   }
@@ -145,7 +121,7 @@ struct ExportProgressBar: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .foregroundColor(.orange)
         .font(.caption)
-      Text(observed(message))
+      Text(message)
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(2)
@@ -159,14 +135,13 @@ struct ExportProgressBar: View {
     .overlay(alignment: .bottom) {
       Divider()
     }
-    .transition(.move(edge: .top).combined(with: .opacity))
   }
 
   // MARK: - Active progress
 
   private var progressContent: some View {
-    let total = progressState.totalJobsEnqueued
-    let done = progressState.totalJobsCompleted
+    let total = progressState.presentation.totalJobsEnqueued
+    let done = progressState.presentation.totalJobsCompleted
     let fraction = total > 0 ? Double(done) / Double(total) : 0
 
     return HStack(alignment: .center, spacing: 12) {
@@ -175,7 +150,7 @@ struct ExportProgressBar: View {
         .frame(maxWidth: 240)
         .layoutPriority(2)
 
-      Text(observed("\(done)/\(total) assets"))
+      Text("\(done)/\(total) assets")
         .font(.caption)
         .monospacedDigit()
         .fixedSize()
@@ -194,14 +169,13 @@ struct ExportProgressBar: View {
     .overlay(alignment: .bottom) {
       Divider()
     }
-    .transition(.move(edge: .top).combined(with: .opacity))
   }
 
   /// Filename + render-activity hint. The hint is a separate Text so it
   /// stays visible when the filename middle-truncates.
   private var currentAssetLabel: some View {
     HStack(alignment: .center, spacing: 4) {
-      Text(progressState.currentAssetFilename ?? "")
+      Text(progressState.presentation.currentAssetFilename ?? "")
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(1)
@@ -214,27 +188,17 @@ struct ExportProgressBar: View {
           .fixedSize()
       }
     }
-    .accessibilityLabel(accessibilityCurrentAssetLabel)
+    .accessibilityLabel(
+      ExportProgressPresentation.currentAssetLabel(
+        filename: progressState.presentation.currentAssetFilename,
+        activity: progressState.presentation.renderActivity))
   }
 
   private var renderActivityHint: String? {
-    switch progressState.renderActivity {
+    switch progressState.presentation.renderActivity {
     case .none: return nil
     case .downloading: return "(downloading…)"
     case .rendering: return "(rendering…)"
-    }
-  }
-
-  private var accessibilityCurrentAssetLabel: String {
-    let filename = progressState.currentAssetFilename ?? ""
-    switch progressState.renderActivity {
-    case .none:
-      return filename.isEmpty ? "" : "Currently exporting \(filename)"
-    case .downloading:
-      return filename.isEmpty
-        ? "Downloading from iCloud" : "Downloading \(filename) from iCloud"
-    case .rendering:
-      return filename.isEmpty ? "Rendering edited video" : "Rendering edited \(filename)"
     }
   }
 
@@ -263,7 +227,7 @@ struct ExportProgressBar: View {
       Image(systemName: "checkmark.circle.fill")
         .foregroundColor(.green)
         .font(.caption)
-      Text(observed(message))
+      Text(message)
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(1)
@@ -277,6 +241,5 @@ struct ExportProgressBar: View {
     .overlay(alignment: .bottom) {
       Divider()
     }
-    .transition(.move(edge: .top).combined(with: .opacity))
   }
 }

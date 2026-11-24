@@ -11,46 +11,26 @@ import Testing
 struct EditedModeExportTests {
   // MARK: - Test harness
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let tempDir = TestScratch.directory("EditedModeTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    // Per-test UserDefaults suite isolates `versionSelection` from any other
-    // suite running concurrently. Replacing the pre-existing `.standard
-    // .removeObject(...)` pattern that raced across `@MainActor` test suites
-    // (issue #28).
-    let defaults = TestScratch.defaults("EditedMode")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, writer, fileSystem, store)
+    let h = await ExportManagerHarness(
+      label: "EditedModeTest", userDefaults: TestScratch.defaults("EditedMode"))
+    return (h.manager, h.photoLib, h.dest, h.writer, h.fileSystem, h.store)
   }
 
   // MARK: - Default mode: unedited asset writes original at the natural stem
 
   @Test func editedDefaultExportsUneditedAtOriginalFilename() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let unedited = TestAssetFactory.makeAsset(id: "plain-asset", hasAdjustments: false)
+    let unedited = TestAssetFactory.makeAsset(
+      id: "plain-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-3"] = [unedited]
     photoLib.resourcesByAssetId["plain-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -70,11 +50,14 @@ struct EditedModeExportTests {
   // MARK: - Default mode: adjusted asset writes the edit at the natural stem
 
   @Test func editedDefaultWritesEditAtNaturalStem() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edited-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edited-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["edited-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -95,11 +78,14 @@ struct EditedModeExportTests {
   // MARK: - HEIC original + JPEG edit → edit lands at IMG_0001.JPG
 
   @Test func heicOriginalPlusJpegEditProducesJpegAtNaturalStem() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "heic-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "heic-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 5, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["heic-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
@@ -117,11 +103,14 @@ struct EditedModeExportTests {
   // MARK: - editedWithOriginals adjusted asset writes both files paired
 
   @Test func editedWithOriginalsWritesPrimaryAndOrigCompanion() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
-    let asset = TestAssetFactory.makeAsset(id: "dual-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "dual-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-6"] = [asset]
     photoLib.resourcesByAssetId["dual-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -140,11 +129,14 @@ struct EditedModeExportTests {
   }
 
   @Test func editedWithOriginalsUneditedAssetWritesOriginalOnly() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
-    let unedited = TestAssetFactory.makeAsset(id: "plain", hasAdjustments: false)
+    let unedited = TestAssetFactory.makeAsset(
+      id: "plain",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-7"] = [unedited]
     photoLib.resourcesByAssetId["plain"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -170,11 +162,14 @@ struct EditedModeExportTests {
   // widening the render path to images later.
 
   @Test func defaultModeAdjustedPhotoFailsWhenFullSizePhotoUnavailable() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "broken-edit", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "broken-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 8, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["broken-edit"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -199,7 +194,7 @@ struct EditedModeExportTests {
   // MARK: - Companion follows the asset's collision-suffixed group stem
 
   @Test func pairedCompanionFollowsCollisionSuffix() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
@@ -208,8 +203,14 @@ struct EditedModeExportTests {
     let bEdited = TestAssetFactory.makeResource(
       type: .fullSizePhoto, originalFilename: "FullRender.JPG")
 
-    let assetA = TestAssetFactory.makeAsset(id: "asset-a", hasAdjustments: false)
-    let assetB = TestAssetFactory.makeAsset(id: "asset-b", hasAdjustments: true)
+    let assetA = TestAssetFactory.makeAsset(
+      id: "asset-a",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 9, day: 15))!,
+      hasAdjustments: false)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "asset-b",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 9, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-9"] = [assetA, assetB]
     photoLib.resourcesByAssetId["asset-a"] = [aOriginal]
     photoLib.resourcesByAssetId["asset-b"] = [bOriginal, bEdited]
@@ -230,12 +231,15 @@ struct EditedModeExportTests {
   // MARK: - Step-1 fail-path guard for paired `_orig` companion
 
   @Test func pairedCompanionFailsInsteadOfOverwritingAnotherAssetsFile() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Default mode for asset B first: writes the edit at the natural stem.
     manager.versionSelection = .edited
-    let assetB = TestAssetFactory.makeAsset(id: "b", hasAdjustments: true)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "b",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-11"] = [assetB]
     photoLib.resourcesByAssetId["b"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -270,11 +274,14 @@ struct EditedModeExportTests {
   // MARK: - Stale .tmp cleanup
 
   @Test func staleTempFileIsRemovedBeforeWrite() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "stale-tmp", hasAdjustments: false)
+    let asset = TestAssetFactory.makeAsset(
+      id: "stale-tmp",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 12, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-12"] = [asset]
     photoLib.resourcesByAssetId["stale-tmp"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -294,11 +301,14 @@ struct EditedModeExportTests {
   // MARK: - Switching selection enqueues only the missing variant
 
   @Test func switchingToIncludeOriginalsEnqueuesOnlyMissingOriginal() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     manager.versionSelection = .edited
-    let asset = TestAssetFactory.makeAsset(id: "switch-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "switch-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["switch-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -324,12 +334,15 @@ struct EditedModeExportTests {
   // MARK: - Post-edit re-export collides at natural stem with one-time `(1)` suffix
 
   @Test func postEditReExportLandsAtCollisionSuffixedPath() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
     // Initial export: asset is unedited.
-    var asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: false)
+    var asset = TestAssetFactory.makeAsset(
+      id: "post-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     photoLib.resourcesByAssetId["post-edit"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -340,7 +353,10 @@ struct EditedModeExportTests {
     #expect(store.exportInfo(assetId: "post-edit")?.variants[.original]?.filename == "IMG_0001.JPG")
 
     // The user later edits the photo in Photos. Re-run default export.
-    asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: true)
+    asset = TestAssetFactory.makeAsset(
+      id: "post-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     manager.startExportMonth(year: 2025, month: 2)
     await manager.waitForQueueDrained()
@@ -357,11 +373,14 @@ struct EditedModeExportTests {
   // MARK: - Inherited group stem with a real `_orig` user filename
 
   @Test func userOrigFilenameStaysOnItsGroupStemAfterAdjustment() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    var asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: false)
+    var asset = TestAssetFactory.makeAsset(
+      id: "user-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId["user-orig"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "vacation_orig.JPG"),
@@ -375,7 +394,10 @@ struct EditedModeExportTests {
 
     // Asset becomes adjusted; re-run default export. The new edit should follow the user's
     // own group stem `vacation_orig`, not collapse to `vacation`.
-    asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: true)
+    asset = TestAssetFactory.makeAsset(
+      id: "user-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     manager.startExportMonth(year: 2025, month: 3)
     await manager.waitForQueueDrained()
@@ -387,7 +409,7 @@ struct EditedModeExportTests {
   // MARK: - Pre-allocation: pre-seeded natural-stem file forces pair onto next stem
 
   @Test func freshPairAvoidsSplitWhenNaturalEditedStemIsTaken() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
@@ -397,7 +419,10 @@ struct EditedModeExportTests {
       atPath: monthDir.appendingPathComponent("IMG_0001.JPG").path,
       contents: Data("stray".utf8))
 
-    let asset = TestAssetFactory.makeAsset(id: "fresh-pair", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "fresh-pair",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["fresh-pair"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
@@ -412,17 +437,64 @@ struct EditedModeExportTests {
     #expect(rec?.variants[.original]?.filename == "IMG_0001 (1)_orig.HEIC")
   }
 
+  @Test(arguments: [false, true])
+  func collisionShiftedPairSharesStemAndPreservesClaimedMembers(livePhoto: Bool) async throws {
+    let (manager, library, destination, _, _, records) = await makeTestHarness()
+    defer { destination.cleanup() }
+    manager.versionSelection = .editedWithOriginals
+    manager.livePhotosPairedExport = livePhoto
+    let month = try destination.urlForMonth(year: 2025, month: 4, createIfNeeded: true)
+    let originalBytes = Data("keep existing edited photo".utf8)
+    let existing = month.appendingPathComponent("PAIR.JPG")
+    try originalBytes.write(to: existing)
+    records.markVariantExported(
+      assetId: "claimed", variant: .original, year: 2025, month: 4, relPath: "2025/04/",
+      filename: "PAIR (1)_orig.HEIC", exportedAt: Date())
+    let asset = TestAssetFactory.makeAsset(
+      id: "pair",
+      creationDate: Calendar.current.date(
+        from: DateComponents(
+          year: 2025, month: 4, day: 15)), hasAdjustments: true, isLivePhoto: livePhoto)
+    library.assetsByYearMonth["2025-4"] = [asset]
+    library.resourcesByAssetId[asset.id] =
+      [
+        .init(type: .photo, originalFilename: "PAIR.HEIC", fileSize: 12),
+        .init(type: .fullSizePhoto, originalFilename: "RENDER.JPG", fileSize: 12),
+      ]
+      + (livePhoto
+        ? [
+          .init(type: .pairedVideo, originalFilename: "PAIR.MOV", fileSize: 12),
+          .init(type: .fullSizePairedVideo, originalFilename: "RENDER.MOV", fileSize: 12),
+        ] : [])
+    manager.startExportMonth(year: 2025, month: 4)
+    await manager.waitForQueueDrained()
+    let variants = try #require(records.exportInfo(assetId: asset.id)?.variants)
+    #expect(variants[.edited]?.filename == "PAIR (2).JPG")
+    #expect(variants[.original]?.filename == "PAIR (2)_orig.HEIC")
+    #expect(variants[.edited]?.status == .done)
+    #expect(variants[.original]?.status == .done)
+    if livePhoto {
+      #expect(variants[.editedPairedVideo]?.filename == "PAIR (2).MOV")
+      #expect(variants[.originalPairedVideo]?.filename == "PAIR (2)_orig.MOV")
+      #expect(variants[.editedPairedVideo]?.status == .done)
+      #expect(variants[.originalPairedVideo]?.status == .done)
+    }
+    #expect(try Data(contentsOf: existing) == originalBytes)
+    #expect(
+      records.exportInfo(assetId: "claimed")?.variants[.original]?.filename == "PAIR (1)_orig.HEIC")
+  }
+
   // MARK: - Sidebar summary accuracy
 
   @Test func sidebarSummaryForEditedWithOriginalsAdjustedOnlyOneVariantDone() async throws {
-    let (_, _, dest, _, _, store) = makeTestHarness()
+    let (_, _, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Asset is adjusted; only `.edited.done` recorded (no `.original.done`).
     store.markVariantExported(
       assetId: "edited-only-asset", variant: .edited, year: 2025, month: 6,
       relPath: "2025/06/", filename: "IMG_0001.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Under editedWithOriginals: bothDone=0, origOnlyAtStem=0, uneditedCount=0 → 0 exported.
     let summary = store.sidebarSummary(
@@ -433,7 +505,7 @@ struct EditedModeExportTests {
   }
 
   @Test func sidebarSummaryCountsBothVariantsDone() async throws {
-    let (_, _, dest, _, _, store) = makeTestHarness()
+    let (_, _, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let now = Date()
@@ -446,7 +518,7 @@ struct EditedModeExportTests {
     store.markExported(
       assetId: "plain-asset", year: 2025, month: 7, relPath: "2025/07/",
       filename: "IMG_0002.JPG", exportedAt: now)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 7, totalCount: 2, adjustedCount: 1,
@@ -458,11 +530,14 @@ struct EditedModeExportTests {
   // MARK: - Original succeeds and edited fails independently
 
   @Test func originalSucceedsEvenIfEditedFails() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
-    let asset = TestAssetFactory.makeAsset(id: "mixed", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "mixed",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     photoLib.resourcesByAssetId["mixed"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")

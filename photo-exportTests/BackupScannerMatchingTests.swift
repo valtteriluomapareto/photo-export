@@ -94,7 +94,7 @@ struct BackupScannerMatchingTests {
   // MARK: - Exact date match
 
   @Test func exactDateMatchProducesMatch() async throws {
-    let refDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let refDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "asset-date-match", creationDate: refDate, mediaType: .image)
 
@@ -119,7 +119,7 @@ struct BackupScannerMatchingTests {
   // MARK: - Ambiguous date match narrows by filename
 
   @Test func ambiguousDateMatchNarrowedByFilename() async throws {
-    let refDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let refDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset1 = TestAssetFactory.makeAsset(
       id: "asset-a", creationDate: refDate, mediaType: .image)
     let asset2 = TestAssetFactory.makeAsset(
@@ -149,7 +149,7 @@ struct BackupScannerMatchingTests {
   @Test func filenameOnlyFallbackWithoutMetadataConfirmationIsAmbiguous() async throws {
     let fileDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
     // Asset has a very different creation date — date match won't work
-    let assetDate = Date(timeIntervalSinceReferenceDate: 900_000_000)
+    let assetDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 16))!
     let asset = TestAssetFactory.makeAsset(
       id: "name-match", creationDate: assetDate, mediaType: .image,
       pixelWidth: 100, pixelHeight: 100)
@@ -169,14 +169,14 @@ struct BackupScannerMatchingTests {
     let result = try await BackupScanner.matchFiles(files, photoLibraryService: service) { _ in }
 
     // Filename matches but the discriminator can't confirm (test file has no real
-    // image metadata, and dates differ by 100M seconds), so the result is ambiguous.
+    // image metadata, and dates are far apart), so the result is ambiguous.
     #expect(result.matched.isEmpty)
     #expect(result.ambiguous.count == 1)
     #expect(result.unmatched.isEmpty)
   }
 
   @Test func filenameOnlyFallbackWithImageDimensionConfirmationMatches() async throws {
-    let assetDate = Date(timeIntervalSinceReferenceDate: 900_000_000)
+    let assetDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 16))!
     let fileDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
     let asset = TestAssetFactory.makeAsset(
       id: "dimension-match", creationDate: assetDate, mediaType: .image,
@@ -224,7 +224,7 @@ struct BackupScannerMatchingTests {
   // MARK: - Collision suffix handling
 
   @Test func collisionSuffixStrippedForMatching() async throws {
-    let refDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let refDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "collision-asset", creationDate: refDate, mediaType: .image)
 
@@ -250,7 +250,7 @@ struct BackupScannerMatchingTests {
   // MARK: - Adjacent month rollover
 
   @Test func adjacentMonthFindsAsset() async throws {
-    let refDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let refDate = Calendar.current.date(from: DateComponents(year: 2024, month: 12, day: 31))!
     // Asset in December but file stored in January folder (timezone drift)
     let asset = TestAssetFactory.makeAsset(
       id: "dec-asset", creationDate: refDate, mediaType: .image)
@@ -280,7 +280,7 @@ struct BackupScannerMatchingTests {
   // MARK: - Video media type
 
   @Test func videoFileMatchesByDateAndType() async throws {
-    let refDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let refDate = Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!
     let videoAsset = TestAssetFactory.makeAsset(
       id: "video-1", creationDate: refDate, mediaType: .video,
       pixelWidth: 1920, pixelHeight: 1080, duration: 10.5)
@@ -304,7 +304,7 @@ struct BackupScannerMatchingTests {
   // MARK: - Progress reporting
 
   @Test func progressCallbackIsInvoked() async throws {
-    let refDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let refDate = Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!
     var assets: [AssetDescriptor] = []
     var resources: [String: [ResourceDescriptor]] = [:]
 
@@ -346,8 +346,8 @@ struct BackupScannerMatchingTests {
   // MARK: - Multiple files across months
 
   @Test func multipleFilesAcrossMonthsMatchCorrectly() async throws {
-    let jan = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    let feb = Date(timeIntervalSinceReferenceDate: 803_000_000)
+    let jan = Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!
+    let feb = Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!
 
     let asset1 = TestAssetFactory.makeAsset(
       id: "jan-asset", creationDate: jan, mediaType: .image)

@@ -66,7 +66,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// resource sizes differ. Each scanned file must match its size-equal
   /// counterpart instead of going to ambiguous.
   @Test func burstDisambiguatedByResourceFileSize() async throws {
-    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let burstA = TestAssetFactory.makeAsset(
       id: "burst-A", creationDate: burstDate, mediaType: .image,
       pixelWidth: 4032, pixelHeight: 3024)
@@ -113,7 +113,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// Scanned file's `fileSize` is nil. The discriminator can't compute, so
   /// the result must remain `.ambiguous`.
   @Test func scannedSizeNilLeavesResultAmbiguous() async throws {
-    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let burstA = TestAssetFactory.makeAsset(
       id: "burst-A", creationDate: burstDate, mediaType: .image)
     let burstB = TestAssetFactory.makeAsset(
@@ -147,7 +147,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// Resource sizes are nil on both candidates (PhotoKit failed to expose
   /// fileSize). Discriminator finds nothing to match against → ambiguous.
   @Test func resourceSizesNilLeavesResultAmbiguous() async throws {
-    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let burstA = TestAssetFactory.makeAsset(
       id: "burst-A", creationDate: burstDate, mediaType: .image)
     let burstB = TestAssetFactory.makeAsset(
@@ -177,7 +177,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// Both candidates have the same resource size. Discriminator finds two
   /// matches, leaves result ambiguous (conservative).
   @Test func equalResourceSizesLeavesResultAmbiguous() async throws {
-    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let burstA = TestAssetFactory.makeAsset(
       id: "burst-A", creationDate: burstDate, mediaType: .image)
     let burstB = TestAssetFactory.makeAsset(
@@ -220,7 +220,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// check, A would incorrectly pass the size narrow via its alternate.
   /// With the scoped check, neither candidate passes → ambiguous (correct).
   @Test func sizeNarrowIgnoresUnrelatedAlternateResources() async throws {
-    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let assetA = TestAssetFactory.makeAsset(
       id: "alt-A", creationDate: burstDate, mediaType: .image)
     let assetB = TestAssetFactory.makeAsset(
@@ -265,7 +265,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// compare against the edited resource's size, and the `_orig` file
   /// against the original resource's size. Variant-awareness is the point.
   @Test func variantAwareSizeMatchEditedAndOriginalSiblings() async throws {
-    let editDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let editDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     // Two edited assets sharing creation date, dimensions, and original-
     // resource filename. Distinguish A from B by edited-resource size for
     // the .JPG file and by original-resource size for the _orig.HEIC file.
@@ -330,7 +330,7 @@ struct BackupScannerSizeDiscriminatorTests {
   /// in case from the PhotoKit-reported resource name. Without the fold both candidates'
   /// resources are filtered out and the burst falls to ambiguous.
   @Test func burstDisambiguatedByResourceFileSizeDespiteCaseMismatch() async throws {
-    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let burstA = TestAssetFactory.makeAsset(
       id: "burst-A", creationDate: burstDate, mediaType: .image,
       pixelWidth: 4032, pixelHeight: 3024)

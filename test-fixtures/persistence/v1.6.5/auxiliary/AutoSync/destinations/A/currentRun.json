@@ -1,0 +1,11 @@
+{
+  "currentScope" : "favorites",
+  "currentScopeStartedAt" : 700000030,
+  "scopes" : [
+    "timeline",
+    "favorites",
+    "albums"
+  ],
+  "startedAt" : 700000000,
+  "trigger" : "photosChanged"
+}

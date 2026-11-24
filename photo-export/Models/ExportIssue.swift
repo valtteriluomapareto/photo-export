@@ -60,6 +60,28 @@ struct ExportIssue: Identifiable, Equatable {
       && failedAt == other.failedAt && retry == other.retry
   }
 
+  func primaryLine(locale: Locale) -> String {
+    let date =
+      creationDate.map {
+        $0.formatted(.dateTime.day().month(.abbreviated).year().locale(locale))
+      } ?? "Date unavailable"
+    return "\(filename ?? "Filename unavailable") · \(date) · \(variantLabel)"
+  }
+
+  var showsRetry: Bool {
+    retry != nil && scopeKey != nil && variant != nil && !isCovered
+  }
+
+  /// A displayed retry must still refer to the authoritative failed attempt.
+  func retrySelection(in currentRows: [Self]) -> (
+    scope: AutoSyncRetryScopeKey, variant: ExportVariant, retry: RetryEntry
+  )? {
+    guard currentRows.contains(where: { $0.matchesFailure(self) }),
+      let scopeKey, let variant, let retry
+    else { return nil }
+    return (scopeKey, variant, retry)
+  }
+
   var category: AutoSyncFailureCategory { retry?.category ?? .unknown }
   var isCovered: Bool {
     reason == .editedUnavailableOriginalBackedUp || reason == .pairedVideoUnavailable
@@ -154,6 +176,9 @@ enum ExportIssuesProjection {
     destinationId: String?, timeline: ExportRecordStore, collections: CollectionExportRecordStore,
     retryState: AutoSyncRetryState, retryDestinationId: String?
   ) -> Snapshot {
+    // Raw record dictionaries share the coalesced revision used by store queries.
+    _ = timeline.mutationCounter
+    _ = collections.mutationCounter
     let timelineMatches = destinationId != nil && timeline.destinationId == destinationId
     let collectionsMatch = destinationId != nil && collections.destinationId == destinationId
     var unavailable: [String] = []

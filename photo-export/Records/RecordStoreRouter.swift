@@ -25,6 +25,14 @@ final class RecordStoreRouter {
     self.collectionStore = collectionStore
   }
 
+  /// The configured history identity owns queued physical IO even if selection changes.
+  func destinationId(for placement: ExportPlacement) -> String? {
+    switch placement.kind {
+    case .timeline: return timelineStore.destinationId
+    case .favorites, .album, .sharedAlbum: return collectionStore.destinationId
+    }
+  }
+
   // MARK: - Reads
 
   /// Proof retained by a previously interrupted original-side write, before a retry
@@ -108,6 +116,24 @@ final class RecordStoreRouter {
     }
   }
 
+  /// Retained only until one naming preparation finishes; the mark uses the live query.
+  func filenameClaimSnapshot(
+    placement: ExportPlacement, subfolder: String?, exceptVariant variant: ExportVariant? = nil,
+    of assetId: String
+  ) -> FilenameClaimSnapshot {
+    switch placement.kind {
+    case .timeline:
+      guard let (year, month) = placement.timelineYearMonth else {
+        preconditionFailure("Timeline placement has no year and month")
+      }
+      return timelineStore.filenameClaimSnapshot(
+        year: year, month: month, subfolder: subfolder, exceptVariant: variant, of: assetId)
+    case .favorites, .album, .sharedAlbum:
+      return collectionStore.filenameClaimSnapshot(
+        placement: placement, subfolder: subfolder, exceptVariant: variant, of: assetId)
+    }
+  }
+
   /// Waits for preceding mutations in the affected store to become durable.
   func flush(placement: ExportPlacement) async throws {
     switch placement.kind {
@@ -141,6 +167,21 @@ final class RecordStoreRouter {
     collectionStore.hasDurableRecords
       && collectionStore.recordBodies[placementId]?[assetId]?.variants[variant.rawValue]?.status
         == .done
+  }
+
+  func withMutationAdmission<T>(placement: ExportPlacement, _ body: () throws -> T) async throws
+    -> T
+  {
+    switch placement.kind {
+    case .timeline: return try await timelineStore.withMutationAdmission(body)
+    case .favorites, .album, .sharedAlbum:
+      return try await collectionStore.withMutationAdmission(body)
+    }
+  }
+
+  func waitForCancellationCleanup() async {
+    await timelineStore.waitForCancellationCleanup()
+    await collectionStore.waitForCancellationCleanup()
   }
 
   // MARK: - Writes
@@ -211,9 +252,9 @@ final class RecordStoreRouter {
     guard current[variant]?.status == .inProgress else { return }
     switch placement.kind {
     case .timeline:
-      timelineStore.removeVariant(assetId: assetId, variant: variant)
+      timelineStore.removeInProgressAfterAdmission(assetId: assetId, variant: variant)
     case .favorites, .album, .sharedAlbum:
-      collectionStore.removeVariant(
+      collectionStore.removeInProgressAfterAdmission(
         assetId: assetId, placement: placement, variant: variant)
     }
   }

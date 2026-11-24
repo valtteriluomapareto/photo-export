@@ -1,0 +1,15 @@
+{
+  "entriesByPlacement" : {
+    "timeline" : {
+      "asset-other" : {
+        "original" : {
+          "attemptCount" : 2,
+          "category" : "destinationPermission",
+          "errorSignature" : "NSCocoaErrorDomain:513",
+          "firstFailedAt" : 700000000,
+          "lastFailedAt" : 700000030
+        }
+      }
+    }
+  }
+}

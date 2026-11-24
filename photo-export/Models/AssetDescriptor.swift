@@ -2,7 +2,7 @@ import Foundation
 import Photos
 
 /// App-owned value type that replaces PHAsset at all non-framework boundaries.
-/// Produced by PhotoLibraryManager, consumed by views, view models, and the export pipeline.
+/// Produced by the library service and export reader, consumed by views and export planning.
 struct AssetDescriptor: Identifiable, Sendable, Equatable {
   let id: String
   let creationDate: Date?
@@ -15,8 +15,8 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
   let hasAdjustments: Bool
   /// Uniform Type Identifier of the asset's original byte source (`"public.heic"`,
   /// `"public.jpeg"`, `"public.png"`, etc.). `nil` when PhotoKit doesn't expose
-  /// it for this asset (rare — defensively nil-checked since the underlying API
-  /// is undocumented and could regress on a future macOS).
+  /// it for this asset. Export reads derive it from public resource metadata; UI
+  /// descriptors may omit it when their library lookup cannot identify the source.
   ///
   /// Used by the HEIC→JPEG conversion feature to decide whether an
   /// asset's exports should include a synthesized JPEG `.edited` variant. Treat
@@ -77,14 +77,18 @@ struct ResourceDescriptor: Sendable, Equatable {
   /// last-resort discriminator for burst photos that share metadata but
   /// produce different compressed sizes.
   let fileSize: Int64?
+  /// Public resource UTI, retained by the export reader for original-format selection.
+  let uniformTypeIdentifier: String?
 
   init(
     type: PHAssetResourceType,
     originalFilename: String,
-    fileSize: Int64? = nil
+    fileSize: Int64? = nil,
+    uniformTypeIdentifier: String? = nil
   ) {
     self.type = type
     self.originalFilename = originalFilename
     self.fileSize = fileSize
+    self.uniformTypeIdentifier = uniformTypeIdentifier
   }
 }

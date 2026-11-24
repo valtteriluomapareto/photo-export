@@ -10,32 +10,25 @@ import Foundation
 /// because MVP does not auto-delete exported files. `collectionChangesPresent` drives
 /// album-scope reconciliation when the Albums Auto Export scope is selected.
 ///
-/// `nextToken` is an opaque snapshot for per-destination acknowledgement once dirty IDs
-/// (or full-reconciliation intent) have been saved. It does not control fetching: the
-/// adapter independently saves its global cursor before emitting this event. Unsaved
-/// work is not replayed from the destination token after a crash; startup reconciles fully.
 struct PhotoLibraryPersistentChangeEvent: Equatable, Sendable {
   let insertedLocalIdentifiers: Set<String>
   let updatedLocalIdentifiers: Set<String>
   let deletedLocalIdentifiers: Set<String>
   let collectionChangesPresent: Bool
   let observedAt: Date
-  let nextToken: Data?
 
   init(
     insertedLocalIdentifiers: Set<String> = [],
     updatedLocalIdentifiers: Set<String> = [],
     deletedLocalIdentifiers: Set<String> = [],
     collectionChangesPresent: Bool = false,
-    observedAt: Date = Date(),
-    nextToken: Data? = nil
+    observedAt: Date = Date()
   ) {
     self.insertedLocalIdentifiers = insertedLocalIdentifiers
     self.updatedLocalIdentifiers = updatedLocalIdentifiers
     self.deletedLocalIdentifiers = deletedLocalIdentifiers
     self.collectionChangesPresent = collectionChangesPresent
     self.observedAt = observedAt
-    self.nextToken = nextToken
   }
 
   var hasAssetChanges: Bool {

@@ -185,11 +185,11 @@ struct BackupScannerTests {
   // MARK: - Bulk import (ExportRecordStore)
 
   @MainActor
-  @Test func bulkImportRecords_addsNewRecords() {
+  @Test func bulkImportRecords_addsNewRecords() async {
     let tempDir = makeTempDir()
     defer { cleanup(tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     let records = [
       ExportRecord(
@@ -206,7 +206,7 @@ struct BackupScannerTests {
         ]),
     ]
     store.bulkImportRecords(records)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.isExported(assetId: "asset-1"))
     #expect(store.isExported(assetId: "asset-2"))
@@ -214,17 +214,17 @@ struct BackupScannerTests {
   }
 
   @MainActor
-  @Test func bulkImportRecords_skipsExistingDoneRecords() {
+  @Test func bulkImportRecords_skipsExistingDoneRecords() async {
     let tempDir = makeTempDir()
     defer { cleanup(tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Pre-existing record
     store.markExported(
       assetId: "asset-1", year: 2024, month: 3, relPath: "2024/03/",
       filename: "original.jpg", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Import tries to overwrite
     let records = [
@@ -236,7 +236,7 @@ struct BackupScannerTests {
         ])
     ]
     store.bulkImportRecords(records)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Original should be preserved
     #expect(
@@ -244,15 +244,15 @@ struct BackupScannerTests {
   }
 
   @MainActor
-  @Test func bulkImportRecords_overwritesNonDoneRecords() {
+  @Test func bulkImportRecords_overwritesNonDoneRecords() async {
     let tempDir = makeTempDir()
     defer { cleanup(tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Pre-existing failed record
     store.markFailed(assetId: "asset-1", error: "network", at: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let records = [
       ExportRecord(
@@ -263,7 +263,7 @@ struct BackupScannerTests {
         ])
     ]
     store.bulkImportRecords(records)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Should be overwritten since the previous status was .failed
     #expect(

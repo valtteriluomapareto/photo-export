@@ -10,11 +10,12 @@ struct LibraryRootView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var whatsNewState: WhatsNewState
+  @Environment(WhatsNewState.self) private var whatsNewState
+
+  let timelineHistoryState: RecordStoreState
 
   @State private var section: LibrarySection
 
@@ -36,7 +37,12 @@ struct LibraryRootView: View {
   /// production launches it is `nil` and the defaults below apply (Timeline / current
   /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
   /// instantiating SwiftUI views.
-  init(screenshotSurfaceKey: String?) {
+  init(
+    screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState,
+    assetSelection: AssetSelectionModel? = nil
+  ) {
+    _assetSelection = State(initialValue: assetSelection ?? AssetSelectionModel())
+    self.timelineHistoryState = timelineHistoryState
     let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)
@@ -67,7 +73,7 @@ struct LibraryRootView: View {
     )
   }
 
-  @State private var selectedAsset: AssetDescriptor?
+  @State private var assetSelection: AssetSelectionModel
 
   /// Mirrors `ContentView`'s onboarding gate. The new home for it after the refactor.
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -109,8 +115,8 @@ struct LibraryRootView: View {
           }
       },
       detail: {
-        AssetDetailView(asset: selectedAsset, placement: detailPlacement)
-          .environmentObject(photoLibraryManager)
+        SelectedAssetDetailPane(selection: assetSelection, focusedSelection: focusedSelection)
+          .environment(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     )
@@ -118,10 +124,9 @@ struct LibraryRootView: View {
       ToolbarItem(placement: .navigation) {
         sectionPicker
       }
-      ExportToolbarView(
-        section: section,
-        selectionSet: selectionSet,
-        focusedSelection: focusedSelection)
+      LibraryExportToolbar(
+        section: section, selectionSet: selectionSet, focusedSelection: focusedSelection,
+        timelineHistoryState: timelineHistoryState)
     }
     .sheet(
       isPresented: $isShowingImportSheet,
@@ -129,8 +134,10 @@ struct LibraryRootView: View {
         guard choosesFolderAfterImportSheet else { return }
         choosesFolderAfterImportSheet = false
         // Cancelling the panel leaves the decision open, so show the sheet again.
-        if !exportDestinationManager.selectFolderKeepingHistory() {
-          exportManager.requestImportSheet()
+        Task { @MainActor in
+          if await !exportDestinationManager.selectFolderKeepingHistory() {
+            exportManager.requestImportSheet()
+          }
         }
       },
       content: {
@@ -138,7 +145,7 @@ struct LibraryRootView: View {
           choosesFolderAfterImportSheet = true
           isShowingImportSheet = false
         })
-        .environmentObject(exportManager)
+        .environment(exportManager)
       }
     )
     // An import the app started itself (checking the history after "Same Folder") shows the
@@ -150,7 +157,7 @@ struct LibraryRootView: View {
     // explaining new UI surfaces and reassuring the user about file safety.
     // Attached here (not on `ContentView`) so it only renders post-auth /
     // post-onboarding, when the user is in the main library view. The
-    // sheet's @Published `shouldShow` flips to false on dismiss, so the
+    // sheet's observed `shouldShow` flips to false on dismiss, so the
     // binding doesn't re-present.
     .sheet(
       isPresented: Binding(
@@ -170,7 +177,7 @@ struct LibraryRootView: View {
       applySelectionChange(oldSet: oldSet, newSet: newSet)
     }
     .onChange(of: focusedSelection) { _, newValue in
-      selectedAsset = nil
+      assetSelection.asset = nil
       persistLastSelection()
       let kind: String
       switch newValue {
@@ -197,21 +204,7 @@ struct LibraryRootView: View {
       minWidth: Self.minimumWindowSize.width, minHeight: Self.minimumWindowSize.height
     )
     .background(Color(.windowBackgroundColor))
-  }
-
-  private var detailPlacement: ExportPlacement? {
-    guard let focusedSelection else { return nil }
-    switch focusedSelection {
-    case .timelineMonth(let year, let month):
-      return .timeline(year: year, month: month)
-    case .favorites:
-      return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: [])
-    case .album, .sharedAlbum:
-      guard let tree = try? photoLibraryManager.fetchCollectionTree() else { return nil }
-      return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: tree)
-    case .timelineYear, .folder:
-      return nil
-    }
+    .modifier(LibraryTreeLoading())
   }
 
   // MARK: - Section picker
@@ -225,7 +218,7 @@ struct LibraryRootView: View {
     .frame(width: 220)
     .onChange(of: section) { _, newSection in
       restoreSelection(forSection: newSection)
-      selectedAsset = nil
+      assetSelection.asset = nil
     }
   }
 
@@ -325,46 +318,43 @@ struct LibraryRootView: View {
 
   @ViewBuilder
   private var contentArea: some View {
-    contentSwitch
-      // ~520pt fits ~4 thumbnail columns at the 100–160pt adaptive tile
-      // size. Min is just narrower than 3 columns so the grid never
-      // collapses to a single column; max caps so a wide window still
-      // leaves room for the detail pane.
-      .navigationSplitViewColumnWidth(min: Self.contentMinWidth, ideal: 520, max: 900)
+    AssetSelectionScope(selection: assetSelection) { binding in
+      contentSwitch(selectedAsset: binding)
+    }
+    // ~520pt fits ~4 thumbnail columns at the 100–160pt adaptive tile
+    // size. Min is just narrower than 3 columns so the grid never
+    // collapses to a single column; max caps so a wide window still
+    // leaves room for the detail pane.
+    .navigationSplitViewColumnWidth(min: Self.contentMinWidth, ideal: 520, max: 900)
   }
 
   @ViewBuilder
-  private var contentSwitch: some View {
+  private func contentSwitch(selectedAsset: Binding<AssetDescriptor?>) -> some View {
     switch focusedSelection {
     case .timelineYear(let year):
       YearContentView(
         year: year,
         selection: folderNavigationBinding,
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAsset,
         photoLibraryService: photoLibraryManager
       )
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .timelineMonth(let year, let month):
-      // Pass `versionSelection` down as a value rather than letting
-      // `MonthContentView` subscribe to `ExportManager` directly. The manager
-      // fires `objectWillChange` per export job (queueCount sink, etc.);
-      // `.equatable()` on a value-comparing `MonthContentView` then
-      // short-circuits the LazyVGrid re-evaluation when the rendering inputs
-      // are unchanged. Without `.equatable()` the freshly-allocated
-      // `onExportMonth` closure per render would defeat SwiftUI's structural
-      // diff.
+      // Pass export settings as value inputs. Equatable comparison keeps the grid
+      // stable when another parent dependency changes and creates a fresh action closure.
       MonthContentView(
         year: year, month: month,
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
         onExportMonth: { exportManager.startExportMonth(year: year, month: month) },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .favorites:
@@ -373,11 +363,12 @@ struct LibraryRootView: View {
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
         onExportCollection: { exportManager.startExport(selection: .favorites) },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .album(let collectionId):
@@ -389,11 +380,12 @@ struct LibraryRootView: View {
         onExportCollection: {
           exportManager.startExport(selection: .album(collectionId: collectionId))
         },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .sharedAlbum(let collectionId):
@@ -405,11 +397,12 @@ struct LibraryRootView: View {
         onExportCollection: {
           exportManager.startExport(selection: .sharedAlbum(collectionId: collectionId))
         },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .folder(let collectionId):
@@ -417,10 +410,10 @@ struct LibraryRootView: View {
         folderId: collectionId,
         title: folderTitle(forCollectionId: collectionId),
         selection: folderNavigationBinding,
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAsset,
         photoLibraryService: photoLibraryManager
       )
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case nil:
@@ -475,7 +468,7 @@ struct LibraryRootView: View {
   /// hidden-button host that lived in `TimelineSidebarView`; moved up here so the
   /// Edit menu can drive it without a private sidebar API.
   private func selectAllTimelineYears() {
-    let years = (try? photoLibraryManager.availableYears()) ?? []
+    let years = photoLibraryManager.libraryRefresh.years.map(\.year)
     let yearItems = Set(years.map { LibrarySelection.timelineYear(year: $0) })
     let preserved = selectionSet.filter { !$0.isTimeline }
     selectionSet = yearItems.union(preserved)
@@ -486,7 +479,7 @@ struct LibraryRootView: View {
   /// folders — matches Finder's "select all" scope, which doesn't reach into
   /// closed disclosure groups.
   private func selectAllVisibleCollections() {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     var picked: Set<LibrarySelection> = [.favorites]
     for descriptor in tree {
       guard let localId = descriptor.localIdentifier else { continue }
@@ -505,17 +498,17 @@ struct LibraryRootView: View {
   /// "Album" when the tree hasn't been built yet — the next sidebar fetch will populate
   /// the title via the placement metadata anyway.
   private func albumTitle(forCollectionId id: String) -> String {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return findTitle(kind: .album, id: id, in: tree) ?? "Album"
   }
 
   private func folderTitle(forCollectionId id: String) -> String {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return findTitle(kind: .folder, id: id, in: tree) ?? "Folder"
   }
 
   private func sharedAlbumTitle(forCollectionId id: String) -> String {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return findTitle(kind: .sharedAlbum, id: id, in: tree) ?? "Shared Album"
   }
 
@@ -534,4 +527,56 @@ struct LibraryRootView: View {
     return nil
   }
 
+}
+
+/// Reads selection beside the grid rather than in the split-view layout owner.
+private struct SelectedAssetDetailPane: View {
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  let selection: AssetSelectionModel
+  let focusedSelection: LibrarySelection?
+  var body: some View { AssetDetailView(asset: selection.asset, placement: placement) }
+
+  private var placement: ExportPlacement? {
+    guard let focusedSelection else { return nil }
+    switch focusedSelection {
+    case .timelineMonth(let year, let month):
+      return .timeline(year: year, month: month)
+    case .favorites:
+      return collectionExportRecordStore.currentGridPlacement(
+        for: focusedSelection, collections: [])
+    case .album, .sharedAlbum:
+      guard let tree = photoLibraryManager.libraryRefresh.tree else { return nil }
+      return collectionExportRecordStore.currentGridPlacement(
+        for: focusedSelection, collections: tree)
+    case .timelineYear, .folder:
+      return nil
+    }
+  }
+
+}
+
+/// Collection readiness is owned beside the controls that consume it.
+private struct LibraryExportToolbar: ToolbarContent {
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  let section: LibrarySection
+  let selectionSet: Set<LibrarySelection>
+  let focusedSelection: LibrarySelection?
+  let timelineHistoryState: RecordStoreState
+  var body: some ToolbarContent {
+    ExportToolbarView(
+      section: section, selectionSet: selectionSet, focusedSelection: focusedSelection,
+      historyState: section == .timeline ? timelineHistoryState : collectionExportRecordStore.state)
+  }
+}
+
+/// Binding construction reads the value eagerly; keep that read in the content's scope.
+private struct AssetSelectionScope<Content: View>: View {
+  let selection: AssetSelectionModel
+  let content: (Binding<AssetDescriptor?>) -> Content
+
+  var body: some View {
+    @Bindable var owner = selection
+    content($owner.asset)
+  }
 }

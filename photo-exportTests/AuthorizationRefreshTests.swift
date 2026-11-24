@@ -12,13 +12,8 @@ import Testing
   struct AuthorizationRefreshTests {
     @MainActor
     private struct Host: View {
-      @ObservedObject var library: PhotoLibraryManager
-      let counter: BodyInvalidationCounter
+      let library: PhotoLibraryManager
       var body: some View {
-        let route = library.isAuthorized ? "authorized" : "authorization"
-        // A declaration keeps the probe out of ViewBuilder's view expressions.
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = counter.recordText([route], for: "authorization-route")
         Group {
           if library.isAuthorized {
             Text("Authorized content")
@@ -38,8 +33,8 @@ import Testing
     private final class Fixture {
       let service = FakePhotoLibraryService()
       let notifications = NotificationCenter()
-      let counter = BodyInvalidationCounter()
       let library: PhotoLibraryManager
+      let initialAuthorizationReads: Int
       let opened = URLCapture()
       let window: NSWindow
 
@@ -47,10 +42,11 @@ import Testing
         service.authorizationStatus = status
         service.isAuthorized = PhotoLibraryManager.isAuthorizationSufficient(status)
         library = PhotoLibraryManager(overrideService: service)
+        initialAuthorizationReads = service.authorizationStatusReads
         library.observeAppActivation(notificationCenter: notifications)
         let capture = opened
-        let content = Host(library: library, counter: counter)
-          .environment(\.bodyInvalidationCounter, counter)
+        let content = Host(library: library)
+          .environment(\.accessibilityEnabled, true)
           .environment(
             \.openURL,
             OpenURLAction { url in
@@ -72,14 +68,7 @@ import Testing
         window.orderOut(nil)
         window.contentView = nil
         window.close()
-        counter.reset()
       }
-    }
-
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
 
     @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.authorized, .limited])
@@ -89,12 +78,12 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
+        await observe { f.service.authorizationStatusReads > f.initialAuthorizationReads })
       let revision = f.library.libraryRevision
       // Status is authoritative even if a service's separate convenience flag is stale.
       f.service.authorizationStatus = status
       f.activate()
-      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+      #expect(await observe { NativeViewAccess.containsText("Authorized content", in: f.window) })
       #expect(f.library.authorizationStatus == status && f.library.isAuthorized)
       #expect(f.library.libraryRevision == revision + 1)
       #expect(f.service.requestAuthorizationCalls == 0)
@@ -110,10 +99,13 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+        await observe { NativeViewAccess.containsText("Authorized content", in: f.window) })
       f.service.authorizationStatus = status
       f.activate()
-      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorization"] })
+      #expect(
+        await observe {
+          NativeViewAccess.containsText("Photo Library Access Required", in: f.window)
+        })
       #expect(!f.library.isAuthorized && f.library.authorizationStatus == status)
       #expect(f.service.requestAuthorizationCalls == 0)
     }
@@ -126,7 +118,7 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
+        await observe { f.service.authorizationStatusReads > f.initialAuthorizationReads })
       let revision = f.library.libraryRevision
       f.activate()
       f.activate()
@@ -150,7 +142,7 @@ import Testing
       defer { f.close() }
       f.service.authorizationStatus = .authorized
       f.show()
-      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+      #expect(await observe { NativeViewAccess.containsText("Authorized content", in: f.window) })
       #expect(f.service.requestAuthorizationCalls == 0)
     }
 
@@ -159,9 +151,17 @@ import Testing
       defer { f.close() }
       f.show()
       try #require(
-        await observe { f.counter.renderedActions["authorization-open-settings"] != nil })
-      let action = try #require(f.counter.renderedActions["authorization-open-settings"])
-      action()
+        await observe(in: f.window) {
+          NativeViewAccess.containsText("Photo Library Access Required", in: f.window)
+        })
+      #expect(
+        NativeViewAccess.containsText(
+          "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos.",
+          in: f.window))
+      let button = try #require(NativeViewAccess.button("Open System Settings", in: f.window))
+      #expect(button.isAccessibilityEnabled?() == true)
+      #expect(button.accessibilityPerformPress?() == true)
+      try #require(await observe(in: f.window) { f.opened.urls.count == 1 })
       #expect(
         f.opened.urls.map(\.absoluteString) == [
           "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
@@ -174,7 +174,11 @@ import Testing
       service.authorizationStatus = .denied
       service.isAuthorized = false
       let scope = PhotoFetchScope.timeline(year: 2026, month: 9)
-      service.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "old")]
+      service.assetsByYearMonth["2026-9"] = [
+        TestAssetFactory.makeAsset(
+          id: "old",
+          creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!)
+      ]
       #expect(try await service.cachedCountAssets(in: scope) == 1)
       let gate = AsyncCheckpoint()
       var waits = 0
@@ -186,12 +190,16 @@ import Testing
         }, countInvalidationWaitObserver: { waits += 1 })
       var revisionAtAuthorization: Int?
       var query: Task<Int, Error>?
-      let observation = manager.$isAuthorized.dropFirst().sink { authorized in
+      let observation = manager.isAuthorizedPublisher.dropFirst().sink { authorized in
         guard authorized else { return }
         revisionAtAuthorization = manager.libraryRevision
         query = Task { try await manager.cachedCountAssets(in: scope) }
       }
-      service.assetsByYearMonth["2026-9"]?.append(TestAssetFactory.makeAsset(id: "new"))
+      service.assetsByYearMonth["2026-9"]?.append(
+        TestAssetFactory.makeAsset(
+          id: "new",
+          creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!)
+      )
       service.authorizationStatus = .authorized
       manager.refreshAuthorizationStatus()
       var failure: Error?
@@ -202,7 +210,11 @@ import Testing
         let read = try #require(query)
         #expect(try await read.value == 2)
         let revision = manager.libraryRevision
-        service.assetsByYearMonth["2026-9"]?.append(TestAssetFactory.makeAsset(id: "later"))
+        service.assetsByYearMonth["2026-9"]?.append(
+          TestAssetFactory.makeAsset(
+            id: "later",
+            creationDate: Calendar.current.date(
+              from: DateComponents(year: 2026, month: 9, day: 15))!))
         manager.refreshAuthorizationStatus()
         #expect(manager.libraryRevision == revision)
         #expect(try await manager.cachedCountAssets(in: scope) == 2)

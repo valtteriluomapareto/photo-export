@@ -21,12 +21,12 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
     return _convertCalls
   }
 
-  // Configure before a call or while all relevant calls are parked at checkpoints.
-  // Not protected by `lock` — matches the discipline-via-doc-comment pattern
-  // used by `FakeAssetResourceWriter` / `FakeMediaRenderer`.
-
   /// Error injection — when non-nil, the converter throws this on every call.
-  var convertError: Error?
+  var convertError: Error? {
+    get { lock.withLock { _convertError } }
+    set { lock.withLock { _convertError = newValue } }
+  }
+  private var _convertError: Error?
 
   /// When `true` (the default), the fake writes a JPEG signature byte payload
   /// to `destURL`. The bytes start with the JPEG SOI marker (`0xFF 0xD8 0xFF
@@ -37,15 +37,26 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
   /// decodes — if a future test path tries to actually parse the fake's
   /// output via ImageIO it will fail and the fake should be upgraded to emit
   /// a real 1×1 JPEG via `CGImageDestination`.
-  var shouldCreateFile: Bool = true
-  var beforeConvertCheckpoint: AsyncCheckpoint?
-  var afterConvertCheckpoint: AsyncCheckpoint?
+  var shouldCreateFile: Bool {
+    get { lock.withLock { _shouldCreateFile } }
+    set { lock.withLock { _shouldCreateFile = newValue } }
+  }
+  private var _shouldCreateFile: Bool = true
+  var beforeConvertCheckpoint: AsyncCheckpoint? {
+    get { lock.withLock { _beforeConvertCheckpoint } }
+    set { lock.withLock { _beforeConvertCheckpoint = newValue } }
+  }
+  private var _beforeConvertCheckpoint: AsyncCheckpoint?
+  var afterConvertCheckpoint: AsyncCheckpoint? {
+    get { lock.withLock { _afterConvertCheckpoint } }
+    set { lock.withLock { _afterConvertCheckpoint = newValue } }
+  }
+  private var _afterConvertCheckpoint: AsyncCheckpoint?
 
   func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) async throws {
-    lock.lock()
-    _convertCalls.append(
-      ConvertCall(sourceURL: sourceURL, destURL: destURL, quality: quality))
-    lock.unlock()
+    lock.withLock {
+      _convertCalls.append(ConvertCall(sourceURL: sourceURL, destURL: destURL, quality: quality))
+    }
 
     if let checkpoint = beforeConvertCheckpoint { await checkpoint.enter() }
     if let error = convertError { throw error }

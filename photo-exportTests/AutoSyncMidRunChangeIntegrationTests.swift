@@ -74,9 +74,9 @@ struct AutoSyncMidRunChangeIntegrationTests {
     )
     let destinationId = destinationSnapshot.id!
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: destinationId)
+    await timelineStore.configureAndWait(for: destinationId)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: destinationId)
+    await collectionStore.configureAndWait(for: destinationId)
 
     let builder = FakeAutoSyncEnvironmentBuilder()
     let exportManager = ExportManager(
@@ -98,8 +98,6 @@ struct AutoSyncMidRunChangeIntegrationTests {
       dirtyStateStore: builder.dirtyStore,
       retryStateStore: builder.retryStore,
       runSummaryStore: builder.runSummaryStore,
-      perDestinationTokenStore: builder.perDestinationTokenStore,
-      currentRunStore: builder.currentRunStore,
       clock: builder.clock,
       photosAuthorization: builder.photosAuthorization,
       userDefaults: builder.userDefaults
@@ -107,8 +105,8 @@ struct AutoSyncMidRunChangeIntegrationTests {
     defer {
       autoSync.setEnabled(false)
       exportManager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       destination.cleanup()
     }

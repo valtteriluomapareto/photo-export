@@ -26,36 +26,23 @@ struct ReuseSourceDestinationErrorTests {
 
   // MARK: - Fixtures
 
-  private func makeManager() throws -> (
+  private func makeManager() async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ReuseSourceDestErr")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("ReuseDestErr")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = await ExportManagerHarness(
+      label: "ReuseSourceDestErr",
+      userDefaults: TestScratch.defaults("ReuseDestErr"))
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.writer, harness.fileSystem,
+      harness.store, harness.collectionStore, harness.storeRoot
     )
-    return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }
 
-  private func makeAsset(id: String) -> AssetDescriptor {
+  private func makeAsset(id: String, month: Int) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -75,13 +62,13 @@ struct ReuseSourceDestinationErrorTests {
   @Test func destinationOutOfSpaceFailsVariantWithoutPhotoKitFallback() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "shared")
+    let asset = makeAsset(id: "shared", month: 3)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
@@ -129,13 +116,13 @@ struct ReuseSourceDestinationErrorTests {
   @Test func destinationPermissionDeniedFailsVariantWithoutPhotoKitFallback() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "shared")
+    let asset = makeAsset(id: "shared", month: 4)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")

@@ -1,4 +1,148 @@
 {
+  "auxiliaryGenerations": {
+    "v1.3.0": {
+      "commit": "63e3b0f7f934054781b96f68190900f00b316144",
+      "defines": [],
+      "files": {
+        "auxiliary/AutoSync/destinations/A/dirtyState.json": "2212ee68c0e307d734390bab061627ef035aa45b304f3a401dbf9991ff7f04fd",
+        "auxiliary/AutoSync/destinations/A/lastDurablyRecordedToken.data": "a1d8748d0dbe0c9f4f6769346e7b14f8c57cbd636ef40dd40a21b96d7e78aa39",
+        "auxiliary/AutoSync/destinations/A/lastRunSummary.json": "e18dc6428e9c42377e640fe0ffc28418f345c394e312cdff44198d74706bfab4",
+        "auxiliary/AutoSync/destinations/A/retryState.json": "d7221c33f12ea42a05347d495bc2c639068cbcb2b28b00c52ebea74a0c824e7b",
+        "auxiliary/AutoSync/destinations/A/safetyRecord.json": "114484701a1cc8dfc542b06584683fecd749a4e2fd714be997be16278f063b73",
+        "auxiliary/AutoSync/destinations/B/dirtyState.json": "d98aaef27705d34cff807b0683e74d593a75d3ea7a50478a806e74e9b7141713",
+        "auxiliary/AutoSync/destinations/B/lastDurablyRecordedToken.data": "b6e220235bb6e165473ec31a31373625c38db8f20ad45238e243ac3debda402d",
+        "auxiliary/AutoSync/destinations/B/lastRunSummary.json": "8c7f67ffa853e6c7111bd146e4f7385a778bfd7e39cfe5ef0b2af34916036069",
+        "auxiliary/AutoSync/destinations/B/retryState.json": "3ba93d2dd4a1b88a4c7bbe02a97647a4dd5ef2fb5e03ae3d0cb1ed188cd3e382",
+        "auxiliary/preferences.plist": "2b20f772999ab1937361319c1d2704c34e18259444bd82f6e6ff51937147b1d4"
+      },
+      "harnesses": {
+        "auxiliary-stores.swift": "0fc2cdfaf233590720d5625cb1cf4b7309e551bd56bf8695d6dce749099a7f5a"
+      },
+      "hostRuntime": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+      "preferencesTransport": "Binary property list of only real writer values; bookmarks excluded",
+      "releaseURL": "https://github.com/valtteriluomapareto/photo-export/releases/tag/v1.3.0",
+      "sources": {
+        "photo-export/Managers/FileBackedAutoSyncDirtyStateStore.swift": "e79de213e5c0726cee7f915d280e65be3ad9149afc5695de6f2783c749ed3360",
+        "photo-export/Managers/FileBackedAutoSyncPerDestinationTokenStore.swift": "24b01a58d69c6c23c1cab7cfd86b109696375838765714a0a033ae9bb8c2896b",
+        "photo-export/Managers/FileBackedAutoSyncRetryStateStore.swift": "41017274e12ad06d02a075a5e35934cb3bf96cbf58b529532de699a112bba8f4",
+        "photo-export/Managers/FileBackedAutoSyncRunSummaryStore.swift": "f973ccb1105f4ad792e36296c39fd24087a975ace6dc3ac7373a22a92f4a1044",
+        "photo-export/Managers/FileBackedDestinationSafetyConfirmationStore.swift": "aee54b3e8a0e173b96ead9a6f3fe1241ac5546631f46788a49b876b78a66edc4",
+        "photo-export/Managers/UserDefaultsAutoExportScopeStore.swift": "fd099b7916c67acec6e4eba0b867a9ae81f301b41092bce7deca38678da5bc39",
+        "photo-export/Models/AssetDescriptor.swift": "da3940f172884990118d98a852d1b5b524789bfebd22d16281923372f0d68dfa",
+        "photo-export/Models/AutoExportLibraryScope.swift": "2049dc44da0fbc54f141f2dc977cb906c1a89760c51ce75a6c20b75ed50a3601",
+        "photo-export/Models/AutoSyncBlockedReason.swift": "0ce5473e36fd1afe58fc2602b87c789b246f255df735a3203c9bad1562ec44fd",
+        "photo-export/Models/AutoSyncDirtyState.swift": "2a005ddf1c9d69b8b77ed3a2bacb3c75ad0b7ea789cbb4a7b4abb31c4c083bf9",
+        "photo-export/Models/AutoSyncFailureCategory.swift": "09990d3adacec6cc69e6bae8e9a91dcc5824466ed8ea2bc4430007089a960480",
+        "photo-export/Models/AutoSyncReason.swift": "85e21e65b7027c75b008876917b268092eebd2978105580eb7d504666983f099",
+        "photo-export/Models/AutoSyncRetryState.swift": "e03082b2ff7701e1077983ff29f67f05a2f12fdf2cc4193c0f156d501c2b0658",
+        "photo-export/Models/DestinationFingerprint.swift": "1936dfd1c12f11ababac04c6dee0fb15714f2462c4e4005172117b55704b27c9",
+        "photo-export/Models/DestinationSafetyState.swift": "67d9176f38f9b17b7745daf47f9dcb8b2aa3817d789a060dad652fb72b8bf22d",
+        "photo-export/Models/DestinationSnapshot.swift": "335e2974cb82bc6c4ccb035353564c716890e7acdd3476cf6ad33252f594aa79",
+        "photo-export/Models/ExportPlacement.swift": "6b65bfb40b30ef1872d66ce3954f93c2405cb110a8de41e6631aad3c5cc3de46",
+        "photo-export/Models/ExportRecord.swift": "99d39bc4ec7f17ebfaf2a7f3d4ae631d37f0aef8c8d2ec4a4c09e6512ebcb917",
+        "photo-export/Models/ExportRunContext.swift": "466c50ef913c7c1aad6ddc31d0ec3e326323ea35c2095dfca0a98d278f05dd53",
+        "photo-export/Models/ExportRunFailureDetail.swift": "63fd63a78d27751c63f199b0300f3cd37b0ae1ca967cf39c6c7085542765bfc1",
+        "photo-export/Models/ExportRunScope.swift": "c7710181512c757e00b880754c83a64bc1ed0e2a4090017e9399f2719a990e45",
+        "photo-export/Models/ExportVariant.swift": "22f26e161e0565d601db4ff9e0ecd885c7002a785687b63df799c3bbdeda0a79",
+        "photo-export/Protocols/AutoSyncDestinationProviding.swift": "97481c7071c5cf05c9f01af28d7161859208c1e0561a74794ba744823f498ce6",
+        "photo-export/Protocols/AutoSyncDirtyStateStore.swift": "01636d2bdf8e8f6bcaf9667edf475b1a46235e1dea7906ccee218f8411151957",
+        "photo-export/Protocols/AutoSyncPerDestinationTokenStore.swift": "1d1c4e6090957691c167f8eeae062956b25e525ceaa58dd6dcc2f4006960cebf",
+        "photo-export/Protocols/AutoSyncRetryStateStore.swift": "76999fdb4b6b111fb8cd82e7beb011b092d08492d957b7f1951bf5d1086f5493",
+        "photo-export/Protocols/AutoSyncRunSummaryStore.swift": "bd67abca3ffb4bd22882702b6106e81bbe6742b205364f70db52085bef78fe2a",
+        "photo-export/Protocols/DestinationSafetyConfirmationStore.swift": "5b19eabaa2c1cf8d172a27c345bdf53f4ca8e3c99560a2821621a29de1530c6f"
+      },
+      "target": "arm64-apple-macos15.0",
+      "toolchain": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx26.0"
+    },
+    "v1.6.1": {
+      "commit": "93e0b8035f7b31c19ca89537be26ba77387068c0",
+      "defines": [],
+      "files": {
+        "auxiliary/AutoSync/destinations/A/currentRun.json": "5ee9b3c894b269fc55243b26f4706dc324d483f8f99a6ce34141f02c3ab9798d",
+        "auxiliary/AutoSync/destinations/B/currentRun.json": "f06b1bd1fcac0d0e16a5803aa26b239cdc2f7ce143abe917504d2aaad36a4d02"
+      },
+      "harnesses": {
+        "current-run.swift": "e17646ba83f6509a32b702c35f86a555354160c7cd5c362ce533c9c7d6b0a65e"
+      },
+      "hostRuntime": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+      "preferencesTransport": "Binary property list of only real writer values; bookmarks excluded",
+      "releaseURL": "https://github.com/valtteriluomapareto/photo-export/releases/tag/v1.6.1",
+      "sources": {
+        "photo-export/AutoSync/Stores/FileBackedAutoSyncCurrentRunStore.swift": "3f3113a359e1e2de0fdab19f4a4c8ea6ec2dd9da9172580a0561894ea2f94bad",
+        "photo-export/Models/AutoSyncRunJournal.swift": "61ba69eebd8a1c4bc235b4a80195a2d86f0450e812371af115b5fc70e2546a0a",
+        "photo-export/Protocols/AutoSyncCurrentRunStore.swift": "0c694961eb2e1371839f85b948f15e782ffa71c2d76878338fe22fca289a1b49",
+        "photo-export/Protocols/DirectoryFsyncing.swift": "a37e9f4585c29af8307de302cbfb6b1940bd9f77d8e587ee5b69a897793ac4b9"
+      },
+      "target": "arm64-apple-macos15.0",
+      "toolchain": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx26.0"
+    },
+    "v1.6.5": {
+      "commit": "0b0eb9b786311a961f9051d14e2e93cb0ecca135",
+      "defines": [
+        "RELEASE_MODERN"
+      ],
+      "files": {
+        "auxiliary/AutoSync/destinations/A/currentRun.json": "5ee9b3c894b269fc55243b26f4706dc324d483f8f99a6ce34141f02c3ab9798d",
+        "auxiliary/AutoSync/destinations/A/dirtyState.json": "2212ee68c0e307d734390bab061627ef035aa45b304f3a401dbf9991ff7f04fd",
+        "auxiliary/AutoSync/destinations/A/lastDurablyRecordedToken.data": "a1d8748d0dbe0c9f4f6769346e7b14f8c57cbd636ef40dd40a21b96d7e78aa39",
+        "auxiliary/AutoSync/destinations/A/lastRunSummary.json": "e18dc6428e9c42377e640fe0ffc28418f345c394e312cdff44198d74706bfab4",
+        "auxiliary/AutoSync/destinations/A/retryState.json": "724b3bc71a0bf3fdfcc153589fb8481f211d9cdddb8fa369b915499b568ebfc6",
+        "auxiliary/AutoSync/destinations/A/safetyRecord.json": "83f8baa9f22f12152fc6a5b0cad77ccc56ebc67e941dacc58f045b4d391f25d6",
+        "auxiliary/AutoSync/destinations/B/currentRun.json": "f06b1bd1fcac0d0e16a5803aa26b239cdc2f7ce143abe917504d2aaad36a4d02",
+        "auxiliary/AutoSync/destinations/B/dirtyState.json": "d98aaef27705d34cff807b0683e74d593a75d3ea7a50478a806e74e9b7141713",
+        "auxiliary/AutoSync/destinations/B/lastDurablyRecordedToken.data": "b6e220235bb6e165473ec31a31373625c38db8f20ad45238e243ac3debda402d",
+        "auxiliary/AutoSync/destinations/B/lastRunSummary.json": "8c7f67ffa853e6c7111bd146e4f7385a778bfd7e39cfe5ef0b2af34916036069",
+        "auxiliary/AutoSync/destinations/B/retryState.json": "3ba93d2dd4a1b88a4c7bbe02a97647a4dd5ef2fb5e03ae3d0cb1ed188cd3e382",
+        "auxiliary/preferences.plist": "930e70510403db53127cec65451ba132108f75cc8e596a6d9b76adf08e77e732"
+      },
+      "harnesses": {
+        "auxiliary-stores.swift": "0fc2cdfaf233590720d5625cb1cf4b7309e551bd56bf8695d6dce749099a7f5a",
+        "current-run.swift": "e17646ba83f6509a32b702c35f86a555354160c7cd5c362ce533c9c7d6b0a65e"
+      },
+      "hostRuntime": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+      "preferencesTransport": "Binary property list of only real writer values; bookmarks excluded",
+      "releaseURL": "https://github.com/valtteriluomapareto/photo-export/releases/tag/v1.6.5",
+      "sources": {
+        "photo-export/AutoSync/Stores/FileBackedAutoSyncCurrentRunStore.swift": "3f3113a359e1e2de0fdab19f4a4c8ea6ec2dd9da9172580a0561894ea2f94bad",
+        "photo-export/AutoSync/Stores/FileBackedAutoSyncDirtyStateStore.swift": "e79de213e5c0726cee7f915d280e65be3ad9149afc5695de6f2783c749ed3360",
+        "photo-export/AutoSync/Stores/FileBackedAutoSyncPerDestinationTokenStore.swift": "24b01a58d69c6c23c1cab7cfd86b109696375838765714a0a033ae9bb8c2896b",
+        "photo-export/AutoSync/Stores/FileBackedAutoSyncRetryStateStore.swift": "41017274e12ad06d02a075a5e35934cb3bf96cbf58b529532de699a112bba8f4",
+        "photo-export/AutoSync/Stores/FileBackedAutoSyncRunSummaryStore.swift": "f973ccb1105f4ad792e36296c39fd24087a975ace6dc3ac7373a22a92f4a1044",
+        "photo-export/AutoSync/Stores/UserDefaultsAutoExportScopeStore.swift": "fd099b7916c67acec6e4eba0b867a9ae81f301b41092bce7deca38678da5bc39",
+        "photo-export/Destination/DestinationIdentity.swift": "e9275047f669c29a1e8ac3fed7deb67e66404296bd853e6ab0d320c21ad161c9",
+        "photo-export/Destination/ExportDestinationManager.swift": "bd492d1094145d778697884cab0c5109b8e2e677d0598cf781f7dd61b77b8131",
+        "photo-export/Destination/FileBackedDestinationSafetyConfirmationStore.swift": "aee54b3e8a0e173b96ead9a6f3fe1241ac5546631f46788a49b876b78a66edc4",
+        "photo-export/Models/AssetDescriptor.swift": "97a2ff693d2214a603ecbc166edd69326eba6f8fe8ca4b377d4fb3f7bd8ced94",
+        "photo-export/Models/AutoExportLibraryScope.swift": "447f48f14e066082b26f11b4189e0187a721fb7fd56c09dea74042888af1b536",
+        "photo-export/Models/AutoSyncBlockedReason.swift": "0ce5473e36fd1afe58fc2602b87c789b246f255df735a3203c9bad1562ec44fd",
+        "photo-export/Models/AutoSyncDirtyState.swift": "2a005ddf1c9d69b8b77ed3a2bacb3c75ad0b7ea789cbb4a7b4abb31c4c083bf9",
+        "photo-export/Models/AutoSyncFailureCategory.swift": "09990d3adacec6cc69e6bae8e9a91dcc5824466ed8ea2bc4430007089a960480",
+        "photo-export/Models/AutoSyncReason.swift": "d5fb05598b6b4a43eec2e5906d58ef9eba4554284fcf46aaaa1979bf8e19f1d8",
+        "photo-export/Models/AutoSyncRetryState.swift": "f3def6ffff8a706c00315eef6655542381aafb6fcfbd46213be3882a7d56920c",
+        "photo-export/Models/AutoSyncRunJournal.swift": "61ba69eebd8a1c4bc235b4a80195a2d86f0450e812371af115b5fc70e2546a0a",
+        "photo-export/Models/DestinationFingerprint.swift": "1936dfd1c12f11ababac04c6dee0fb15714f2462c4e4005172117b55704b27c9",
+        "photo-export/Models/DestinationSafetyState.swift": "67d9176f38f9b17b7745daf47f9dcb8b2aa3817d789a060dad652fb72b8bf22d",
+        "photo-export/Models/DestinationSnapshot.swift": "148c4091c959fd9e1029c75e9e300a6530df4b0b3dcc49ef70ba4a6fcd09a6e7",
+        "photo-export/Models/ExportPlacement.swift": "bd28de784668ac2f33df5a68c59e2d097e1a9f94fa2211cc229611b2971bcc67",
+        "photo-export/Models/ExportRecord.swift": "b6b51b1608bcefb826795d7e9994da5bb795e9fd9f1134f5641cdd8d5e71b6c4",
+        "photo-export/Models/ExportRunContext.swift": "466c50ef913c7c1aad6ddc31d0ec3e326323ea35c2095dfca0a98d278f05dd53",
+        "photo-export/Models/ExportRunFailureDetail.swift": "63fd63a78d27751c63f199b0300f3cd37b0ae1ca967cf39c6c7085542765bfc1",
+        "photo-export/Models/ExportRunScope.swift": "d948c8ee48b0112fd42376db57a5c8df3265da0efba7d313b8396a42af9b4377",
+        "photo-export/Models/ExportVariant.swift": "4505294b381eb7590ebd2483684a2b31874bdd76f36f16a862a6734fea89edd8",
+        "photo-export/Protocols/AutoSyncCurrentRunStore.swift": "0c694961eb2e1371839f85b948f15e782ffa71c2d76878338fe22fca289a1b49",
+        "photo-export/Protocols/AutoSyncDestinationProviding.swift": "97481c7071c5cf05c9f01af28d7161859208c1e0561a74794ba744823f498ce6",
+        "photo-export/Protocols/AutoSyncDirtyStateStore.swift": "01636d2bdf8e8f6bcaf9667edf475b1a46235e1dea7906ccee218f8411151957",
+        "photo-export/Protocols/AutoSyncPerDestinationTokenStore.swift": "1d1c4e6090957691c167f8eeae062956b25e525ceaa58dd6dcc2f4006960cebf",
+        "photo-export/Protocols/AutoSyncRetryStateStore.swift": "76999fdb4b6b111fb8cd82e7beb011b092d08492d957b7f1951bf5d1086f5493",
+        "photo-export/Protocols/AutoSyncRunSummaryStore.swift": "bd67abca3ffb4bd22882702b6106e81bbe6742b205364f70db52085bef78fe2a",
+        "photo-export/Protocols/DestinationSafetyConfirmationStore.swift": "5b19eabaa2c1cf8d172a27c345bdf53f4ca8e3c99560a2821621a29de1530c6f",
+        "photo-export/Protocols/DirectoryFsyncing.swift": "a37e9f4585c29af8307de302cbfb6b1940bd9f77d8e587ee5b69a897793ac4b9",
+        "photo-export/Protocols/ExportDestination.swift": "0791042726872a5fec61a8c2567dcbce1b66414ae0d467bc5d2e5f5f175daeed"
+      },
+      "target": "arm64-apple-macos15.0",
+      "toolchain": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx26.0"
+    }
+  },
   "hostRuntime": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
   "releases": {
     "v1.0.3": {

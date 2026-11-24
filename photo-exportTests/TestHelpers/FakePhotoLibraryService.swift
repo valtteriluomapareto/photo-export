@@ -5,13 +5,60 @@ import Photos
 @testable import Photo_Export
 
 @MainActor
-final class FakePhotoLibraryService: PhotoLibraryService {
+final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
   var isAuthorized: Bool = true
-  var authorizationStatus: PHAuthorizationStatus = .authorized
+  private var suppliedAuthorizationStatus: PHAuthorizationStatus = .authorized
+  private(set) var authorizationStatusReads = 0
+  var authorizationStatus: PHAuthorizationStatus {
+    get {
+      authorizationStatusReads += 1
+      return suppliedAuthorizationStatus
+    }
+    set { suppliedAuthorizationStatus = newValue }
+  }
+
+  var thumbnailResolveOverride: (@MainActor ([String]) async -> [ThumbnailAsset])?
+  var thumbnailResolveCalls: [[String]] = []
+
+  func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
+    thumbnailResolveCalls.append(ids)
+    if let thumbnailResolveOverride { return await thumbnailResolveOverride(ids) }
+    return ids.map { id in
+      ThumbnailAsset.synthetic(fetchAssetDescriptor(for: id) ?? TestAssetFactory.makeAsset(id: id))
+    }
+  }
+
+  var thumbnailReaderOverride: (any ThumbnailReading)?
+  var thumbnailReader: any ThumbnailReading { thumbnailReaderOverride ?? self }
+  private var preheatRegistrations = ThumbnailPreheatRegistrations<ThumbnailAsset>()
+
+  func resolveAssets(ids: [String]) async -> [ThumbnailAsset] {
+    await resolveThumbnailAssets(ids: ids)
+  }
+
+  func image(for asset: ThumbnailAsset, spec: ThumbnailRequestSpec) async -> CGImage? {
+    await decodedThumbnail(
+      for: asset.descriptor.id, quantizedSize: spec.size, deliveryMode: spec.delivery)
+  }
+
+  func preheat(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
+    let lookup = Dictionary(
+      start.map { ($0.preheatKey, $0) }, uniquingKeysWith: { _, last in last })
+    let added = preheatRegistrations.register(start.map(\.preheatKey)) { lookup[$0] }
+    let removed = preheatRegistrations.release(stop.map(\.preheatKey))
+    if !removed.isEmpty { stopCachingCalls.append(removed.map(\.descriptor)) }
+    if !added.isEmpty { startCachingCalls.append(added.map(\.descriptor)) }
+  }
+
+  func coverThumbnails(in scope: PhotoFetchScope, limit: Int) async throws -> [ThumbnailAsset] {
+    try await fetchAssets(in: scope, mediaType: nil)
+      .prefix(max(0, min(limit, 4))).map(ThumbnailAsset.synthetic)
+  }
 
   var cachedCountOverride: (@MainActor (PhotoFetchScope, Bool) async throws -> Int)?
 
   // Canned data
+  /// Timeline catalog grouped for fixture setup; queries filter creationDate across every bucket.
   var assetsByYearMonth: [String: [AssetDescriptor]] = [:]
   /// Canned favorites assets returned by `.favorites` scope fetches.
   var favoritesAssets: [AssetDescriptor] = []
@@ -22,7 +69,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// id different contents under the two scopes when needed; in practice most tests
   /// will only populate one or the other.
   var assetsBySharedAlbumLocalId: [String: [AssetDescriptor]] = [:]
-  /// Canned collection tree returned by `fetchCollectionTree()`. Empty by default.
+  /// Canned collection tree returned by `loadCollectionTree()`. Empty by default.
   var collectionTree: [PhotoCollectionDescriptor] = []
   var collectionTreeError: Error?
   /// Asset IDs that fetchAssetDescriptor should treat as missing, even if they
@@ -38,10 +85,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// Thrown by the year-listing calls. Production throws `authorizationDenied` there
   /// without Photos access, so access tests set both this and `isAuthorized`.
   var availableYearsError: Error?
+  var availableYearsObserver: (@MainActor () -> Void)?
+  nonisolated let inventoryThreads = LockedBox<[String: [Bool]]>([:])
 
   // Call tracking
   var fetchAssetsCalls: [(year: Int, month: Int?, mediaType: PHAssetMediaType?)] = []
-  var writeResourceCalls: [(ResourceDescriptor, String, URL)] = []
   var startCachingCalls: [[AssetDescriptor]] = []
   var stopCachingCalls: [[AssetDescriptor]] = []
 
@@ -51,18 +99,9 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// `id` is in this map, the fake throws the mapped error instead of returning the
   /// canned assets. Used to exercise partial-enqueue failure paths.
   var fetchAssetsErrorByAlbumId: [String: Error] = [:]
-  /// Per-album async delay. When `fetchAssets(in: .album(id))` is called and `id` is
-  /// in this map, the fake `Task.sleep`s for the given seconds before returning. Used
-  /// to widen the "queued but run loop not started" window for tests that exercise the
-  /// pre-process pause path.
-  ///
-  /// Prefer `fetchAssetsCheckpointByAlbumId` over this for any test that asserts
-  /// on transient queue state — a delay only widens a window, but a checkpoint
-  /// makes arrival deterministic. See issue #30.
-  var fetchAssetsDelayByAlbumId: [String: TimeInterval] = [:]
   /// Per-album release-on-demand checkpoint. When `fetchAssets(in: .album(id))` is
   /// called and `id` is in this map, the fake calls `await checkpoint.enter()`
-  /// before any per-album error/delay handling, so the gate signals "the enqueue
+  /// before any per-album error handling, so the gate signals "the enqueue
   /// loop reached this album fetch." Tests can `waitForEnter(count:)` to assert
   /// the loop is suspended on this album, take some action (pause, start another
   /// export), then `release(_:)` or `releaseAll()`.
@@ -101,24 +140,40 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     if let error = fetchAssetsErrorByYear[year] { throw error }
     if let error = fetchAssetsError { throw error }
 
-    if let month {
-      let key = "\(year)-\(month)"
-      let assets = assetsByYearMonth[key] ?? []
-      if let mediaType {
-        return assets.filter { $0.mediaType == mediaType }
+    return sortedAssets(timelineAssets(year: year, month: month), mediaType: mediaType)
+  }
+
+  private func timelineAssets(year: Int, month: Int?) -> [AssetDescriptor] {
+    let calendar = Calendar.current
+    guard let start = calendar.date(from: DateComponents(year: year, month: month ?? 1, day: 1)),
+      let end = calendar.date(byAdding: month == nil ? .year : .month, value: 1, to: start)
+    else { return [] }
+    return assetsByYearMonth.values.flatMap { $0 }.filter {
+      guard let date = $0.creationDate else { return false }
+      return date >= start && date < end
+    }
+  }
+
+  // Timeline predicates exclude nil dates; collections keep them before dated assets.
+  // Equal dates have no secondary ordering, matching the production date-only sort.
+  private func sortedAssets(_ assets: [AssetDescriptor], mediaType: PHAssetMediaType?)
+    -> [AssetDescriptor]
+  {
+    assets.filter { mediaType == nil || $0.mediaType == mediaType }.sorted {
+      switch ($0.creationDate, $1.creationDate) {
+      case (let first?, let second?): return first < second
+      case (nil, .some): return true
+      default: return false
       }
-      return assets
-    } else {
-      // Fetch all months for the year
-      var allAssets: [AssetDescriptor] = []
-      for m in 1...12 {
-        let key = "\(year)-\(m)"
-        allAssets.append(contentsOf: assetsByYearMonth[key] ?? [])
-      }
-      if let mediaType {
-        return allAssets.filter { $0.mediaType == mediaType }
-      }
-      return allAssets
+    }
+  }
+
+  private func cannedAssets(in scope: PhotoFetchScope) -> [AssetDescriptor] {
+    switch scope {
+    case .timeline(let year, let month): return timelineAssets(year: year, month: month)
+    case .favorites: return favoritesAssets
+    case .album(let id): return assetsByAlbumLocalId[id] ?? []
+    case .sharedAlbum(let id): return assetsBySharedAlbumLocalId[id] ?? []
     }
   }
 
@@ -143,48 +198,48 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return nil
   }
 
-  func countAssets(year: Int, month: Int) throws -> Int {
-    let key = "\(year)-\(month)"
-    return assetsByYearMonth[key]?.count ?? 0
-  }
-
-  func countAssets(year: Int) throws -> Int {
-    var total = 0
-    for m in 1...12 {
-      total += (assetsByYearMonth["\(year)-\(m)"]?.count ?? 0)
-    }
-    return total
-  }
-
-  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
-    let key = "\(year)-\(month)"
-    return (assetsByYearMonth[key] ?? []).reduce(0) { $0 + ($1.hasAdjustments ? 1 : 0) }
-  }
-
-  func countAdjustedAssets(year: Int) async throws -> Int {
-    var total = 0
-    for m in 1...12 {
-      total += try await countAdjustedAssets(year: year, month: m)
-    }
-    return total
-  }
-
   func availableYears() throws -> [Int] {
+    availableYearsObserver?()
     if let error = availableYearsError { throw error }
     return yearCounts.map(\.year)
   }
 
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
+    inventoryThreads.mutate { $0["years", default: []].append(Thread.isMainThread) }
     if let error = availableYearsError { throw error }
     return yearCounts
   }
 
-  // MARK: - Phase 2: Collections
+  var inventoryCheckpoint: AsyncCheckpoint?
 
-  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    if let error = collectionTreeError { throw error }
-    return collectionTree
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
+    let (values, error, gate) = await MainActor.run {
+      (
+        self.yearCounts.map { PhotoLibraryYearCount(year: $0.year, count: $0.count) },
+        self.availableYearsError, self.inventoryCheckpoint
+      )
+    }
+    return try await runDetached {
+      self.inventoryThreads.mutate { $0["years", default: []].append(Thread.isMainThread) }
+      if let gate { await gate.enter() }
+      if let error { throw error }
+      return values
+    }
   }
+
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
+    let (values, error, gate) = await MainActor.run {
+      (self.collectionTree, self.collectionTreeError, self.inventoryCheckpoint)
+    }
+    return try await runDetached {
+      self.inventoryThreads.mutate { $0["tree", default: []].append(Thread.isMainThread) }
+      if let gate { await gate.enter() }
+      if let error { throw error }
+      return values
+    }
+  }
+
+  // MARK: - Phase 2: Collections
 
   /// Every `fetchAssets(in:mediaType:)` scope, in call order.
   private(set) var scopeFetchCalls: [PhotoFetchScope] = []
@@ -198,50 +253,25 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     case .timeline(let year, let month):
       return try await fetchAssets(year: year, month: month, mediaType: mediaType)
     case .favorites:
-      if let mediaType {
-        return favoritesAssets.filter { $0.mediaType == mediaType }
-      }
-      return favoritesAssets
+      return sortedAssets(favoritesAssets, mediaType: mediaType)
     case .album(let collectionId):
-      // The checkpoint runs *before* the error/delay branches so the gate's
-      // "entered" semantic is "the enqueue loop reached this album fetch,"
-      // independent of whether the album is wired to throw or sleep next.
+      // The checkpoint precedes errors so tests can change the result while held.
       if let checkpoint = fetchAssetsCheckpointByAlbumId[collectionId] {
         await checkpoint.enter()
       }
       if let perAlbumError = fetchAssetsErrorByAlbumId[collectionId] {
         throw perAlbumError
       }
-      if let delay = fetchAssetsDelayByAlbumId[collectionId] {
-        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-      }
-      let assets = assetsByAlbumLocalId[collectionId] ?? []
-      if let mediaType {
-        return assets.filter { $0.mediaType == mediaType }
-      }
-      return assets
+      return sortedAssets(assetsByAlbumLocalId[collectionId] ?? [], mediaType: mediaType)
     case .sharedAlbum(let collectionId):
-      // Shared albums share the `fetchAssetsErrorByAlbumId` / -checkpoint /
-      // -delay knobs with `.album` — the dict is keyed by collection id, and
-      // PhotoKit-side identifiers don't overlap between the two kinds so a
-      // single map is unambiguous in practice. Same ordering as the `.album`
-      // branch (checkpoint, error, delay) so tests can exercise the bulk
-      // shared-album partial-failure path the same way they do for user
-      // albums.
+      // User and shared albums share error/checkpoint settings keyed by collection id.
       if let checkpoint = fetchAssetsCheckpointByAlbumId[collectionId] {
         await checkpoint.enter()
       }
       if let perAlbumError = fetchAssetsErrorByAlbumId[collectionId] {
         throw perAlbumError
       }
-      if let delay = fetchAssetsDelayByAlbumId[collectionId] {
-        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-      }
-      let assets = assetsBySharedAlbumLocalId[collectionId] ?? []
-      if let mediaType {
-        return assets.filter { $0.mediaType == mediaType }
-      }
-      return assets
+      return sortedAssets(assetsBySharedAlbumLocalId[collectionId] ?? [], mediaType: mediaType)
     }
   }
 
@@ -322,28 +352,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     }
   }
 
+  var countOverride: (@MainActor (PhotoFetchScope) async throws -> Int)?
+
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
-    // The fake's storage is `@MainActor`-isolated; hop on to read it.
-    return await MainActor.run { [weak self] in
-      guard let self else { return 0 }
-      switch scope {
-      case .timeline(let year, let month):
-        if let month {
-          return self.assetsByYearMonth["\(year)-\(month)"]?.count ?? 0
-        }
-        var total = 0
-        for m in 1...12 {
-          total += self.assetsByYearMonth["\(year)-\(m)"]?.count ?? 0
-        }
-        return total
-      case .favorites:
-        return self.favoritesAssets.count
-      case .album(let collectionId):
-        return self.assetsByAlbumLocalId[collectionId]?.count ?? 0
-      case .sharedAlbum(let collectionId):
-        return self.assetsBySharedAlbumLocalId[collectionId]?.count ?? 0
-      }
-    }
+    if let override = await countOverride { return try await override(scope) }
+    return await MainActor.run { self.cannedAssets(in: scope).count }
   }
 
   /// Phase 3 cache. Tests can read `collectionCountCache` to assert hit/miss behavior.
@@ -384,29 +397,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
-    return await MainActor.run { [weak self] in
-      guard let self else { return 0 }
-      let assets: [AssetDescriptor]
-      switch scope {
-      case .timeline(let year, let month):
-        if let month {
-          assets = self.assetsByYearMonth["\(year)-\(month)"] ?? []
-        } else {
-          var collected: [AssetDescriptor] = []
-          for m in 1...12 {
-            collected.append(contentsOf: self.assetsByYearMonth["\(year)-\(m)"] ?? [])
-          }
-          assets = collected
-        }
-      case .favorites:
-        assets = self.favoritesAssets
-      case .album(let collectionId):
-        assets = self.assetsByAlbumLocalId[collectionId] ?? []
-      case .sharedAlbum(let collectionId):
-        assets = self.assetsBySharedAlbumLocalId[collectionId] ?? []
-      }
-      return assets.reduce(0) { $0 + ($1.hasAdjustments ? 1 : 0) }
-    }
+    await MainActor.run { self.cannedAssets(in: scope).filter(\.hasAdjustments).count }
   }
 
   func startCachingThumbnails(for assets: [AssetDescriptor]) {
@@ -469,6 +460,22 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     guard let source else { return nil }
     var rect = CGRect(origin: .zero, size: source.size)
     return source.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+  }
+
+  var previewPixelSizes: [CGSize] = []
+  var previewOverride:
+    (
+      @MainActor (String, CGSize, @escaping @MainActor @Sendable (NSImage) -> Void) async throws ->
+        NSImage
+    )?
+
+  func requestPreview(
+    for assetId: String, pixelSize: CGSize,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage {
+    previewPixelSizes.append(pixelSize)
+    if let previewOverride { return try await previewOverride(assetId, pixelSize, onDegraded) }
+    return try await requestFullImage(for: assetId)
   }
 
   func requestFullImage(for assetId: String) async throws -> NSImage {

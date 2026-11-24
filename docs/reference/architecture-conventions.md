@@ -32,7 +32,15 @@ requests work through the same façade.
 empty `TestHostApp` under hosted tests. [`PhotoExportApp`](../../photo-export/App/photo_exportApp.swift)
 builds one [`AppCore`](../../photo-export/App/AppCore.swift) from
 [`AppComposition.forLaunch(arguments:)`](../../photo-export/App/AppComposition.swift)
-and retains its observable services with `@StateObject`.
+and retains its remaining `ObservableObject` services with `@StateObject`.
+The core owns the `@Observable` `PhotoLibraryManager`, `ExportManager`, `LoginItemController`,
+`WhatsNewState` and both record stores;
+`ExportManager` owns `ExportProgressState`. These objects reach views through
+`.environment(_:)` without additional app-level wrappers. `MainWindowRoot` reads the timeline
+store's history readiness in its body and passes that value through `ContentView` to
+the active child; `LibraryRootView` reads collection readiness only when collections are visible.
+See the [Observation migration recipe](observation-migration-recipe.md) for publisher delivery
+and observation ownership contracts.
 
 `AppComposition` selects production or screenshot services and supplies preferences,
 app-state roots, Photos access, persistent changes, the resource writer, filesystem,
@@ -54,7 +62,15 @@ wiring; hosted tests build their own objects without launching production startu
 The main data paths are:
 
 1. Photos → `PhotoLibraryManager` → app-owned descriptors for views and export planning.
-   Thumbnail caching and progressive grid loading stay behind the library service.
+   Thumbnail caching and progressive grid loading stay behind the library service. At job
+   execution, the injected `PhotoKitReading` reader refreshes one descriptor/resource snapshot
+   on its own serial utility queue. Framework objects stay inside that read; cancellation,
+   destination and history ownership are checked before its values can authorize export IO.
+   Shipping composition selects `ProductionPhotoKitReader`, and screenshot composition selects
+   `PhotoLibraryServiceReader` backed by the same curated library as the UI. Public resource UTIs
+   identify the original format. The optional resource-local `fileSize` KVC read preserves
+   known-size interrupted-file verification; its undocumented thread safety remains an explicit
+   limitation, with access confined to the serial reader.
 2. A manual action or AutoSync run → `ExportManager` → job planning and
    `ExportQueueCoordinator` → `VariantExporter`. Resource, render and conversion
    producers write an attempt-owned stage through the injected service seams.
@@ -250,7 +266,17 @@ focused year shows a summary, while months and collections show grids sharing
 `MonthViewModel`. `ThumbnailView` and `AssetDetailView` own previews;
 `ExportToolbarView` exposes actions and progress. `RecordStoreAlertHost` presents
 history recovery for either store, and `ImportView` presents import progress/results.
-See [`Views/`](../../photo-export/Views/) for the feature-specific views.
+Small value policies own captions, eligibility and typed action choices. Actual Buttons
+retain side effects, and small production control children can be hosted directly for
+native wiring tests. Timeline/collection summaries and tiles keep their own store reads;
+presentation helpers do not own stores, tasks or broad snapshots. Month and album/folder
+cover adapters share rendering and bounded image loading while keeping their distinct
+reset, query and cancellation lifetimes.
+
+DEBUG view instrumentation measures body/summary-scan budgets plus the finite lifecycle
+completion witnesses needed to await obsolete work. It records no text or action callbacks.
+See [`Views/`](../../photo-export/Views/) for the feature-specific views and the
+[UI test strategy](../../CONTRIBUTING.md#ui-behavior-test-strategy) for coverage boundaries.
 
 ## Design rationale
 
@@ -309,10 +335,6 @@ func bumpGeneration()
 - `cancelImport()` (on `ImportCoordinator`, via the injected `queueCoordinator` reference)
 - Destination or history-save failure teardown from `performExport` (through the same manager teardown helper)
 
-**Which method does NOT bump generation**:
-
-- `clearPending()` — drops queued jobs only. In-flight work that started before `clearPending` keeps its `gen` and finishes normally. If you need to cancel mid-flight, call `cancelAndClear` instead.
-
 **Collaborator seam**: `VariantExporter` and `ImportCoordinator` hold a direct (weak) reference to `ExportQueueCoordinator` for the cancellation helpers; their `Host` protocols no longer carry `isCurrent`, `throwIfCancelledOrStale`, `generation`, or `bumpGeneration` (issue #67 item 2 landed in May 2026). The coordinator's own dispatch loop reads its own `generation` / `isCurrent` directly. New collaborators that need the seam should inject `ExportQueueCoordinator` the same way, not route through `Host`.
 
 ### Preview content ownership
@@ -320,7 +342,9 @@ func bumpGeneration()
 Thumbnail and detail tasks use asset ID plus the existing
 `PhotoLibraryManager.thumbnailContentRevision(for:)` value, not broad `libraryRevision`.
 Known content edits invalidate only affected IDs; unknown changes and bounded-tracking overflow
-use the existing global fallback. Placement/history changes do not change preview identity.
+use the existing global fallback. The query registers a shared content counter, so an edit may
+reevaluate each cell once; only a changed per-asset task identity starts a replacement decode.
+Placement/history changes do not change preview identity.
 The detail loader checks its captured revision predicate before installing a request and before
 publishing success or error, in addition to UUID and Task cancellation guards. This rejects a
 superseded response even before SwiftUI starts the replacement task. Same-asset replacement
@@ -509,18 +533,7 @@ in-progress, pending and failed, and so do the asset's other variants: an edit o
 inherited stem must not adopt, or write into, the name its own original is recorded under.
 Only the variant being written is excluded, or, for a group stem, all of the asset's own
 variants in the placement. An edited fallback's
-`edited` record names no file, on every completion path. Each store builds its index from
-its in-memory records on its first claim query, synchronously on the main actor: in practice
-at the first provisional mark or group-stem allocation of a session's first export to that
-store (about 0.4 s and 50–70 MB for 500k records in an optimized build, so it is not paid at
-load or by a session that exports nothing; measuring it at that size is #359). Each build logs its record count and elapsed
-milliseconds at debug level ("Built filename claims for … records in … ms"). The index is
-maintained in each store's `apply` after that, so log replay, import, prune and reset follow
-it; a normal commit costs three claim lookups and one main-actor hop. It is dropped, to be
-built again on the next query, wherever the in-memory records are replaced wholesale (when a
-load finishes, for every outcome, since a query while the store is `.loading` builds it from
-the empty records; retained recovery, the corrupt-reset path and the parked-snapshot restore
-after an unreadable reload). Claim queries do not answer "claimed" while a store loads: the
+`edited` record names no file, on every completion path. Normal loads prepare the complete claim index off main with the recovered records and counters. Rare retained/unreadable-history recovery prepares and installs synchronously in one admitted main-actor turn. One installer advances the records epoch and installs those matching values; incremental mutations update that index in the same synchronous batch as the records. Empty/loading history has an empty ready index, so a first query never scans the library. Normal load, retained recovery, reset and parked-history restoration all use the installer. Production writers await store-owned maintenance admission, then recheck destination/load ownership before their bounded synchronous mutation. A live claim check and its in-progress mark share that admitted turn. Claim queries do not answer "claimed" while a store loads: the
 resolver walks suffixes while a name is claimed, and only a stale job from the previous
 destination can ask then, and its generation check drops the result. A timeline placement
 without a year and month has no claim folder; an export of one fails at once (with an
@@ -598,7 +611,8 @@ the owning generation before changing UI state.
 
 | Type kind | Isolation | Examples |
 | --- | --- | --- |
-| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
+| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager` |
+| `@Observable` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
 | Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
 | Main-actor composition wrapper — final, conforms to `PhotoLibraryService`, optionally wraps an injected service for curated screenshot content | `@MainActor final class` | `PhotoLibraryManager` (wraps `overrideService`), `ScreenshotPhotoLibraryService` (peer, no inheritance) |
 | Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
@@ -611,8 +625,8 @@ Rules:
 - Do **not** promote a collaborator to `actor` to "fix" concurrency unless you have a measurement showing main-actor contention. `@MainActor` is the established pattern because `@Published` + SwiftUI binding works there without `await` ceremony.
 - Each `@MainActor final class` collaborator should carry a one-line comment at its top declaring its isolation. (Stops future contributors from silently making it `nonisolated`.)
 - Await detached work through `runDetached(priority:operation:)` (`Helpers/RunDetached.swift`), not `Task.detached { … }.value`. Awaiting `.value` never cancels the detached task, so its own cancellation checks never fire. The helper forwards the caller's cancellation and still waits for the operation to finish.
-- Record-store loads leave the main actor in one pipeline. `beginConfigure(for:)` runs the synchronous prologue (drains, parking, the destination switch, clears, and the nil and retained-recovery exits), publishes `.loading`, and reads the files (`JSONLRecordFile.readFiles`) on the store's serial IO queue at `.userInitiated` with enforced QoS, behind the previous destination's queued writes. `decode` and `prepare` run in a detached `.userInitiated` task, which skips them once a newer configure has started (a lock-protected generation). The result is installed in one main-actor turn after checking the ticket (configure generation and file); a stale result is discarded with a debug log line. Every state change goes through one funnel that resumes `waitUntilSettled()` callers whenever the state leaves `.loading`, including the nil exit, the retained exit and the blocking `configure(for:)`. A load replaced by another `beginConfigure(for:)` keeps the store `.loading`, so its waiters resume when the newest load settles. The drains stay: a configure while a load is still reading waits on the main actor for that read, not for its decode. `configure(for:)` remains the blocking composition of the same steps and publishes no `.loading`.
-- Readers of a loading store see empty records. Auto Export's `runExport` fails fast as for any store that isn't `.ready`; manual export controls are disabled through `ManualExportAvailability` (the Month and Year summaries read "Loading export history…"); `DestinationSafetyMonitor` waits for both stores after its scan and rechecks its generation and the stores' destination; Import Existing Backup waits (§Import outcome ownership). The onboarding auto-skip, `DiagnosticReporter` (0 records) and retry pruning (nothing pruned) may read the empty history; that is harmless.
+- Record-store loads leave the main actor in one pipeline. `beginConfigure(for:)` runs the synchronous prologue (parking, the destination switch, clears, and the nil and retained-recovery exits), publishes `.loading`, and reads the files (`JSONLRecordFile.readFiles`) on the store's serial IO queue at `.userInitiated` with enforced QoS, behind the previous destination's queued writes. `decode` and `prepare` run in a detached `.userInitiated` task, which skips them once a newer configure has started (a lock-protected generation). The result is installed in one main-actor turn after checking the ticket (configure generation and file); a stale result is discarded with a debug log line. Every state change goes through one funnel that resumes `waitUntilSettled()` callers whenever the state leaves `.loading`, including the nil and retained exits. A load replaced by another `beginConfigure(for:)` keeps the store `.loading`, so its waiters resume when the newest load settles. A pending configuration awaits previous physical writes, maintenance and cancellation cleanup before replacing their owner. Tests use `beginConfigure(for:)` and `await waitUntilSettled()`, like shipping callers. Retained/unreadable-history recovery performs its one-off preparation and installation synchronously. A pending transition retains the old history privately until physical maintenance and cancellation cleanup finish, exposing `.loading` and empty public queries meanwhile.
+- Readers of a loading store see empty records. Auto Export's `runExport` fails fast as for any store that isn't `.ready`; manual export controls are disabled through `ManualExportAvailability` (the Month and Year summaries read "Loading export history…"); `DestinationSafetyMonitor` waits for both stores after its scan, drops the result only when a newer evaluation replaced it, and counts only history from a store keyed to the destination it checked; Import Existing Backup waits (§Import outcome ownership). The onboarding auto-skip, `DiagnosticReporter` (0 records) and retry pruning (nothing pruned) may read the empty history; that is harmless.
 
 ### 3. AutoSync seam preservation
 
@@ -622,22 +636,25 @@ Rules:
 
 ```swift
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-  Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
-    .map { context, isRunning, queueCount, isEnqueueingAll in
-      let manualFireAndForget =
-        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
-      return ExportRunState(
-        activeContext: context,
-        isManualActive: context?.source == .manual || manualFireAndForget,
-        isAutoSyncActive: context?.source == .autoSync
-      )
-    }
-    .removeDuplicates()
-    .eraseToAnyPublisher()
+  Publishers.CombineLatest4(
+    activeRunContextBridge.publisher, isRunningBridge.publisher,
+    queueCountBridge.publisher, isPreparingExportBridge.publisher
+  )
+  .map { context, isRunning, queueCount, isPreparingExport in
+    let manualFireAndForget =
+      context == nil && (isRunning || queueCount > 0 || isPreparingExport)
+    return ExportRunState(
+      activeContext: context,
+      isManualActive: context?.source == .manual || manualFireAndForget,
+      isAutoSyncActive: context?.source == .autoSync
+    )
+  }
+  .removeDuplicates()
+  .eraseToAnyPublisher()
 }
 ```
 
-The `CombineLatest4` over `($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)` is the AutoSync contract. The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
+The `CombineLatest4` over `(activeRunContext, isRunning, queueCount, isPreparingExport)` is the AutoSync contract. Each is held in an `ObservableCombineBridge`, which delivers exactly as `@Published` does while views track the properties through Observation ([`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isPreparingExport` is true while any export scan, single-scope or bulk, has not finished queueing, so a start reads as busy from the click, before its first job lands in `pendingJobs` (issues #67 and #507). The same flag is part of `hasActiveExportWork`, which Import Existing Backup and `dispatchFullScopeRun` check. Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
 **Mirror pattern** (contextual excerpts when a coordinator owns state that AutoSync observes through the manager):
 
@@ -657,11 +674,18 @@ queueCoordinator.$queueCount
   .store(in: &queueCancellables)
 ```
 
-Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
+Both objects are `@MainActor`. The coordinator's `@Published` delivery and the manager's bridge delivery and storage are synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
+
+Unpublished queue contents stay owned by the coordinator. Queue mutations compare its
+`placementRevision` and refresh the month-specific `MonthQueueState` snapshots when counts
+change. Active-placement changes refresh the old and new month directly. Views observe
+these snapshots rather than manager-wide queue read-through notifications; a first dequeue
+therefore updates its month even when total queue depth stays equal. Task/count conveniences
+used only by tests live in test-target extensions.
 
 ### AutoSync dirty-work acknowledgement
 
-`AutoSyncReducer` captures a `RunDirtyBoundary` (run context, stable destination ID, and scopes changed since start). The fan-out sends `exportRunStarted` before each scope's `await runExport`; synchronous `exportRunStateChanged` observations capture manual runs and never reset an existing boundary for the same run ID. Keep the boundary across the idle publication: the completion summary arrives afterward.
+`AutoSyncReducer` captures a `RunDirtyBoundary` (run context, stable destination ID, and scopes changed since start). The AutoSync fan-out sends `exportRunStarted` before each scope's `await runExport`; repeated starts never reset an existing boundary for the same run ID. Ordinary manual UI actions have no run context and do not acknowledge dirty work through completion summaries. Keep the boundary across the idle publication: the completion summary arrives afterward.
 
 Every export-relevant Photos event invalidates the affected scopes, including repeated changes to the same asset, changes while full reconciliation is already pending, and collection-only changes for album scopes. Successful completion acknowledges only covered, selected scopes that have not changed since the matching run began. Unknown, failed, or destination-mismatched completions cannot clear pending work. The boundary is transient: the existing persisted dirty state remains authoritative after restart, so no persistence migration or counter is needed.
 
@@ -672,8 +696,8 @@ Completion events carry the originating destination and are accepted only for th
 matching run boundary. Every destination identity change cancels the old fan-out and invalidates
 its boundary. Returning to the same destination does not revive an abandoned run.
 
-Task-handle and diagnostic-journal cleanup must verify ownership before clearing state.
-An old task exiting after a replacement starts must leave the replacement's handle and journal intact.
+Task-handle cleanup must verify ownership before clearing state.
+An old task exiting after a replacement starts must leave the replacement's handle intact.
 These guards are transient; persisted run-summary, retry, and dirty-state formats stay unchanged.
 
 ### AutoSync retry lifecycle
@@ -701,9 +725,8 @@ suppresses the hook for that run instead.
 - An Export Now pressed during the run is exempt and still runs. A later trigger during
   the run does not replace it as the pending reason. Switching destinations drops any
   pending reason, Export Now included; the new destination gets its own trigger.
-- A manual export whose summary (`runExport`) reports a stop suppresses the next resume the
-  same way. Toolbar exports publish no summary, so after one of them stops, AutoSync can
-  still try once when its pending work is rescheduled.
+- Manual UI exports publish no completion summary, so after one of them stops, AutoSync
+  can still try once when its pending work is rescheduled.
 - Another reason that arrived during the run and adds no dirty work, such as a scope
   change, goes back into `pendingTriggerReason`. While idle, a held reason never fires on
   its own: a new trigger replaces it, or a resolving blocker (an import or manual export
@@ -725,8 +748,8 @@ macOS posts no notification when access changes, so access is refreshed at three
 before each fired debounce (the only path to a run), before each scope of the AutoSync
 fan-out (stopping the fan-out if access is gone), and app-wide on
 `NSApplication.didBecomeActiveNotification`. `refreshAuthorization()` publishes
-synchronously before it returns, so the reducer is blocked before the event that would start
-the run; the sink must use the value it receives. A grant made without bringing the app
+synchronously through the authorization bridge before storage, so the reducer is blocked
+before the event that would start the run; the sink must use the value it receives. A grant made without bringing the app
 forward waits for the next activation or launch.
 
 Access returning is handled like a failed change fetch: every selected scope gets
@@ -738,38 +761,31 @@ as it does for an import.
 Without access PhotoKit returns empty results, not an error. So `PhotoLibraryManager` keeps
 one rule for live versus cached reads: scan entry points that could otherwise report an
 empty library as complete read the live status (`fetchAssetsProgressive`,
-`availableYearsWithCounts`, and `fetchCollectionTree` on a cache miss), as do the scope
-counts `countAssets(in:)` and `countAdjustedAssets(in:)`; the UI-only counts (by year or
-month, adjusted counts by year or month) read the cached `isAuthorized`. A revoke inside a
-scope fails it at its next fetch, and a live denial while the cached flag is still set
-refreshes that flag, so the main window switches and Auto Export blocks at once.
+`availableYearsWithCounts`, and `loadCollectionTree` on a cache miss), as do the scope
+counts `countAssets(in:)` and `countAdjustedAssets(in:)`. A revoke inside a scope fails it
+at its next fetch, and a live denial while the cached flag is still set refreshes that flag,
+so the main window switches and Auto Export blocks at once.
 `ExportManager`'s enqueue guards read the service's cached `isAuthorized`; the fetch that
 follows each guard is the live check. A cached collection tree is returned without the live
 check, which keeps the album sidebar during the stale window; every collection scan still
 meets the check in `fetchAssetsProgressive`.
 
-### AutoSync dirty-state persistence acknowledgement
+### AutoSync dirty-state recovery
 
-The effect runner saves a destination's dirty snapshot before writing its advisory
-`lastDurablyRecordedToken`. A failed dirty save blocks that destination's token writes
-across later events, including events that produce no export work. Only a successful
-dirty-state save for the same stable destination releases the block. Other destinations
-continue independently; existing export and debounce effects still run.
+The reducer's latest dirty snapshot remains authoritative in memory after a failed save,
+including an empty snapshot after valid completion. Returning to that destination must
+not replace it with older disk state. A later existing save for the same destination
+recovers persistence; other destinations continue independently, and existing export and
+debounce effects still run. There is no additional retry timer.
 
-While persistence is blocked, the reducer's latest snapshot remains authoritative in
-memory, including an empty snapshot after valid completion. Returning to that destination
-must not replace it with older disk state. A later existing save recovers persistence;
-there is no additional retry timer or deferred-token queue.
-
-This guarantee applies to per-destination acknowledgement, not PhotoKit fetching. The
-PhotoKit adapter independently saves the global fetch cursor before emitting a change.
-Per-destination tokens are currently loaded but do not drive fetching. Unsaved snapshots
-and the failure block do not survive process exit; an enabled, eligible app launch uses
-the existing full-scope reconciliation. Persisted file formats remain unchanged.
+The PhotoKit adapter independently saves its global fetch cursor before emitting a change.
+Unsaved snapshots and the failure set do not survive process exit; an enabled, eligible
+app launch uses the existing full-scope reconciliation. Legacy destination token and
+current-run journal files are ignored and left untouched.
 
 Dirty/retry metadata loads throw on corrupt or inaccessible files; only missing files
 are empty. Uncertain dirty loads retain known reducer state and mark all recognized
-scopes for full reconciliation, blocked from acknowledgement until that snapshot saves.
+scopes for full reconciliation, retaining that snapshot until it saves.
 Every metadata save preflights the source. Readable invalid bytes are copied to a unique
 sibling before atomic replacement; an unreadable source or failed preservation prevents
 replacement. The source stays present if the recovery write fails.
@@ -828,7 +844,7 @@ Contextual excerpt from [`ExportQueueCoordinator.swift`](../../photo-export/Expo
 final class ExportQueueCoordinator: ObservableObject {
   @MainActor
   protocol Host: AnyObject {
-    var isEnqueueingAll: Bool { get }
+    var isPreparingExport: Bool { get }
     func performExport(job: ExportManager.ExportJob, generation: Int) async
     func didDrainQueue()
     func setCurrentJob(_ job: ExportManager.ExportJob)
@@ -843,12 +859,12 @@ final class ExportQueueCoordinator: ObservableObject {
 }
 ```
 
-On `ExportManager` (a final `ObservableObject`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
+On `ExportManager` (an `@Observable @MainActor final class`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
 
 The following initialization excerpt omits unrelated application dependencies:
 
 ```swift
-private(set) var queueCoordinator: ExportQueueCoordinator!
+@ObservationIgnored private(set) var queueCoordinator: ExportQueueCoordinator!
 
 init(...) {
   // ...assign all stored dependencies first...
@@ -871,11 +887,10 @@ Rules:
 
 ## Forwarder pattern
 
-`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for `{ queueCoordinator.`):
+`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for these property and method names):
 
 ```swift
-var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
-var isProcessing: Bool { queueCoordinator.isProcessing }
+var pendingJobs: ArraySlice<ExportJob> { queueCoordinator.pendingJobs }
 func processQueueIfNeeded() { queueCoordinator.processQueueIfNeeded() }
 private func resetProgressCounters() { queueCoordinator.resetProgressCounters() }
 ```
@@ -884,34 +899,50 @@ Rules:
 
 - **Read-only forwarders are fine.** They let existing call sites (and future features written against the old `ExportManager` API) keep working without rewrites. The sidebar multi-select feature merged from `main` integrated cleanly thanks to these forwarders.
 - **Avoid writing through to coordinator-owned state from `ExportManager` directly** unless the coordinator deliberately exposes a setter. Mutating `queueCoordinator.pendingJobs` from outside the coordinator breaks the Host-protocol invariant; go through a method the coordinator publishes.
-- **Avoid adding new `@Published` properties to `ExportManager` for state that conceptually lives on a coordinator.** Add the `@Published` to the coordinator and sink it onto the manager via the mirror pattern. (Exception: state that AutoSync observes via `exportRunStatePublisher` may need to live on the manager so the publisher composes — see §AutoSync seam preservation.)
+- **Keep coordinator-owned state on the coordinator.** Sink its `@Published` values synchronously onto a macro-tracked manager mirror for UI-only state, or onto an `ObservableCombineBridge` when a named Combine accessor exposes the manager property. State that composes `exportRunStatePublisher` remains intentionally bridged on the manager; see §AutoSync seam preservation.
 
 ## Canonical `start*` entry-point shape
 
-Every fire-and-forget export entry point on `ExportManager` uses `canStartExport(in:logTag:)` for import/store admission and `prepareExport(selectionOverride:bulk:)` for shared synchronous preparation. Keep entry-specific exclusive-bulk and empty-input checks between them; rejected starts must preserve their existing message and counter behavior.
+Every fire-and-forget export entry point on `ExportManager` has this shape:
 
 ```text
 func startExportX(...) {
-  // 1. canStartExport: import conflict, then the correct timeline/collection store.
-  // 2. Entry-specific exclusive-bulk and empty-input checks, in their existing order.
-  // 3. prepareExport: capture settings, clear messages, publish the optional bulk flag,
-  //    reset counters only when truly idle, then capture generation synchronously.
-  let (settings, gen) = prepareExport(...)
-  // 4. Track the preparation task; pass settings intact to enqueueX(... generation:).
-  //    Re-check isCurrent(gen) after every await. Process the queue on success.
-  //    An .unauthorized scan marks the active run incomplete, so its drain resolves .failed.
-  //    On throw, single-scope starts call handleScanFailure: record the preparation
-  //    failure, log, and resolve an active run as .failed when nothing is queued.
+  // 1. canStartExport(in:logTag:): an import in progress, then a pending `previousBackupMissing`
+  //    decision, then the timeline or collection store.
+  // 2. Entry-specific checks: a bulk start refuses while a scan is preparing, empty input
+  //    shows its message, and Month resumes an authorized paused queue instead of scanning.
+  //    A rejected start keeps messages and counters.
+  // 3. prepareExport, with no awaits: capture settings, clear messages, reset counters only
+  //    when idle (`!isRunning && !isProcessing && pendingJobs.isEmpty`), capture generation.
+  // 4. trackPreparation owns the scan task: it sets isPreparingExport at once, drops it
+  //    before starting the queue, and resolves an active run as .failed when a failed scan
+  //    queued nothing. A stale task cannot touch a replacement run.
 }
 ```
 
-Favorites is the only single-scope start AutoSync runs through `runExport`; the shared failure rule keeps the others safe if one is ever routed there.
+Single-scope starts call `startSingleScopeExport` with their scope name, already-done and
+failure messages, and an enqueue closure that receives the manager, settings and generation.
+An already-complete scan shows its message, an unauthorized scan marks the run incomplete,
+and a throw records the failure through `handleScanFailure`. Favorites is the only
+single-scope start AutoSync runs through `runExport`.
+
+Bulk starts (`startExportAll`, `startExportTimelineSelection` and the collection entry points
+through `startCollectionBulkExport`) pass `runBulkExportTask` their log tag and partial-scan
+warning; the body returns its zero-work message with its totals. The helper runs the body at
+utility priority, shows that message when nothing was queued and no item was unauthorized,
+and warns on a throw when jobs were already queued. `runBulkEnqueueLoop` releases the asset
+cache and yields per item, checks the generation and accumulates `BulkExportTotals`; an
+unauthorized item marks the run incomplete, so the drain resolves `.failed` while queued jobs
+still export. `CollectionBulkSource` orders its targets Favorites, user albums, then shared
+albums. Explicit IDs keep the caller's order and load no inventory before their per-album
+resolver; folder and explicit sources are user-album-only.
+
+The typed planners share `planAssetsProgressively`. Month uses one timeline placement, Year
+assigns a month per dated asset, and a collection resolves one placement and derives its fetch
+scope from the selection. Completion is checked before retry eligibility. Only a complete,
+nonempty collection scan admits placement metadata; a partial scan appends no jobs or skips.
 
 `ExportSettingsSnapshot` owns the capture policy for selection, Live Photo paired-video export, and video layout. Add future click-time settings to that value and its capture initializer, then consume them where needed; start methods, enqueue helpers and planners transport the same value. `ExportJob` stores it once, with computed compatibility accessors. Only the manager-reading initializer is `@MainActor`; scalar construction and the value itself remain pure. A run-context selection override must never mutate the toolbar selection. HEIC-to-JPEG conversion deliberately remains live at planning/write time and is excluded from this snapshot.
-
-Preparation has no awaits. Capture settings before publishing messages or the bulk flag, and capture generation before dispatching any asynchronous work. The idle check is `!isRunning && !isProcessing && pendingJobs.isEmpty`: paused pending work accumulates counters. Never move preparation ahead of entry-specific rejection checks or combine timeline and collection readiness.
-
-Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the `Task { [weak self] in }` wrapping, the `isEnqueueingAll = false` teardown only for the owning generation, the success finalize, and the partial-failure recovery on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`. An item whose scan returns `.unauthorized`, including one reached after Photos access is lost mid-loop, marks the active run incomplete, so the bulk drain resolves `.failed` even though the jobs already queued still export.
 
 ## Manual export feedback
 
@@ -926,7 +957,7 @@ of the legacy queue counters.
 Manual failure counts are placement jobs: compare failure signals around each serialized,
 owned export and credit the job only after its post-export persistence flush. Multiple
 variant failures count once there; `ExportRunSummary.failedCount` retains its existing
-per-variant meaning. Latch scan/authorization/cleared-work reasons across appended actions.
+per-variant meaning. Latch scan/authorization reasons across appended actions.
 Persistence teardown snapshots a stopped outcome before clearing ownership. Cancellation,
 supersession and destination interruption clear feedback. Dismissal and success expiry
 retire the terminal row without resetting coordinator counters or revealing old N/N UI.
@@ -961,7 +992,7 @@ stop on a failed result.
 ## Destination identity
 
 Every per-destination store — both record stores (`ExportRecords/<id>/`), the AutoSync state
-(`AutoSync/destinations/<id>/`), the current-run journal, and the safety-confirmation store — is
+(`AutoSync/destinations/<id>/`) and the safety-confirmation store — is
 keyed on a single **stable logical destination id**. This is a load-bearing contract: it is the
 root-cause fix for #127 (a network-share remount re-exporting everything).
 
@@ -1022,23 +1053,37 @@ CI checks the list twice:
 
 If you rename, move, add or remove one of these tests, update the list file, this table, and the gate lists in `AGENTS.md` and `CONTRIBUTING.md` in the same PR. A gate that returns early without recording an issue still reports Passed; no result-bundle check can catch that, so write gate preconditions with `#require` rather than `guard … return`.
 
+Read-only Photos access is enforced separately by the static CI guard
+`check-read-only-photos.py` and its self-tests; these gates protect runtime behavior. A suite
+gate rejects skipped or failing members but cannot notice that a method was deleted, so keep the
+canonical AutoSync cases and expectations when editing that suite. Destination tests inject only
+scope acquisition and release; their identity, bookmark, filesystem and loader operations are
+production code.
+
 | Test | Fires when… | What to do |
 | --- | --- | --- |
-| [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) | The emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, or `completedRunsPublisher` changes | Audit. Re-record snapshots only after confirming the new sequence is what AutoSync should see. |
-| `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence` | An AutoSync run no longer publishes `[idle, autoSyncActive, idle]`, or its completed-run summary changes | Audit. `isAutoSyncActive` must follow the active run's source. |
-| `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence` | A manual export superseding an AutoSync run no longer publishes `[idle, autoSyncActive, idle, manualActive, idle]`, or the superseded run's summary changes | Audit. The superseded AutoSync run must end `.superseded` / `.supersededByManualRun`, and no state may be manual and AutoSync at once. |
+| [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) | The emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, or `completedRunsPublisher` changes | Audit. Keep `[idle, autoSyncActive, idle]` for an automatic run and `[idle, autoSyncActive, idle, manualActive, idle]` when manual work supersedes it; the abandoned summary is `.superseded` / `.supersededByManualRun`, with no mixed active source. Re-record only after auditing a deliberate behavior change. |
 | [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) | A coordinator → manager mirror becomes async (`.receive(on:)`, `.async`, etc.) | Re-add the synchronous sink. The AutoSync `CombineLatest4` depends on synchrony for consistent reads. |
 | `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` | Pause/resume/cancel transitions on `isRunning`/`queueCount`/`isPaused` change | Audit; this is the toolbar's contract. |
 | [`ScreenshotPhotoLibraryServiceOverridesTests`](../../photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests.swift) | A `PhotoLibraryService` method on `ScreenshotPhotoLibraryService` returns production-PhotoKit-shaped empties instead of curated synthetic data | The tests pin every method's curated output. The "newly-added method silently inherits production" hole that prompted this gate's original wording is closed structurally — `ScreenshotPhotoLibraryService` is a peer conformance (no inheritance) since issue #67 item 1, so a new protocol method fails to compile until it has a real implementation. |
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 | `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
+| [`PublisherParityTests`](../../photo-exportTests/PublisherParityTests.swift) | A named publisher accessor (`identityPublisher`, `exportRunStatePublisher`, …) stops replaying its current value, delivers asynchronously or after the value is stored, replays a nested subscription differently, or changes whether an unchanged write is delivered | Audit. These pin `@Published` delivery; a migration of the property's storage (the Observation bridge) must match it rather than re-record. See [`observation-migration-recipe.md`](observation-migration-recipe.md). |
 | [`CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing`](../../photo-exportTests/CollectionBackupImportTests.swift) | Exporting an album, shared album or Favorites (manually or from Auto Export) after Import Existing Backup writes, copies or moves a file that was already in its folder, or its no-import control stops writing | Audit the collection scan and folder matching (`BackupScanner+Collections`, `CollectionBackupPlanner`). Adopted placements must keep the id `ExportPlacementResolver` gives the collection. |
 | `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements` | After export, wiping both histories and importing, the album placements differ from the exported ones (id, kind, `relativePath`), or the second export writes, copies or moves a file. Covers nested albums, a `_2` sibling, a lossy sanitized title, Favorites and a shared album, each under unedited originals, Edited mode, Include Originals, a paired Live Photo, and flat videos | Keep folder names coming from `ExportPlacementResolver`; do not add naming rules to the import. |
 | [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check), or an `EEXIST` from that rename falls back to check-then-move | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
 | [`IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`](../../photo-exportTests/IdenticalFileAdoptionTests.swift) | Re-exporting a month after its history is lost writes `IMG_0001 (1).JPG` beside an identical `IMG_0001.JPG`, records another name, or moves or re-timestamps the existing file | Restore adoption: an unclaimed regular file with the staged size and bytes is recorded under its stored name, with no move and no timestamps (§Final file commit boundary). |
 | `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` | Two byte-identical assets, re-exported after lost history in either order, end up recorded against one file, or write new ` (n)` copies | Restore the claim rule. A file another record names is never adopted, so each asset's record keeps a file of its own. |
 | `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` | After an exported file is deleted, another asset with the same filename takes its name, or Import Existing Backup keeps the deleted file's record, or the next export does not write the first asset back at its own name, leaving the folder without exactly two files | Restore the claim rule for empty names. A name another record names is taken even with nothing at it, so the reconcile can see its file is gone and drop the record. |
+| `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` | Remount fingerprint drift changes a stable destination key, reconfigures history under another id, or prompts for safety again. | Keep history and safety confirmations keyed on the stable id across fingerprint drift (§Destination identity). |
+| `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` | Selecting a genuinely different folder through real bookmark/file-identity evidence keeps the old id or yields no usable new id. | Mint a new stable id only from real different-folder evidence (§Destination identity). |
+| `ExportDestinationEscapeProtectionTests` | Directory resolution accepts a path outside the export root, including a symlink or reparented cached directory, or refuses a valid control path. | Keep the root containment check in directory resolution; never follow a symlink or cached directory out of the root. |
+| `JSONLRecordFileIOFailureTests` | Flush acknowledges failed I/O or a mutation submitted during its await, or snapshot recovery loses queued work. | Acknowledge only writes that reached disk, and carry queued work through snapshot recovery. |
+| `RecordStorePersistenceHealthTests` | An unflushed or failed record is acknowledged for retry, or history recovery loses pending or in-flight records. | Keep failed records retained for Retry; never acknowledge unflushed work. |
+| `HistoricalPersistenceFixtureTests` | Shipping loaders fail to replay released snapshots/logs, change their history/placement semantics, or the immutable fixture inventory drifts. | Keep the loaders backward compatible. Never edit the fixtures to make a loader pass. |
+| `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` | Shipping dirty/retry/summary/safety loaders fail to reopen released state or lose targeted/manual summary compatibility. | Keep the stores decoding released files. Never edit the fixtures to make a loader pass. |
+| `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` | An import reports success after a history append fails, or its successful control cannot reopen all durable records. | Report the failed append to the user, and keep every record that did reach disk. |
 
 ## Extension recipes
 
@@ -1079,19 +1124,19 @@ Keep placement dispatch in `RecordStoreRouter` and the relevant policies. A new
 ### Extracting a new collaborator from `ExportManager`
 
 1. Identify the seam — what *state and methods* on the manager does the new collaborator need? Write that as a `protocol Host: AnyObject` on the new class.
-2. Move the relevant `@Published` state to the new class. Keep the type the same on `ExportManager` as a mirror (sink in init).
-3. Construct the collaborator post-init with `host: self`. Store it as an IUO (`var coordinator: NewCoordinator!`).
+2. Move the relevant `@Published` state to the new class. Preserve its public type and manager mirror with a synchronous sink in init. Use a bridge for a named Combine accessor and macro-tracked storage for UI-only manager state.
+3. Construct the collaborator post-init with `host: self`. Store it as an ignored IUO (`@ObservationIgnored var coordinator: NewCoordinator!`).
 4. Move the methods. Replace each call site on `ExportManager` with a forwarder (`func foo() { coordinator.foo() }`) so existing tests and callers keep working.
 5. Verify the AutoSync seam: run [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift). If the emission sequence changes, the mirror sinks are wrong (likely async, or in the wrong order).
 6. Verify the synchrony pin: run [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) if the new collaborator owns any queue-adjacent state.
 
-### Adding a new `@Published` property AutoSync should observe
+### Adding a property AutoSync should observe
 
-1. Add the `@Published` to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's.
-2. If the owner is a collaborator: add a same-named `@Published` on `ExportManager` and `.sink` from the coordinator's publisher in `init`.
+1. Add the property to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's. On an `ObservableObject` collaborator it is `@Published`; a manager property exposed through any named Combine accessor uses `ObservableCombineBridge` (see [`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). UI-only manager state is macro-tracked.
+2. If the owner is a collaborator, add the required manager mirror and `.sink` synchronously from the coordinator's publisher in `init`. Choose bridged or plain tracked manager storage using the accessor rule above.
 3. If the new property changes `ExportRunState`'s shape, update the publisher
-   composition deliberately. Audit the emission sequence before re-recording
-   `AutoSyncSeamCharacterizationTests`.
+   composition deliberately using its bridge's `publisher`, not `$x`. Audit the
+   emission sequence before re-recording `AutoSyncSeamCharacterizationTests`.
 4. Mention the new field in `ExportManager+AutoSyncConformance.swift` if AutoSync needs to read it directly (not via the publisher).
 
 ## Deferred follow-ups
@@ -1105,4 +1150,4 @@ for current open work rather than treating the old extraction checklist as activ
 
 ## Where to ask
 
-If a contract above conflicts with the code (e.g. you find a `@Published` on the manager that should be a mirror, or a `Host` method that has become permanent and should be documented as such), open a PR — these rules are living. The plan doc that originated them is archived at [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md) for historical context.
+If a contract above conflicts with the code (e.g. you find a manager field that should belong to a collaborator, or a `Host` method that has become permanent and should be documented as such), open a PR — these rules are living. The plan doc that originated them is archived at [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md) for historical context.

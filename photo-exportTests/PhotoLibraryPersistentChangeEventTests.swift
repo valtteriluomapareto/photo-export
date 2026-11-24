@@ -11,7 +11,6 @@ struct PhotoLibraryPersistentChangeEventTests {
     #expect(event.updatedLocalIdentifiers.isEmpty)
     #expect(event.deletedLocalIdentifiers.isEmpty)
     #expect(event.collectionChangesPresent == false)
-    #expect(event.nextToken == nil)
     #expect(event.hasAssetChanges == false)
   }
 

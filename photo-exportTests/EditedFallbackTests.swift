@@ -28,49 +28,35 @@ struct EditedFallbackTests {
 
     func cleanup() {
       manager.cancelAndClear()
-      store.flushForTesting()
-      collectionStore.flushForTesting()
+      store.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
+  private func makeHarness() async -> Harness {
     let renderer = FakeMediaRenderer()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("EditedFallback")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("EditedFallback")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      mediaRenderer: renderer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
+    let h = await ExportManagerHarness(
+      label: "EditedFallback", userDefaults: TestScratch.defaults("EditedFallback"),
+      mediaRenderer: renderer)
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      renderer: renderer, store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+      manager: h.manager, photoLib: h.photoLib, dest: h.dest, writer: h.writer,
+      renderer: renderer, store: h.store, collectionStore: h.collectionStore,
+      storeRoot: h.storeRoot)
   }
 
   // MARK: - Pipeline behaviour
 
   @Test func editUnavailableTriggersOrigFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_8000.HEIC")
@@ -97,11 +83,14 @@ struct EditedFallbackTests {
   }
 
   @Test func unedittedAssetIsUnaffectedByFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "unedited", hasAdjustments: false)
+    let asset = TestAssetFactory.makeAsset(
+      id: "unedited",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["unedited"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_PLAIN.JPG")
@@ -121,11 +110,14 @@ struct EditedFallbackTests {
   }
 
   @Test func includeOriginalsModeUnaffectedByFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .editedWithOriginals
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
@@ -149,11 +141,14 @@ struct EditedFallbackTests {
   /// and unchanged `writeCalls` could pass for the wrong reasons (e.g. a
   /// silently-failed second start, or a hung queue that timed out).
   @Test func reExportSkipsAssetCoveredByFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
@@ -191,12 +186,15 @@ struct EditedFallbackTests {
   /// either the policy `isComplete` covered path OR the planner missing-variant
   /// filter would break this test.
   @Test func reExportSkipsLivePhotoWithPairedVideoUnavailableSentinel() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
     h.manager.livePhotosPairedExport = true
 
-    let asset = TestAssetFactory.makeAsset(id: "live-no-pv", isLivePhoto: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-no-pv",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      isLivePhoto: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     // Live Photo subtype says yes, but the resource enumeration omits `.pairedVideo`.
     // The variant exporter sees `producer.originalFilename == nil` for the paired
@@ -228,8 +226,8 @@ struct EditedFallbackTests {
 
   // MARK: - Store-level isExported recognition
 
-  @Test func isExportedRecognisesFallbackState() {
-    let h = makeHarness()
+  @Test func isExportedRecognisesFallbackState() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true)
@@ -259,8 +257,8 @@ struct EditedFallbackTests {
   /// Recognition requires the explicit
   /// `editedUnavailableOriginalBackedUpMessage` sentinel, which is only
   /// written after `runEditedFallbackOriginal` successfully finishes.
-  @Test func isExportedRejectsGenericSentinelAsFallback() {
-    let h = makeHarness()
+  @Test func isExportedRejectsGenericSentinelAsFallback() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "generic-only", hasAdjustments: true)
@@ -282,8 +280,8 @@ struct EditedFallbackTests {
   /// The same `.failed` `.edited` variant with a *different* error message
   /// must NOT count as exported — the fallback rule is keyed on the
   /// recoverable sentinel only, so other failures still re-queue.
-  @Test func isExportedRejectsFallbackWithDifferentError() {
-    let h = makeHarness()
+  @Test func isExportedRejectsFallbackWithDifferentError() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "other-fail", hasAdjustments: true)
@@ -306,8 +304,8 @@ struct EditedFallbackTests {
   /// in the exported count, matching the asset-aware `isExported`. Without
   /// this the year/month sidebar badge stays partial (typically 99%) even
   /// after the queue stops re-trying the asset.
-  @Test func sidebarSummaryCountsFallbackCoveredRecords() {
-    let h = makeHarness()
+  @Test func sidebarSummaryCountsFallbackCoveredRecords() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let yr = 2025
     let mo = 7
@@ -354,8 +352,8 @@ struct EditedFallbackTests {
   /// (the variant-loop's pre-fallback emission) must NOT contribute to the
   /// fallback bucket — only records carrying the explicit
   /// `editedUnavailableOriginalBackedUpMessage` sentinel count.
-  @Test func sidebarSummaryDoesNotCountGenericSentinelAsFallback() {
-    let h = makeHarness()
+  @Test func sidebarSummaryDoesNotCountGenericSentinelAsFallback() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let yr = 2025
     let mo = 8
@@ -378,8 +376,8 @@ struct EditedFallbackTests {
   /// re-queueing it because it requires both variants `.done`; the sidebar
   /// must agree, or it would advertise 100% while the queue retries forever.
   @Test
-  func sidebarSummaryEditedWithOriginalsDoesNotCountFallbackCoveredRecords() {
-    let h = makeHarness()
+  func sidebarSummaryEditedWithOriginalsDoesNotCountFallbackCoveredRecords() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let yr = 2025
     let mo = 9
@@ -411,8 +409,8 @@ struct EditedFallbackTests {
   /// mirror of the timeline-store helper. Pin its behaviour with a direct
   /// asset+placement test so a future refactor that touches one and forgets
   /// the other surfaces here.
-  @Test func collectionStoreRecognisesFallbackState() {
-    let h = makeHarness()
+  @Test func collectionStoreRecognisesFallbackState() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let placement = ExportPlacement(
@@ -445,8 +443,8 @@ struct EditedFallbackTests {
   }
 
   /// Collection-store mirror of the generic-sentinel rejection test.
-  @Test func collectionStoreRejectsGenericSentinelAsFallback() {
-    let h = makeHarness()
+  @Test func collectionStoreRejectsGenericSentinelAsFallback() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let placement = ExportPlacement(
@@ -497,13 +495,15 @@ struct EditedFallbackTests {
   /// 4. Only after the fallback's marker is set does the asset count as
   ///    covered.
   @Test func fallbackTreatsNaturalOrigFilenameCorrectly() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
     // Step 1: asset's Photos-side original filename literally ends in `_orig`.
     let assetUnedited = TestAssetFactory.makeAsset(
-      id: "natural-orig", hasAdjustments: false)
+      id: "natural-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-7"] = [assetUnedited]
     h.photoLib.resourcesByAssetId["natural-orig"] = [
       TestAssetFactory.makeResource(
@@ -519,7 +519,9 @@ struct EditedFallbackTests {
 
     // Step 2/3: same asset id, now adjusted, edited resource unavailable.
     let assetAdjusted = TestAssetFactory.makeAsset(
-      id: "natural-orig", hasAdjustments: true)
+      id: "natural-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [assetAdjusted]
 
     h.manager.startExportMonth(year: 2025, month: 7)
@@ -554,12 +556,13 @@ struct EditedFallbackTests {
   /// then writes the original and rewrites `.edited.lastError` to the
   /// `editedUnavailableOriginalBackedUpMessage` sentinel.
   @Test func editUnavailableVideoFallbackWritesOriginal() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
     let asset = AssetDescriptor(
-      id: "broken-video", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      id: "broken-video",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
       mediaType: .video, pixelWidth: 1920, pixelHeight: 1080,
       duration: 30, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
@@ -593,12 +596,18 @@ struct EditedFallbackTests {
   /// duplicates from a re-import) should both end up with bytes on disk via
   /// the fallback, not collide.
   @Test func fallbackAvoidsCollisionWithExistingOrigFile() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let assetA = TestAssetFactory.makeAsset(id: "share-A", hasAdjustments: true)
-    let assetB = TestAssetFactory.makeAsset(id: "share-B", hasAdjustments: true)
+    let assetA = TestAssetFactory.makeAsset(
+      id: "share-A",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "share-B",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [assetA, assetB]
     h.photoLib.resourcesByAssetId["share-A"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "DUP.HEIC")
@@ -624,11 +633,14 @@ struct EditedFallbackTests {
   // MARK: - Diagnostic report
 
   @Test func diagnosticReportAnnotatesFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
@@ -653,10 +665,13 @@ struct EditedFallbackTests {
 
 extension EditedFallbackTests {
   @Test func genericErrorWithMatchingTextAndDomainDoesNotAcquireReason() async {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
-    let asset = TestAssetFactory.makeAsset(id: "ordinary-error", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "ordinary-error",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC"),
@@ -675,10 +690,13 @@ extension EditedFallbackTests {
   }
 
   @Test func failedOriginalFallbackDoesNotAcquireSavedReason() async {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
-    let asset = TestAssetFactory.makeAsset(id: "fallback-fails", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "fallback-fails",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC")

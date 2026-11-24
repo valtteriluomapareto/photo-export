@@ -26,11 +26,6 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
     convertHEICToJPEGSubject.eraseToAnyPublisher()
   }
 
-  let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
-  var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
-    completedRunsSubject.eraseToAnyPublisher()
-  }
-
   /// If set, the next `runExport` returns this summary. Otherwise a default
   /// `.completed` summary is constructed from the requested context.
   var nextRunSummary: ExportRunSummary?
@@ -175,8 +170,7 @@ final class FakePhotosAuthorizationProvider: AutoSyncPhotosAuthorizationProvidin
 
 /// `PHAssetCacheControlling` test double. Counts invocations so tests can
 /// assert `ExportManager.runBulkEnqueueLoop` drops the PHAsset cache between
-/// bulk-export iterations (issue #112). Sibling pattern to
-/// `RecordingDirectoryFsync` from PR #114.
+/// bulk-export iterations (issue #112).
 @MainActor
 final class RecordingPHAssetCacheControl: PHAssetCacheControlling {
   private(set) var forgetCallCount: Int = 0
@@ -199,8 +193,6 @@ struct FakeAutoSyncEnvironmentBuilder {
   let dirtyStore = InMemoryAutoSyncDirtyStateStore()
   let retryStore = InMemoryAutoSyncRetryStateStore()
   let runSummaryStore = InMemoryAutoSyncRunSummaryStore()
-  let perDestinationTokenStore = InMemoryAutoSyncPerDestinationTokenStore()
-  let currentRunStore = InMemoryAutoSyncCurrentRunStore()
   let clock = TestClock()
   let photosAuthorization = FakePhotosAuthorizationProvider()
   let userDefaults = TestScratch.defaults("AutoSyncManager")
@@ -215,8 +207,6 @@ struct FakeAutoSyncEnvironmentBuilder {
       dirtyStateStore: dirtyStore,
       retryStateStore: retryStore,
       runSummaryStore: runSummaryStore,
-      perDestinationTokenStore: perDestinationTokenStore,
-      currentRunStore: currentRunStore,
       clock: clock,
       photosAuthorization: photosAuthorization,
       userDefaults: userDefaults

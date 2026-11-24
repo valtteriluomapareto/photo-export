@@ -21,30 +21,16 @@ struct ImportIdempotencyTests {
 
   // MARK: - Fixtures (mirrored from ExportManagerImportTests)
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL,
     CollectionExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ImportIdempotency")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collections.configure(for: "test")
-    let defaults = TestScratch.defaults("ImportIdempotency")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = await ExportManagerHarness(
+      label: "ImportIdempotency")
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.store, harness.storeRoot,
+      harness.collectionStore
     )
-    return (manager, photoLib, dest, store, storeRoot, collections)
   }
 
   /// The on-disk record files for one store: the append log (which a rewrite would grow)
@@ -134,7 +120,7 @@ struct ImportIdempotencyTests {
   /// catch reorderings incidentally (e.g. via a different `prunedRecords` count on a
   /// ghost file); this test pins the contract directly.
   @Test func importStageSequenceMatchesContract() async throws {
-    let (manager, photoLib, dest, _, storeRoot, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, storeRoot, _) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -151,7 +137,7 @@ struct ImportIdempotencyTests {
     ]
 
     var seenStages: [BackupScanner.ImportStage] = []
-    let cancellable = manager.$importStage.sink { stage in
+    let cancellable = manager.importStagePublisher.sink { stage in
       if let stage { seenStages.append(stage) }
     }
     defer { cancellable.cancel() }
@@ -188,10 +174,10 @@ struct ImportIdempotencyTests {
   /// (including `exportDate`) and their on-disk files unchanged, and report the same
   /// counts.
   @Test func bulkImportIsIdempotent() async throws {
-    let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot, collections) = await makeTestHarness()
     defer {
-      store.flushForTesting()
-      collections.flushForTesting()
+      store.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -248,8 +234,8 @@ struct ImportIdempotencyTests {
     #expect(
       firstSnapshot.count == 2,
       "first import must land exactly 2 records (one per matched file)")
-    store.flushForTesting()
-    collections.flushForTesting()
+    store.drainSynchronously()
+    collections.drainSynchronously()
     let firstRecords = store.recordsById
     let firstCollectionRecords = collections.recordBodies
     let firstTimelineFiles = try persistedBytes(
@@ -284,8 +270,8 @@ struct ImportIdempotencyTests {
       """)
     // Nothing may be rewritten either: same full records (including `exportDate`) and the
     // same bytes on disk, so the second import appended nothing.
-    store.flushForTesting()
-    collections.flushForTesting()
+    store.drainSynchronously()
+    collections.drainSynchronously()
     #expect(store.recordsById == firstRecords)
     #expect(collections.recordBodies == firstCollectionRecords)
     let secondTimelineFiles = try persistedBytes(
@@ -301,10 +287,10 @@ struct ImportIdempotencyTests {
   /// Album, shared-album and Favorites folders imported twice: the second import adopts the
   /// same placements, reports the same counts and writes no bytes to either history.
   @Test func collectionAdoptionIsIdempotent() async throws {
-    let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot, collections) = await makeTestHarness()
     defer {
-      store.flushForTesting()
-      collections.flushForTesting()
+      store.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -342,8 +328,8 @@ struct ImportIdempotencyTests {
     await manager.waitForImportCompletion()
     let first = try #require(manager.importResult)
     try #require(first.collectionMatchedCount == 3)
-    store.flushForTesting()
-    collections.flushForTesting()
+    store.drainSynchronously()
+    collections.drainSynchronously()
     let firstPlacements = collections.placements
     let firstRecords = collections.recordBodies
     let firstTimelineFiles = try persistedBytes(
@@ -355,8 +341,8 @@ struct ImportIdempotencyTests {
     manager.startImport()
     await manager.waitForImportCompletion()
     let second = try #require(manager.importResult)
-    store.flushForTesting()
-    collections.flushForTesting()
+    store.drainSynchronously()
+    collections.drainSynchronously()
 
     #expect(second == first)
     #expect(

@@ -10,7 +10,9 @@ struct ThumbnailView: View {
   let isSelected: Bool
   let isExported: Bool
 
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+
+  @Environment(\.gridThumbnailAssets) private var thumbnailAssets
 
   @State private var image: CGImage?
   @State private var failed: Bool = false
@@ -18,7 +20,7 @@ struct ThumbnailView: View {
 
   /// Quantized display-pixel target. Single bucket so the cache key stays
   /// stable across grid reuse.
-  private static let targetSize = CGSize(width: 256, height: 256)
+  private static let targetSize = ThumbnailRequestSpec.gridSize
 
   /// Lingering window before firing the HQ decode. Cells that scroll past
   /// in less than this never issue an HQ request, bounding the worst-case
@@ -45,12 +47,12 @@ struct ThumbnailView: View {
   var body: some View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([String(isExported)], for: "thumbnail-exported:\(asset.id)")
+      let _ = bodyCounter?.record("thumbnail-body:\(asset.id)")
     #endif
     let identity = loadIdentity
     ZStack {
       if let image {
-        Image(nsImage: NSImage(cgImage: image, size: .zero))
+        Image(decorative: image, scale: 1)
           .resizable()
           .scaledToFill()
           .frame(width: 100, height: 100)
@@ -75,7 +77,7 @@ struct ThumbnailView: View {
         Rectangle()
           .fill(Color.gray.opacity(0.3))
           .frame(width: 100, height: 100)
-          .overlay(ProgressView().accessibilityLabel("Loading thumbnail"))
+          .accessibilityLabel("Loading thumbnail")
       }
 
       // Decorations: not-yet-exported dot, selection ring, and a media-kind badge for videos.
@@ -150,8 +152,7 @@ struct ThumbnailView: View {
       image = cachedFast
       receivedCurrentImage = true
     } else {
-      let fast = await photoLibraryManager.decodedThumbnail(
-        for: identity.assetId, quantizedSize: Self.targetSize, deliveryMode: .fast)
+      let fast = await decodedThumbnail(for: identity, deliveryMode: .fast)
       guard ownsLoad(identity) else { return }
       if let fast {
         image = fast
@@ -161,8 +162,7 @@ struct ThumbnailView: View {
     // Linger so cells that flick past in <150 ms never spend an HQ decode.
     try? await Task.sleep(for: Self.hqLingerDelay)
     guard ownsLoad(identity) else { return }
-    let hq = await photoLibraryManager.decodedThumbnail(
-      for: identity.assetId, quantizedSize: Self.targetSize, deliveryMode: .highQuality)
+    let hq = await decodedThumbnail(for: identity, deliveryMode: .highQuality)
     guard ownsLoad(identity) else { return }
     if let hq {
       image = hq
@@ -172,6 +172,22 @@ struct ThumbnailView: View {
       image = nil
       failed = true
     }
+  }
+
+  private func decodedThumbnail(
+    for identity: LoadIdentity, deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    if let thumbnailAssets {
+      guard
+        let asset = await thumbnailAssets.handle(
+          for: identity.assetId, revision: identity.contentRevision,
+          isCurrent: { ownsLoad(identity) }), ownsLoad(identity)
+      else { return nil }
+      return await photoLibraryManager.decodedThumbnail(
+        for: asset, quantizedSize: Self.targetSize, deliveryMode: deliveryMode)
+    }
+    return await photoLibraryManager.decodedThumbnail(
+      for: identity.assetId, quantizedSize: Self.targetSize, deliveryMode: deliveryMode)
   }
 
   // MARK: - Accessibility

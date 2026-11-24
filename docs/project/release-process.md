@@ -166,8 +166,10 @@ tag publication creates a draft marked as a prerelease.
 
 Missing/invalid safety inputs, unsupported events and refs other than branches
 or `v*` tags do not enable publication. Automatic version-tag pushes retain the
-release behavior described above. To test these decisions offline without
-signing, uploads or tag creation, run `scripts/ci/test-guards.sh`.
+release behavior described above. To test channel context outputs offline without
+signing, uploads or tag creation, run `scripts/ci/test-guards.sh`. These fixtures execute
+the context scripts, not GitHub's workflow engine. Changes to event filters, publication
+conditions, permissions and concurrency still require direct review.
 
 ## Beta / pre-release tags
 

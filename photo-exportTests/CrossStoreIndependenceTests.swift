@@ -17,31 +17,18 @@ struct CrossStoreIndependenceTests {
 
   // MARK: - Fixtures
 
-  private func makeManager(suiteName: String? = nil) throws -> (
+  private func makeManager(suiteName: String? = nil) async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("CrossStoreInd")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults(
-      suiteName: suiteName ?? TestScratch.suiteName("CrossStore"))
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = await ExportManagerHarness(
+      label: "CrossStoreInd",
+      userDefaults: TestScratch.defaults(
+        suiteName: suiteName ?? TestScratch.suiteName("CrossStore")))
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.writer, harness.fileSystem,
+      harness.store, harness.collectionStore, harness.storeRoot
     )
-    return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }
 
   private func makeAsset(id: String, year: Int = 2025, month: Int = 4) -> AssetDescriptor {
@@ -68,7 +55,7 @@ struct CrossStoreIndependenceTests {
   @Test func favoritesFailureDoesNotMutateTimelineStore() async throws {
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -103,7 +90,7 @@ struct CrossStoreIndependenceTests {
   @Test func timelineFailureDoesNotMutateCollectionStore() async throws {
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -141,7 +128,7 @@ struct CrossStoreIndependenceTests {
     let suite = TestScratch.suiteName("cancel-timeline")
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager(suiteName: suite)
+    ) = try await makeManager(suiteName: suite)
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
     var tasks: [Task<Void, Never>] = []
@@ -151,8 +138,8 @@ struct CrossStoreIndependenceTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -216,7 +203,7 @@ struct CrossStoreIndependenceTests {
     let suite = TestScratch.suiteName("cancel-favorites")
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager(suiteName: suite)
+    ) = try await makeManager(suiteName: suite)
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
     var tasks: [Task<Void, Never>] = []
@@ -226,8 +213,8 @@ struct CrossStoreIndependenceTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -279,7 +266,7 @@ struct CrossStoreIndependenceTests {
   @Test func failedCollectionStoreDoesNotBlockTimelineExport() async throws {
     let (
       manager, photoLib, dest, writer, _, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -293,7 +280,7 @@ struct CrossStoreIndependenceTests {
     let snapshotURL = collectionDir.appendingPathComponent(
       CollectionExportRecordStore.Constants.snapshotFileName)
     try Data("not valid json".utf8).write(to: snapshotURL)
-    collectionStore.configure(for: "test")
+    await collectionStore.configureAndWait(for: "test")
     #expect(collectionStore.state == .failed)
     #expect(!manager.canExportCollection)
     #expect(manager.canExportTimeline, "timeline must remain exportable when collection is failed")
@@ -316,7 +303,7 @@ struct CrossStoreIndependenceTests {
   @Test func failedTimelineStoreDoesNotBlockCollectionExport() async throws {
     let (
       manager, photoLib, dest, writer, _, timelineStore, _, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -329,7 +316,7 @@ struct CrossStoreIndependenceTests {
     let snapshotURL = timelineDir.appendingPathComponent(
       ExportRecordStore.Constants.snapshotFileName)
     try Data("garbage".utf8).write(to: snapshotURL)
-    timelineStore.configure(for: "test")
+    await timelineStore.configureAndWait(for: "test")
     #expect(timelineStore.state == .failed)
     #expect(!manager.canExportTimeline)
     #expect(

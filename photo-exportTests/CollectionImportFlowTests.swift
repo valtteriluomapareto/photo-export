@@ -16,8 +16,8 @@ struct CollectionImportFlowTests {
   /// import would change: a timeline record and an album record whose files are missing.
   private func makeScenario(
     _ label: String, recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
-  ) throws -> CollectionImportHarness {
-    let h = CollectionImportHarness(label, recordLogIO: recordLogIO)
+  ) async throws -> CollectionImportHarness {
+    let h = await CollectionImportHarness(label, recordLogIO: recordLogIO)
     h.library.collectionTree = [Fixture.album("paris", "Paris"), Fixture.album("rome", "Rome")]
     let both = h.addAsset("both", "IMG_0001.JPG", date: Fixture.date(1))
     let romeOnly = h.addAsset("rome-1", "IMG_0002.JPG", date: Fixture.date(2))
@@ -46,8 +46,13 @@ struct CollectionImportFlowTests {
     return h
   }
 
+  /// The scopes read other than timeline months, which Import reads the same way.
+  private func collectionReads(_ h: CollectionImportHarness) -> [PhotoFetchScope] {
+    h.library.scopeFetchCalls.filter { if case .timeline = $0 { false } else { true } }
+  }
+
   @Test func importAdoptsAnAssetIntoBothTheTimelineAndItsAlbum() async throws {
-    let h = try makeScenario("CollectionImportBoth")
+    let h = try await makeScenario("CollectionImportBoth")
     await h.importBackup()
 
     #expect(h.manager.importError == nil)
@@ -70,7 +75,7 @@ struct CollectionImportFlowTests {
   }
 
   @Test func albumTreeFailureLeavesBothHistoriesUnchanged() async throws {
-    let h = try makeScenario("CollectionImportTreeFailure")
+    let h = try await makeScenario("CollectionImportTreeFailure")
     h.library.collectionTreeError = CocoaError(.fileReadUnknown)
     let before = h.historyBytes()
 
@@ -85,7 +90,7 @@ struct CollectionImportFlowTests {
   }
 
   @Test func albumFetchFailureFailsTheImportWithoutChanges() async throws {
-    let h = try makeScenario("CollectionImportAlbumFailure")
+    let h = try await makeScenario("CollectionImportAlbumFailure")
     h.library.fetchAssetsErrorByAlbumId["rome"] = CocoaError(.fileReadUnknown)
     let before = h.historyBytes()
 
@@ -99,7 +104,7 @@ struct CollectionImportFlowTests {
   }
 
   @Test func cancellingDuringAlbumMatchingLeavesBothHistoriesUnchanged() async throws {
-    let h = try makeScenario("CollectionImportCancel")
+    let h = try await makeScenario("CollectionImportCancel")
     let gate = AsyncCheckpoint()
     h.library.fetchAssetsCheckpointByAlbumId["paris"] = gate
     h.library.fetchAssetsCheckpointByAlbumId["rome"] = gate
@@ -119,8 +124,8 @@ struct CollectionImportFlowTests {
   }
 
   @Test func albumHistoryNotReadySkipsAlbumsAndImportsTheTimeline() async throws {
-    let h = try makeScenario("CollectionImportNotReady")
-    h.collections.configure(for: nil)
+    let h = try await makeScenario("CollectionImportNotReady")
+    await h.collections.configureAndWait(for: nil)
 
     await h.importBackup()
 
@@ -129,7 +134,7 @@ struct CollectionImportFlowTests {
     let report = try #require(h.manager.importResult)
     #expect(report.collectionsSkipped)
     #expect(report.collectionMatchedCount == 0)
-    #expect(h.library.scopeFetchCalls.isEmpty, "albums are not read when they can't be recorded")
+    #expect(collectionReads(h).isEmpty, "albums are not read when they can't be recorded")
     await h.cleanup()
   }
 
@@ -137,17 +142,17 @@ struct CollectionImportFlowTests {
   /// change, and returns the held snapshot.
   private func reloadHeld(
     _ h: CollectionImportHarness, io: HeldReadIO, collection: Bool
-  ) throws -> URL {
-    h.timeline.flushForTesting()
-    h.collections.flushForTesting()
+  ) async throws -> URL {
+    h.timeline.drainSynchronously()
+    h.collections.drainSynchronously()
     let snapshot = h.snapshotURL(collection: collection)
     io.hold(snapshot)
     if collection {
-      h.collections.configure(for: nil)
+      await h.collections.configureAndWait(for: nil)
       h.collections.beginConfigure(for: h.destinationId)
       try #require(h.collections.state == .loading)
     } else {
-      h.timeline.configure(for: nil)
+      await h.timeline.configureAndWait(for: nil)
       h.timeline.beginConfigure(for: h.destinationId)
       try #require(h.timeline.state == .loading)
     }
@@ -157,9 +162,9 @@ struct CollectionImportFlowTests {
   /// An import started while the album history loads waits for it and adopts the albums.
   @Test func importWaitsForLoadingAlbumHistoryAndAdoptsAlbums() async throws {
     let io = HeldReadIO()
-    let h = try makeScenario("CollectionImportAlbumsLoading", recordLogIO: io)
+    let h = try await makeScenario("CollectionImportAlbumsLoading", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: true)
+      let snapshot = try await reloadHeld(h, io: io, collection: true)
 
       #expect(h.manager.importCoordinator.startImport() == nil)
       #expect(h.manager.isImporting)
@@ -189,9 +194,9 @@ struct CollectionImportFlowTests {
   /// An import started while the timeline history loads waits for it instead of refusing.
   @Test func importWaitsForLoadingTimelineHistory() async throws {
     let io = HeldReadIO()
-    let h = try makeScenario("CollectionImportTimelineLoading", recordLogIO: io)
+    let h = try await makeScenario("CollectionImportTimelineLoading", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let snapshot = try await reloadHeld(h, io: io, collection: false)
 
       #expect(h.manager.importCoordinator.startImport() == nil)
       #expect(h.manager.isImporting)
@@ -218,9 +223,9 @@ struct CollectionImportFlowTests {
   /// is imported into the new destination's history or reported.
   @Test func destinationChangeWhileWaitingForHistoryAbandonsImport() async throws {
     let io = HeldReadIO()
-    let h = try makeScenario("CollectionImportLoadingSwitch", recordLogIO: io)
+    let h = try await makeScenario("CollectionImportLoadingSwitch", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let snapshot = try await reloadHeld(h, io: io, collection: false)
 
       #expect(h.manager.importCoordinator.startImport() == nil)
       #expect(h.manager.isImporting)
@@ -230,8 +235,8 @@ struct CollectionImportFlowTests {
         })
       // The held read blocks the IO queue the switch drains, so release it in the same turn.
       io.release(snapshot)
-      h.timeline.configure(for: "other")
-      h.collections.configure(for: "other")
+      await h.timeline.configureAndWait(for: "other")
+      await h.collections.configureAndWait(for: "other")
       await h.manager.waitForImportCompletion()
 
       #expect(!h.manager.isImporting)
@@ -255,9 +260,9 @@ struct CollectionImportFlowTests {
     ending: LoadEnding, sameFolder: Bool
   ) async throws {
     let io = HeldReadIO()
-    let h = try makeScenario("CollectionImportLoadFails", recordLogIO: io)
+    let h = try await makeScenario("CollectionImportLoadFails", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let snapshot = try await reloadHeld(h, io: io, collection: false)
       let log = snapshot.deletingLastPathComponent()
         .appendingPathComponent(ExportRecordStore.Constants.logFileName)
       let historyBytes = try Data(contentsOf: log)
@@ -304,7 +309,7 @@ struct CollectionImportFlowTests {
   /// "Same Folder" runs the import against a folder confirmed as the previous backup; album
   /// folders in it are adopted too.
   @Test func sameFolderCheckAdoptsAlbumHistory() async throws {
-    let h = try makeScenario("CollectionImportSameFolder")
+    let h = try await makeScenario("CollectionImportSameFolder")
     let month = Calendar.current.dateComponents([.year, .month], from: Fixture.date(1))
     let monthPath = "\(month.year!)/" + String(format: "%02d", month.month!) + "/"
     h.timeline.markVariantExported(
@@ -324,7 +329,7 @@ struct CollectionImportFlowTests {
   /// After the import, exporting the month and both albums again writes nothing, and the
   /// album export doesn't copy the timeline file either.
   @Test func exportingTheTimelineAndAlbumsAgainWritesNothing() async throws {
-    let h = try makeScenario("CollectionImportReexport")
+    let h = try await makeScenario("CollectionImportReexport")
     await h.importBackup()
     try #require(h.manager.importError == nil)
     let listing = try Fixture.listing(of: h.root)
@@ -344,7 +349,7 @@ struct CollectionImportFlowTests {
 
   /// An album that kept 2 of the 10 photos it was exported with keeps its folder.
   @Test func albumThatLostMostOfItsPhotosKeepsItsFolder() async throws {
-    let h = CollectionImportHarness("CollectionImportShrunkAlbum")
+    let h = await CollectionImportHarness("CollectionImportShrunkAlbum")
     h.library.collectionTree = [Fixture.album("trip", "Trip")]
     var kept: [AssetDescriptor] = []
     for index in 1...10 {
@@ -372,7 +377,7 @@ struct CollectionImportFlowTests {
   /// album's folder and is adopted; where case matters it is not the folder exports use, so it
   /// is not adopted and is reported.
   @Test func caseVariantFolderIsAdoptedOnlyWhereTheVolumeIgnoresCase() async throws {
-    let h = CollectionImportHarness("CollectionImportCaseVariant")
+    let h = await CollectionImportHarness("CollectionImportCaseVariant")
     h.library.collectionTree = [Fixture.album("trip", "Trip")]
     let asset = h.addAsset("a1", "IMG_1.JPG", date: Fixture.date(1))
     h.library.assetsByAlbumLocalId["trip"] = [asset]
@@ -407,7 +412,7 @@ struct CollectionImportFlowTests {
   /// task. The album being fetched is not fingerprinted, no further album is read, and neither
   /// history changes.
   @Test func destinationTeardownDuringAlbumMatchingStopsAlbumReads() async throws {
-    let h = try makeScenario("CollectionImportTeardown")
+    let h = try await makeScenario("CollectionImportTeardown")
     // An asset only in Paris, so its resources are read only if Paris is fingerprinted.
     let parisOnly = h.addAsset("paris-only", "IMG_0003.JPG", date: Fixture.date(3))
     h.library.assetsByAlbumLocalId["paris", default: []].append(parisOnly)
@@ -422,7 +427,7 @@ struct CollectionImportFlowTests {
     await gate.releaseAll()
     _ = await finished(task)
 
-    #expect(h.library.scopeFetchCalls == [.album(collectionId: "paris")])
+    #expect(collectionReads(h) == [.album(collectionId: "paris")])
     #expect(h.library.resourcesCallCounts["paris-only"] == nil)
     #expect(h.manager.importResult == nil)
     #expect(h.historyBytes() == before)

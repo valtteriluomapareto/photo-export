@@ -82,10 +82,11 @@ final class AppLifecycleCoordinator: ObservableObject {
 
   @Published private(set) var currentDestination: DestinationIdentitySnapshot = .none
   @Published private(set) var migrationConflict: MigrationConflictState?
-
-  /// Convenience accessor for the id of the most recently configured destination. Equals
-  /// `currentDestination.id`.
-  var lastConfiguredDestinationId: String? { currentDestination.id }
+  /// `$migrationConflict` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var migrationConflictPublisher: AnyPublisher<MigrationConflictState?, Never> {
+    $migrationConflict.eraseToAnyPublisher()
+  }
 
   private var didAttach = false
   private var destinationObservation: AnyCancellable?

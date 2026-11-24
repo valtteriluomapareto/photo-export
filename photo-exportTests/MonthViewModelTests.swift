@@ -34,10 +34,12 @@ struct MonthViewModelTests {
 
   // MARK: - Fixtures
 
-  private func makeAsset(id: String, hasAdjustments: Bool = false) -> AssetDescriptor {
+  private func makeAsset(id: String, month: Int = 6, hasAdjustments: Bool = false)
+    -> AssetDescriptor
+  {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -93,8 +95,8 @@ struct MonthViewModelTests {
     svc.favoritesAssets = assets
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .favorites)
-    vm.deactivate()
-    vm.deactivate()
+    await vm.deactivate().value
+    await vm.deactivate().value
     #expect(svc.stopCachingCalls.map { $0.map(\.id) } == [["A", "B"]])
     #expect(vm.selectedAsset(for: .favorites) == nil)
     var requests = 0
@@ -111,7 +113,7 @@ struct MonthViewModelTests {
     await vm.loadAssets(for: .favorites)
     #expect(requests == 1)
     #expect(svc.startCachingCalls.map { $0.map(\.id) } == [["A", "B"], ["A", "B"]])
-    vm.deactivate()
+    await vm.deactivate().value
     #expect(svc.stopCachingCalls.count == 2)
   }
 
@@ -139,7 +141,7 @@ struct MonthViewModelTests {
         }
       }
       await streams.started.waitForEnter(count: 1)
-      vm.deactivate()
+      await vm.deactivate().value
       svc.progressiveStreamOverride = nil
       svc.favoritesAssets = [makeAsset(id: "current")]
       if reactivateBeforeResponse { await vm.loadAssets(for: .favorites) }
@@ -162,7 +164,7 @@ struct MonthViewModelTests {
       #expect(svc.startCachingCalls.last?.map(\.id) == ["current"])
     } cleanup: {
       streams.finishAll()
-      vm.deactivate()
+      await vm.deactivate().value
       await streams.started.releaseAll()
     }
   }
@@ -173,7 +175,7 @@ struct MonthViewModelTests {
   /// PHAssets in the cache across scope changes.
   @Test func switchingScopeStopsPriorCacheBeforeStartingNew() async throws {
     let svc = FakePhotoLibraryService()
-    let scope1Assets = [makeAsset(id: "s1-a"), makeAsset(id: "s1-b")]
+    let scope1Assets = [makeAsset(id: "s1-a", month: 3), makeAsset(id: "s1-b", month: 3)]
     let scope2Assets = [makeAsset(id: "s2-a")]
     svc.assetsByYearMonth["2025-3"] = scope1Assets
     svc.favoritesAssets = scope2Assets
@@ -218,7 +220,7 @@ struct MonthViewModelTests {
 
   @Test func nilScopeClearsAllState() async throws {
     let svc = FakePhotoLibraryService()
-    let assets = [makeAsset(id: "a"), makeAsset(id: "b")]
+    let assets = [makeAsset(id: "a", month: 2), makeAsset(id: "b", month: 2)]
     svc.assetsByYearMonth["2025-2"] = assets
 
     let vm = MonthViewModel(photoLibraryService: svc)
@@ -232,6 +234,97 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == nil)
     #expect(!vm.isLoading)
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
+  }
+
+  @Test func visiblePreheatWindowMovesBeyondFirstFiveHundredUsingOnlyDeltas() async throws {
+    let service = FakePhotoLibraryService()
+    service.favoritesAssets = (0..<1200).map { makeAsset(id: "visible-\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .favorites)
+    await model.updateVisibleAssetIDs((800...805).map { "visible-\($0)" })
+    #expect(service.startCachingCalls.last?.map(\.id) == (776...829).map { "visible-\($0)" })
+    #expect(service.stopCachingCalls.last?.count == 500)
+    await model.updateVisibleAssetIDs((801...806).map { "visible-\($0)" })
+    #expect(service.startCachingCalls.last?.map(\.id) == ["visible-830"])
+    #expect(service.stopCachingCalls.last?.map(\.id) == ["visible-776"])
+    await model.deactivate().value
+    #expect(service.stopCachingCalls.last?.count == 54)
+  }
+
+  @Test func scrollingCoalescesPendingThumbnailWindows() async throws {
+    let service = FakePhotoLibraryService()
+    let firstResolve = AsyncCheckpoint()
+    service.thumbnailResolveOverride = { ids in
+      if ids == ["held"] { await firstResolve.enter() }
+      return ids.map { ThumbnailAsset.synthetic(makeAsset(id: $0)) }
+    }
+    let grid = GridThumbnailAssets(service: service)
+    let initial = Task { await grid.updateWindow([makeAsset(id: "held")]) }
+    var updates: [Task<Void, Never>] = []
+    var submitted = 0
+    let windows = (0..<12).map { index in
+      [makeAsset(id: "window-\(index)"), makeAsset(id: "shared")]
+    }
+    try await withCleanup {
+      try #require(await firstResolve.waitForEnter(count: 1))
+      for window in windows {
+        updates.append(
+          Task {
+            submitted += 1
+            await grid.updateWindow(window)
+          })
+        try #require(await eventually("scrolling window submitted") { submitted == updates.count })
+      }
+      await firstResolve.releaseAll()
+      await initial.value
+      for update in updates { await update.value }
+
+      #expect(service.thumbnailResolveCalls.count <= 2, "Only the held and newest windows resolve")
+      #expect(service.thumbnailResolveCalls.last == windows.last?.map(\.id))
+      var registrations: [String: Int] = [:]
+      for asset in service.startCachingCalls.flatMap({ $0 }) {
+        registrations[asset.id, default: 0] += 1
+      }
+      for asset in service.stopCachingCalls.flatMap({ $0 }) {
+        registrations[asset.id, default: 0] -= 1
+      }
+      #expect(registrations.values.allSatisfy { $0 == 0 || $0 == 1 })
+      #expect(Set(registrations.filter { $0.value == 1 }.keys) == Set(windows.last!.map(\.id)))
+    } cleanup: {
+      await firstResolve.releaseAll()
+      await initial.value
+      for update in updates { await update.value }
+      await grid.deactivate().value
+    }
+  }
+
+  @Test func obsoleteThumbnailResolutionCannotRepopulateNewScope() async throws {
+    let service = FakePhotoLibraryService()
+    let gate = AsyncCheckpoint()
+    let old = makeAsset(id: "same")
+    let fresh = makeAsset(id: "fresh")
+    service.thumbnailResolveOverride = { _ in
+      await gate.enter()
+      return [.synthetic(old)]
+    }
+    let map = GridThumbnailAssets(service: service)
+    var isCurrent = true
+    let pending = Task { await map.handle(for: "same", revision: 0, isCurrent: { isCurrent }) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      isCurrent = false
+      map.reset()
+      service.thumbnailResolveOverride = { _ in [.synthetic(fresh)] }
+      await map.updateWindow([fresh])
+      await gate.releaseAll()
+      #expect(await pending.value == nil)
+      #expect(
+        await map.handle(for: "fresh", revision: 0, isCurrent: { true })?.descriptor.id == "fresh")
+    } cleanup: {
+      await gate.releaseAll()
+      _ = await pending.value
+      await map.deactivate().value
+    }
   }
 
   // MARK: - Error path
@@ -420,9 +513,13 @@ struct MonthViewModelTests {
     try await withCleanup {
       let vm = MonthViewModel(photoLibraryService: svc)
       let firstVisible = AsyncCheckpoint()
-      let subscription = vm.$selectedAssetId.sink { id in
-        if id == "first" { Task { await firstVisible.enter() } }
-      }
+      let subscription = ObservationProbe(
+        { _ = vm.selectedAssetId },
+        onChange: {
+          Task { @MainActor in
+            if vm.selectedAssetId == "first" { await firstVisible.enter() }
+          }
+        })
       try await withCleanup {
         let load = Task { await vm.loadAssets(for: .favorites) }
         await streams.started.waitForEnter(count: 1)
@@ -446,7 +543,7 @@ struct MonthViewModelTests {
         #expect(!vm.isLoading)
         #expect(svc.startCachingCalls.last?.map(\.id) == ["first", "fresh"])
       } cleanup: {
-        subscription.cancel()
+        subscription.stop()
         await firstVisible.releaseAll()
       }
     } cleanup: {
@@ -488,6 +585,22 @@ struct MonthViewModelTests {
   /// watching a month grid as new photos land in the library. The newcomer
   /// must also be preheated for caching — only the added asset is started,
   /// survivors are not stopped.
+  @Test func identicalRefreshDoesNotPublishAnAssetArrayWrite() async {
+    let service = FakePhotoLibraryService()
+    let assets = [makeAsset(id: "first"), makeAsset(id: "second")]
+    service.assetsByYearMonth["2025-6"] = assets
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let writes = ObservationProbe { _ = model.assets }
+    await model.refresh(for: .timeline(year: 2025, month: 6))
+    #expect(model.assets == assets)
+    #expect(writes.changeCount == 0)
+    service.assetsByYearMonth["2025-6"] = assets.reversed()
+    await model.refresh(for: .timeline(year: 2025, month: 6))
+    #expect(writes.changeCount > 0)
+    #expect(model.assets == assets.reversed())
+  }
+
   @Test func refreshKeepsExistingAssetsAndAddsNewcomers() async throws {
     let svc = FakePhotoLibraryService()
     let original = (0..<3).map { makeAsset(id: "a\($0)") }
@@ -512,8 +625,8 @@ struct MonthViewModelTests {
   /// their `PHCachingImageManager` preheat is stopped.
   @Test func refreshPrunesRemovedAssets() async throws {
     let svc = FakePhotoLibraryService()
-    let keep = makeAsset(id: "keep")
-    let drop = makeAsset(id: "drop")
+    let keep = makeAsset(id: "keep", month: 7)
+    let drop = makeAsset(id: "drop", month: 7)
     svc.assetsByYearMonth["2025-7"] = [keep, drop]
 
     let vm = MonthViewModel(photoLibraryService: svc)
@@ -532,7 +645,7 @@ struct MonthViewModelTests {
   /// already displaying.
   @Test func refreshNilScopeIsNoOp() async throws {
     let svc = FakePhotoLibraryService()
-    let assets = [makeAsset(id: "x")]
+    let assets = [makeAsset(id: "x", month: 1)]
     svc.assetsByYearMonth["2025-1"] = assets
 
     let vm = MonthViewModel(photoLibraryService: svc)
@@ -550,7 +663,7 @@ struct MonthViewModelTests {
   /// without it the stale May fetch would clobber June's freshly-loaded assets.
   @Test func refreshBailsWhenScopeChangedMidFetch() async throws {
     let svc = FakePhotoLibraryService()
-    let may = [makeAsset(id: "may-1"), makeAsset(id: "may-2")]
+    let may = [makeAsset(id: "may-1", month: 5), makeAsset(id: "may-2", month: 5)]
     let june = [makeAsset(id: "june-1")]
     svc.assetsByYearMonth["2025-5"] = may
     svc.assetsByYearMonth["2025-6"] = june
@@ -624,10 +737,16 @@ struct MonthViewModelTests {
   @Test(arguments: [false, true])
   func refreshReconcilesRemovedSelection(empty: Bool) async {
     let service = FakePhotoLibraryService()
-    let a = TestAssetFactory.makeAsset(id: "A")
-    let b = TestAssetFactory.makeAsset(id: "B")
-    let c = TestAssetFactory.makeAsset(id: "C")
-    service.favoritesAssets = [a, b, c]
+    let a = TestAssetFactory.makeAsset(
+      id: "A",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 2)))
+    let b = TestAssetFactory.makeAsset(
+      id: "B",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 3)))
+    let c = TestAssetFactory.makeAsset(
+      id: "C",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 1)))
+    service.favoritesAssets = [c, a, b]
     let model = MonthViewModel(photoLibraryService: service)
     await model.loadAssets(for: .favorites)
     model.select(assetId: b.id)
@@ -667,12 +786,14 @@ struct MonthViewModelTests {
     service.favoritesAssets = [asset]
     let model = MonthViewModel(photoLibraryService: service)
     var events = 0
+    var stopped: Task<Void, Never>?
     let subscription = model.selectionUpdates.sink {
       events += 1
-      if events == 2 { model.deactivate() }
+      if events == 2 { stopped = model.deactivate() }
     }
     defer { subscription.cancel() }
     await model.loadAssets(for: .favorites)
+    await stopped?.value
     #expect(events == 2)
     #expect(model.selectedAsset(for: .favorites) == nil)
     #expect(service.startCachingCalls == [[asset]])
@@ -775,6 +896,7 @@ struct MonthViewModelTests {
     // Second batch is now suspended; we should see the first 200 assets
     // visible and isLoading already cleared.
     await gate.waitForEnter(count: 2)
+    #expect(await eventually("the first streamed batch is installed") { !vm.assets.isEmpty })
     #expect(
       vm.assets.count == 200,
       "first batch must be visible while later batches are still suspended")
@@ -866,17 +988,92 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == "b-0")
   }
 
-  // MARK: - Wrapper: loadAssets(forYear:month:)
+  // MARK: - Observation
 
-  @Test func legacyWrapperIsEquivalentToScopeBasedLoader() async throws {
-    let svc = FakePhotoLibraryService()
-    let asset = makeAsset(id: "wrapper")
-    svc.assetsByYearMonth["2025-8"] = [asset]
+  /// The month and collection grids own the model as `@State`, which builds a new one on every
+  /// view init and keeps only the first, so building one must not touch the library.
+  @Test func initMakesNoServiceCalls() async {
+    let service = RecordingPhotoLibraryService()
+    let model = MonthViewModel(photoLibraryService: service)
+    // Work the init schedules on the main actor would have run by now.
+    for _ in 0..<10 { await Task.yield() }
+    #expect(service.calls.isEmpty)
+    withExtendedLifetime(model) {}
+  }
 
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(forYear: 2025, month: 8)
+  /// The grids' error overlay reads `errorMessage`: a failing load must notify it once (the
+  /// load's opening clear of an absent message stores an equal value).
+  @Test func errorMessageReadersAreNotifiedByAFailingLoad() async {
+    let service = FakePhotoLibraryService()
+    service.fetchAssetsError = NSError(
+      domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
+    let model = MonthViewModel(photoLibraryService: service)
+    let error = ObservationProbe { _ = model.errorMessage }
+    await model.loadAssets(for: .timeline(year: 2025, month: 4))
+    #expect(error.changeCount == 1)
+    #expect(model.errorMessage == "boom")
+  }
 
-    #expect(vm.assets.map(\.id) == ["wrapper"])
-    #expect(vm.selectedAssetId == "wrapper")
+  /// The grids' spinner reads `isLoading`: a load on a new scope turns it on, then off at the
+  /// first batch, and the later stores of `false` are equal writes.
+  @Test func isLoadingReadersFollowAFreshLoad() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = [makeAsset(id: "a0")]
+    service.assetsByYearMonth["2025-7"] = [makeAsset(id: "b0")]
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let loading = ObservationProbe { _ = model.isLoading }
+    await model.loadAssets(for: .timeline(year: 2025, month: 7))
+    #expect(loading.changeCount == 2)
+    #expect(!model.isLoading)
+  }
+
+  /// The grid bodies render `assets`, `isLoading` and `errorMessage`; the selection reaches
+  /// them through the binding instead. Selecting, an idle deactivate and a refresh that finds
+  /// the same assets must not re-render the grid, and a refresh with new content must.
+  @Test func gridReadersFollowContentButNotSelection() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = (0..<3).map { makeAsset(id: "a\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    let scope = PhotoFetchScope.timeline(year: 2025, month: 6)
+    await model.loadAssets(for: scope)
+    let grid = ObservationProbe {
+      _ = model.assets
+      _ = model.isLoading
+      _ = model.errorMessage
+    }
+    let selection = ObservationProbe { _ = model.selectedAssetId }
+
+    model.select(assetId: "a1")
+    model.select(assetId: "a1")
+    await model.refresh(for: scope)
+    #expect(grid.changeCount == 0)
+    #expect(selection.changeCount == 1)
+
+    service.assetsByYearMonth["2025-6"]?.append(makeAsset(id: "a3"))
+    await model.refresh(for: scope)
+    #expect(grid.changeCount == 1)
+    #expect(selection.changeCount == 1, "The selected asset survived the refresh")
+
+    model.deactivate()
+    #expect(grid.changeCount == 1, "Deactivating an idle grid stores an unchanged isLoading")
+  }
+
+  /// `selectedAssetId` is written by hand around its bridge, so a wrong key path would notify
+  /// the grid's readers instead of the selection's.
+  @Test func selectionWriteNotifiesOnlyItsOwnReaders() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = (0..<2).map { makeAsset(id: "a\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let selection = ObservationProbe { _ = model.selectedAssetId }
+    let siblings = [
+      ObservationProbe { _ = model.assets },
+      ObservationProbe { _ = model.isLoading },
+      ObservationProbe { _ = model.errorMessage },
+    ]
+    model.select(assetId: "a1")
+    #expect(selection.changeCount == 1)
+    #expect(siblings.map(\.changeCount) == [0, 0, 0])
   }
 }

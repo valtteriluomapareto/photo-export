@@ -24,7 +24,7 @@ struct AmbiguousSameFolderTests {
 
   /// Only an unclear pick answered "Same Folder", saved and available, asks for the history check.
   @Test(arguments: Pick.allCases)
-  func onlyAnUnclearSameFolderPickAsksForTheHistoryCheck(pick: Pick) throws {
+  func onlyAnUnclearSameFolderPickAsksForTheHistoryCheck(pick: Pick) async throws {
     let dir = TestScratch.directory("UnclearPick")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -51,7 +51,7 @@ struct AmbiguousSameFolderTests {
       ambiguityResolver: { _ in pick == .unclearNew ? .newDestination : .sameDestination },
       bookmarkSaver: { _ in saves },
       validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     var requests: [(id: String?, available: Bool)] = []
@@ -60,7 +60,7 @@ struct AmbiguousSameFolderTests {
     }
     if pick == .unclearSameBookmarkFails { saves = false }
     if pick == .unclearSameFolderUnavailable { fingerprint = nil }
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
 
     if pick == .unclearSame {
       // Called once, after the selection applied: same stable id, folder available.
@@ -99,8 +99,8 @@ struct AmbiguousSameFolderTests {
 
     func cleanup() {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -111,13 +111,13 @@ struct AmbiguousSameFolderTests {
     collectionLocalIdentifier: "album-1", relativePath: "Collections/Albums/Italy/",
     createdAt: Date(timeIntervalSince1970: 1_700_000_000))
 
-  private func makeHarness(configureTimeline: Bool = true) -> Harness {
+  private func makeHarness(configureTimeline: Bool = true) async -> Harness {
     let dest = FakeExportDestination()
     let storeRoot = TestScratch.directory("UnclearPickImport")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    if configureTimeline { timeline.configure(for: "test") }
+    if configureTimeline { await timeline.configureAndWait(for: "test") }
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: dest,
       exportRecordStore: timeline, collectionExportRecordStore: collection,
@@ -144,7 +144,7 @@ struct AmbiguousSameFolderTests {
   /// A folder that holds none of the history's files is not the previous backup: nothing is
   /// pruned, and the import says so instead of reporting a completed import.
   @Test func folderWithoutAnyOfTheHistoryKeepsItUntouched() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
 
@@ -162,7 +162,7 @@ struct AmbiguousSameFolderTests {
   /// When some of the history is there, the import runs as usual and prunes only what's missing,
   /// in both stores.
   @Test func folderWithPartOfTheHistoryPrunesOnlyWhatIsMissing() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
     try h.plant("2025/03/", "A.HEIC")
@@ -178,7 +178,7 @@ struct AmbiguousSameFolderTests {
 
   /// Album history alone is evidence: a collections-only user's folder is recognized.
   @Test func albumHistoryAloneIsEnoughEvidence() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.collection.upsertPlacement(Self.italy)
     h.collection.markVariantExported(
@@ -199,7 +199,7 @@ struct AmbiguousSameFolderTests {
 
   /// With no history there is nothing to protect, so the import runs normally.
   @Test func emptyHistoryImportsNormally() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     h.manager.startImportForConfirmedSameFolder()
@@ -212,7 +212,7 @@ struct AmbiguousSameFolderTests {
   /// A check that can't start says why, instead of silently doing nothing; a plain import keeps
   /// its quiet refusal.
   @Test func refusedCheckExplainsWhyAndKeepsHistory() async throws {
-    let h = makeHarness(configureTimeline: false)
+    let h = await makeHarness(configureTimeline: false)
     defer { h.cleanup() }
 
     h.manager.startImport()
@@ -271,7 +271,7 @@ struct AmbiguousSameFolderTests {
       ambiguityResolver: { _ in chooseSame ? .sameDestination : .newDestination },
       bookmarkSaver: { _ in true },
       validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
-    destinationManager.persistSelectedFolderForTesting(pickedDir)
+    await destinationManager.persistSelectionAndWait(pickedDir)
     let stableId = try #require(destinationManager.destinationId)
 
     let checker = GatedReconciliationFileChecker()
@@ -288,7 +288,7 @@ struct AmbiguousSameFolderTests {
     let confirmations = InMemoryDestinationSafetyConfirmationStore()
     try confirmations.confirm(destinationId: stableId)
     let safetyMonitor = DestinationSafetyMonitor(
-      identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
+      identityPublisher: destinationManager.identityPublisher,
       exportRecordStore: timelineStore, collectionExportRecordStore: collectionStore,
       confirmationStore: confirmations, scanDirectory: { @MainActor in false })
     let adapter = DestinationSnapshotAdapter(
@@ -296,7 +296,7 @@ struct AmbiguousSameFolderTests {
       safetyMonitor: safetyMonitor)
     lifecycle.attach(
       initial: DestinationIdentitySnapshot(identity: destinationManager.identity),
-      identityPublisher: destinationManager.$identity.eraseToAnyPublisher())
+      identityPublisher: destinationManager.identityPublisher)
     safetyMonitor.attach()
 
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -312,8 +312,8 @@ struct AmbiguousSameFolderTests {
     defer {
       autoSync.setEnabled(false)
       exportManager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       try? FileManager.default.removeItem(at: pickedDir)
       defaults.removePersistentDomain(forName: suite)
@@ -342,8 +342,7 @@ struct AmbiguousSameFolderTests {
         exportRunner: builder.exportRunner, destination: adapter, scopes: builder.scopes,
         photos: builder.photos, importing: exportManager, dirtyStateStore: builder.dirtyStore,
         retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
-        perDestinationTokenStore: builder.perDestinationTokenStore,
-        currentRunStore: builder.currentRunStore, clock: builder.clock,
+        clock: builder.clock,
         photosAuthorization: builder.photosAuthorization,
         userDefaults: builder.userDefaults))
     let runner = builder.exportRunner
@@ -357,7 +356,7 @@ struct AmbiguousSameFolderTests {
     builder.clock.advance(by: AutoSyncReducer.debounceDelay(for: .appLaunch))
     #expect(await eventually("launch run") { runFinished(1) })
     fingerprint = nil
-    destinationManager.revalidateForTesting()
+    await destinationManager.revalidateAndWait()
     #expect(destinationManager.identity == .unavailable)
     #expect(
       await eventually("AutoSync sees no destination") {
@@ -371,7 +370,7 @@ struct AmbiguousSameFolderTests {
     let gate = AsyncCheckpoint()
     await checker.suspendNextProbe(at: gate)
     fingerprint = Self.lowConfidence("/Volumes/B/backup")
-    destinationManager.selectFolderForTesting(pickedDir)
+    await destinationManager.selectFolderAndWait(pickedDir)
 
     if chooseSame {
       #expect(exportManager.isImporting)
@@ -402,7 +401,7 @@ struct AmbiguousSameFolderTests {
       var held: [Bool] = []
       let heldSink = exportManager.isImportingPublisher.sink { held.append($0) }
       defer { heldSink.cancel() }
-      #expect(destinationManager.selectFolderKeepingHistoryForTesting(pickedDir))
+      #expect(await destinationManager.selectFolderKeepingHistory(at: pickedDir))
       #expect(destinationManager.destinationId == stableId)
       #expect(exportManager.isImporting)
       #expect(held == [true])
@@ -454,13 +453,13 @@ struct AmbiguousSameFolderTests {
   /// "Use as New Folder" reports what happened: a fresh history, a folder whose identity is the
   /// history's own (so no new history can start), or an unsaved bookmark that changed nothing.
   @Test(arguments: NewFolderCase.allCases)
-  func useAsNewFolderReportsWhetherAFreshHistoryStarted(_ newFolder: NewFolderCase) throws {
+  func useAsNewFolderReportsWhetherAFreshHistoryStarted(_ newFolder: NewFolderCase) async throws {
     var fingerprint = Self.lowConfidence("/Volumes/A/backup")
     var saves = true
     let (manager, dir, cleanup) = try makeSelectionManager(
       fingerprint: { fingerprint }, saves: { saves })
     defer { cleanup() }
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     switch newFolder {
@@ -468,7 +467,7 @@ struct AmbiguousSameFolderTests {
     case .sameIdentity: break
     case .notSaved: saves = false
     }
-    let outcome = manager.useSelectedFolderAsNewDestination()
+    let outcome = await manager.useSelectedFolderAsNewDestination()
 
     switch newFolder {
     case .differentIdentity:
@@ -486,7 +485,7 @@ struct AmbiguousSameFolderTests {
   /// While the user decides, AutoSync sees an import in progress and manual exports are refused;
   /// a destination change ends the wait.
   @Test func missingPreviousBackupHoldsExportsUntilTheDestinationChanges() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
     var held: [Bool] = []
@@ -513,9 +512,9 @@ struct AmbiguousSameFolderTests {
     let storeRoot = TestScratch.directory("UnclearPickCancel")
     let timeline = ExportRecordStore(
       baseDirectoryURL: storeRoot, reconciliationFileChecker: checker)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: dest,
       exportRecordStore: timeline, collectionExportRecordStore: collection,
@@ -545,12 +544,12 @@ struct AmbiguousSameFolderTests {
   /// Album history that can't be read doesn't count as evidence either way: missing timeline
   /// history still keeps everything untouched.
   @Test func unreadableAlbumHistoryDoesNotMaskAMissingBackup() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.timeline.markVariantExported(
       assetId: "asset-A", variant: .original, year: 2025, month: 3,
       relPath: "2025/03/", filename: "A.HEIC", exportedAt: Date())
-    h.collection.configure(for: nil)
+    await h.collection.configureAndWait(for: nil)
 
     h.manager.startImportForConfirmedSameFolder()
     await h.manager.waitForImportCompletion()
@@ -560,8 +559,8 @@ struct AmbiguousSameFolderTests {
   }
 
   /// While a migration conflict is open its recovery owns the records, so no check starts.
-  @Test func noCheckWhileAMigrationConflictIsOpen() {
-    let h = makeHarness()
+  @Test func noCheckWhileAMigrationConflictIsOpen() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let suite = TestScratch.suiteName("UnclearPickConflict")
     let defaults = TestScratch.defaults(suiteName: suite)
@@ -587,7 +586,7 @@ struct AmbiguousSameFolderTests {
   func continuingAfterUseAsNewFolderEndsTheWaitOnlyWhenSomethingChanged(
     _ newFolder: NewFolderCase
   ) async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
     h.manager.startImportForConfirmedSameFolder()
@@ -643,9 +642,9 @@ struct AmbiguousSameFolderTests {
     let dest = FakeExportDestination()
     let storeRoot = TestScratch.directory("UnclearPickBusy")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let manager = ExportManager(
       photoLibraryService: library, exportDestination: dest,
       exportRecordStore: timeline, collectionExportRecordStore: collection,
@@ -653,8 +652,8 @@ struct AmbiguousSameFolderTests {
       userDefaults: TestScratch.defaults("UnclearPickBusy"))
     defer {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }

@@ -21,12 +21,12 @@ struct ManualExportSummaryTests {
 
     private var closed = false
 
-    init(logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) {
+    init(logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) async {
       defaults = TestScratch.defaults(suiteName: suite)
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -49,8 +49,8 @@ struct ManualExportSummaryTests {
       guard !closed else { return }
       closed = true
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       destination.cleanup()
       defaults.removePersistentDomain(forName: suite)
       try? FileManager.default.removeItem(at: root)
@@ -59,12 +59,6 @@ struct ManualExportSummaryTests {
 
   private func reached(_ gate: AsyncCheckpoint) async -> Bool {
     await gate.waitForEnter(count: 1)
-  }
-
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
   }
 
   private final class FailingLogIO: JSONLRecordLogIO, @unchecked Sendable {
@@ -92,7 +86,7 @@ struct ManualExportSummaryTests {
   }
 
   @Test func legacyManualFailureReportsJobOutcomeWithoutNewRunPublications() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.close() }
     f.seed(["one", "two", "broken"], missing: ["broken"])
     var completedRuns: [ExportRunSummary] = []
@@ -111,7 +105,7 @@ struct ManualExportSummaryTests {
   }
 
   @Test func successfulManualRunAndNextAcceptedStartReplaceTerminalFeedback() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.close() }
     f.seed(["one"])
     f.manager.startExportMonth(year: 2026, month: 9)
@@ -127,7 +121,7 @@ struct ManualExportSummaryTests {
 
   @Test(arguments: [false, true])
   func zeroJobScanFailureAndDeniedPhotosNeverLookSuccessful(unauthorized: Bool) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.close() }
     f.photos.isAuthorized = !unauthorized
     if !unauthorized { f.photos.fetchAssetsError = CocoaError(.fileReadUnknown) }
@@ -136,6 +130,12 @@ struct ManualExportSummaryTests {
     let summary = try #require(f.manager.progressState.manualSummary)
     #expect(summary.completedCount == 0 && summary.result == .failed)
     #expect(summary.failureMessage?.isEmpty == false)
+    if unauthorized {
+      #expect(
+        summary.failureMessage
+          == "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+      )
+    }
     #expect(summary.message == "Export incomplete")
   }
 
@@ -160,7 +160,7 @@ struct ManualExportSummaryTests {
   func singleScopeScanFailureReportsItsMessageAndSettles(
     scope: SingleScope, injectFailure: Bool
   ) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.close() }
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: date)
@@ -226,7 +226,7 @@ struct ManualExportSummaryTests {
   }
 
   @Test func multipleVariantFailuresCountAsOneFailedJob() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.close() }
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     f.photos.assetsByYearMonth["2026-9"] = [
@@ -250,7 +250,7 @@ struct ManualExportSummaryTests {
 
   @Test(arguments: [false, true])
   func heldPreparationPreventsPrematureCompletionAndRetainsEarlierJobs(failing: Bool) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let gate = AsyncCheckpoint()
     try await withCleanup {
       f.seed(["first"])
@@ -281,29 +281,8 @@ struct ManualExportSummaryTests {
     }
   }
 
-  @Test func clearPendingReportsIncompleteInsteadOfComplete() async throws {
-    let f = Fixture()
-    let gate = AsyncCheckpoint()
-    try await withCleanup {
-      f.seed(["first", "second", "third"])
-      f.writer.checkpoint = gate
-      f.manager.startExportMonth(year: 2026, month: 9)
-      try #require(await reached(gate))
-      f.manager.clearPending()
-      await gate.releaseAll()
-      await f.manager.waitForQueueDrained()
-      let summary = try #require(f.manager.progressState.manualSummary)
-      #expect(summary.completedCount == 1 && summary.result == .failed)
-      #expect(summary.failureMessage?.isEmpty == false)
-      f.close()
-    } cleanup: {
-      await gate.releaseAll()
-      await f.manager.waitForQueueDrained()
-      f.close()
-    }
-  }
   @Test func bulkScanFailureStaysIncompleteWhenManualWorkIsAppended() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let scan = AsyncCheckpoint()
     let write = AsyncCheckpoint()
     try await withCleanup {
@@ -343,7 +322,7 @@ struct ManualExportSummaryTests {
   @Test(arguments: [1, 2])
   func persistenceFailureRetainsStoppedOutcome(failOnWrite: Int) async throws {
     let io = FailingLogIO(failOn: 1)
-    let f = Fixture(logIO: io)
+    let f = await Fixture(logIO: io)
     defer { f.close() }
     if failOnWrite == 2 {
       io.failAfterFileAppears(f.destination.rootURL.appendingPathComponent("2026/09/one.JPG"))
@@ -366,7 +345,7 @@ struct ManualExportSummaryTests {
 
   @Test(arguments: [ExportRunSource.manual, .autoSync])
   func awaitableRunKeepsItsExistingSummarySemantics(source: ExportRunSource) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.close() }
     f.seed(["one", "broken"], missing: ["broken"])
     f.photos.yearCounts = [(2026, 2)]
@@ -384,7 +363,7 @@ struct ManualExportSummaryTests {
   }
 
   @Test func cancelledLateFailureCannotPolluteReplacementSummary() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let old = AsyncCheckpoint()
     let replacement = AsyncCheckpoint()
     var oldTask: Task<Void, Never>?

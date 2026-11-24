@@ -10,11 +10,11 @@ import Testing
 struct CollectionBulkImportTests {
   private let date = Date(timeIntervalSince1970: 1_700_000_000)
 
-  private func makeStore() throws -> (URL, CollectionExportRecordStore) {
+  private func makeStore() async throws -> (URL, CollectionExportRecordStore) {
     let dir = TestScratch.directory("CollectionBulkImport")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     return (dir, store)
   }
 
@@ -37,8 +37,8 @@ struct CollectionBulkImportTests {
       contentsOf: dir.appendingPathComponent("dest/collection-records.jsonl"))
   }
 
-  @Test func addsPlacementBeforeItsRecords() throws {
-    let (dir, store) = try makeStore()
+  @Test func addsPlacementBeforeItsRecords() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let placement = album()
 
@@ -57,7 +57,7 @@ struct CollectionBulkImportTests {
     #expect(
       store.exportInfo(assetId: "v", placement: placement)?.variants[.original]?.subfolder
         == "videos")
-    store.flushForTesting()
+    store.drainSynchronously()
     let lines = try #require(logBytes(dir)).split(separator: UInt8(ascii: "\n"))
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
@@ -72,8 +72,8 @@ struct CollectionBulkImportTests {
     #expect(ops.dropFirst().allSatisfy { if case .upsertRecord = $0 { true } else { false } })
   }
 
-  @Test func skipsDoneVariantsAndOverwritesOthers() throws {
-    let (dir, store) = try makeStore()
+  @Test func skipsDoneVariantsAndOverwritesOthers() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let placement = album()
     store.upsertPlacement(placement)
@@ -99,8 +99,8 @@ struct CollectionBulkImportTests {
     #expect(b?.lastError == nil)
   }
 
-  @Test func keepsASavedPlacement() throws {
-    let (dir, store) = try makeStore()
+  @Test func keepsASavedPlacement() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let saved = album(createdAt: Date(timeIntervalSince1970: 1))
     store.upsertPlacement(saved)
@@ -124,8 +124,8 @@ struct CollectionBulkImportTests {
     #expect(store.exportInfo(assetId: "b", placement: saved) == nil)
   }
 
-  @Test func rejectsTimelinePlacements() throws {
-    let (dir, store) = try makeStore()
+  @Test func rejectsTimelinePlacements() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     store.bulkImportRecords([
       .init(
@@ -135,10 +135,10 @@ struct CollectionBulkImportTests {
     #expect(store.recordBodies.isEmpty)
   }
 
-  @Test func ignoresAStoreThatIsNotReady() throws {
-    let (dir, store) = try makeStore()
+  @Test func ignoresAStoreThatIsNotReady() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: nil)
+    await store.configureAndWait(for: nil)
     store.bulkImportRecords([
       .init(placement: album(), records: ["a": [.original: done("A.JPG")]])
     ])
@@ -146,8 +146,8 @@ struct CollectionBulkImportTests {
     #expect(store.recordBodies.isEmpty)
   }
 
-  @Test func importSurvivesAReload() throws {
-    let (dir, store) = try makeStore()
+  @Test func importSurvivesAReload() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let placement = album()
     store.bulkImportRecords([
@@ -155,31 +155,31 @@ struct CollectionBulkImportTests {
         placement: placement,
         records: ["a": [.original: done("A.JPG"), .edited: done("A.HEIC")]])
     ])
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let reopened = CollectionExportRecordStore(baseDirectoryURL: dir)
-    reopened.configure(for: "dest")
+    await reopened.configureAndWait(for: "dest")
     #expect(reopened.state == .ready)
     #expect(reopened.placements[placement.id]?.relativePath == placement.relativePath)
     let variants = reopened.exportInfo(assetId: "a", placement: placement)?.variants
     #expect(variants?[.original]?.filename == "A.JPG")
     #expect(variants?[.edited]?.filename == "A.HEIC")
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 
-  @Test func repeatedImportWritesNoBytes() throws {
-    let (dir, store) = try makeStore()
+  @Test func repeatedImportWritesNoBytes() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let batch = CollectionExportRecordStore.ImportBatch(
       placement: album(), records: ["a": [.original: done("A.JPG")]])
     store.bulkImportRecords([batch])
-    store.flushForTesting()
+    store.drainSynchronously()
     let before = try #require(logBytes(dir))
     store.flushPendingNotifications()
     let counter = store.mutationCounter
 
     store.bulkImportRecords([batch])
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.recordedVariantCount(of: [batch]) == 1)
     #expect(logBytes(dir) == before)

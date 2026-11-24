@@ -1,14 +1,18 @@
 import AppKit
 import SwiftUI
+import Observation
 import Testing
 
 @testable import Photo_Export
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.serialized, .timeLimit(.minutes(2)))
   struct CollectionPlacementStatusTests {
     enum Change: CaseIterable { case rename, ancestorRename, move, sharedRename }
+
+    @Observable
+    final class RenderTick { var value = 0 }
 
     @MainActor
     private struct Host: View {
@@ -18,6 +22,10 @@ import Testing
       let folderId: String?
       var showsSidebar = true
       var showsFolderPane = true
+      var showsCollectionPane = true
+      let tick: RenderTick
+      let records: CollectionExportRecordStore
+      let counter: BodyInvalidationCounter
       @State private var selectedAsset: AssetDescriptor?
       @State private var sidebarSelection: Set<LibrarySelection> = []
       @State private var folderSelection: LibrarySelection?
@@ -28,11 +36,13 @@ import Testing
             CollectionsSidebarView(selectionSet: $sidebarSelection, exportManager: manager)
               .frame(width: 260)
           }
-          CollectionContentView(
-            selection: selection, title: "Current album", versionSelection: .edited,
-            livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
-            photoLibraryService: service
-          ).equatable().frame(width: 350)
+          if showsCollectionPane {
+            CollectionContentView(
+              selection: selection, title: "Current album", versionSelection: .edited,
+              livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
+              photoLibraryService: service
+            ).equatable().frame(width: 350)
+          }
           if let folderId, showsFolderPane {
             FolderContentView(
               folderId: folderId, title: "Current folder", selection: $folderSelection,
@@ -40,6 +50,20 @@ import Testing
             ).frame(width: 350)
           }
         }
+        .overlay { PublicationProbe(tick: tick, records: records, counter: counter) }
+      }
+    }
+
+    private struct PublicationProbe: View {
+      let tick: RenderTick
+      let records: CollectionExportRecordStore
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("collection-barrier:\(tick.value)")
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("sidebar-publication:\(records.mutationCounter)")
+        Color.clear.frame(width: 1, height: 1)
       }
     }
 
@@ -51,7 +75,9 @@ import Testing
       let records: CollectionExportRecordStore
       let manager: ExportManager
       let fakeDestination = FakeExportDestination()
+      // Preserve rendered snapshots while mounted; unchanged children may skip body evaluation.
       let counter = BodyInvalidationCounter()
+      let tick = RenderTick()
       let asset = TestAssetFactory.makeAsset(id: "changed-asset")
       let unchangedAsset = TestAssetFactory.makeAsset(id: "unchanged-asset")
       let root = TestScratch.directory("CollectionPlacementStatus")
@@ -66,13 +92,14 @@ import Testing
       let sidebarFolderId: String?
       var window: NSWindow?
 
-      init(change: Change) throws {
+      init(change: Change, notificationClock: (any AutoSyncClock)? = nil) async throws {
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
-        records = CollectionExportRecordStore(baseDirectoryURL: root)
+        records = CollectionExportRecordStore(
+          baseDirectoryURL: root, notificationClock: notificationClock ?? SystemAutoSyncClock())
         defaults = TestScratch.defaults(suiteName: defaultsName)
-        timeline.configure(for: "A")
-        records.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await records.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: records,
@@ -150,20 +177,25 @@ import Testing
       }
 
       func show(
-        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true
+        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true,
+        collectionPane: Bool = true
       ) {
         let hosted = NSHostingView(
           rootView:
             Host(
               service: service, manager: manager, selection: selectionOverride ?? selection,
-              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane
+              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane,
+              showsCollectionPane: collectionPane,
+              tick: tick, records: records, counter: counter
             )
-            .environmentObject(library).environmentObject(timeline).environmentObject(records)
-            .environmentObject(manager)
+            .environment(library).environment(timeline).environment(records)
+            .environment(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
-            .environment(\.bodyInvalidationCounter, counter))
+            .environment(\.bodyInvalidationCounter, counter)
+            .environment(\.accessibilityEnabled, true).defaultAppStorage(defaults))
         let hostWindow = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 1000, height: 800),
+          contentRect: NSRect(
+            x: -10000, y: -10000, width: collectionPane ? 1000 : 350, height: 800),
           styleMask: [.borderless], backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
@@ -186,75 +218,269 @@ import Testing
         }
       }
 
+      func barrier() async throws {
+        tick.value += 1
+        let key = "collection-barrier:\(tick.value)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
+        var awaited = 0
+        while awaited < counter.tasks.count {
+          let pending = Array(counter.tasks.dropFirst(awaited))
+          awaited = counter.tasks.count
+          for task in pending { _ = await finished(task) }
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+      }
+
       func close() {
         window?.orderOut(nil)
         window?.contentView = nil
         window?.close()
         window = nil
         counter.reset()
-        timeline.flushForTesting()
-        records.flushForTesting()
+        timeline.drainSynchronously()
+        records.drainSynchronously()
         defaults.removePersistentDomain(forName: defaultsName)
         fakeDestination.cleanup()
         try? FileManager.default.removeItem(at: root)
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
+    @Test(arguments: [false, true])
+    func sidebarUpdatesOnlyAffectedBadge(folder: Bool) async throws {
+      let f = try await Fixture(
+        change: folder ? .ancestorRename : .rename, notificationClock: TestClock())
+      defer { f.close() }
+      let other = PhotoCollectionDescriptor(
+        id: "album:other", localIdentifier: "other", title: "Other", kind: .album,
+        pathComponents: [], children: [])
+      f.service.collectionTree = f.currentTree + [other]
+      f.service.assetsByAlbumLocalId["other"] = [TestAssetFactory.makeAsset(id: "other")]
+      let otherPlacement = try ExportPlacementResolver().placement(
+        for: .album(collectionId: "other"), collections: [other], existingPlacements: [])
+      f.set(f.current, .inProgress)
+      f.set(otherPlacement, .inProgress, assetId: "other")
+      if let stable = f.unchanged { f.set(stable, .done, assetId: "unchanged-asset") }
+      f.records.flushPendingNotifications()
+      f.show(folderPane: false)
+      try #require(
+        await observe(in: f.window) {
+          badge("1", id: "album:other", in: f)
+            && badge(folder ? "1/2" : "1", id: folder ? "folder:folder" : "album:target", in: f)
+        })
+      try await f.barrier()
+      let otherBodies = f.counter.count(for: "collection-row-body:album:other")
+      let changedBodyKey =
+        folder ? "folder-row-body:folder:folder" : "collection-row-body:album:target"
+      let changedBodies = f.counter.count(for: changedBodyKey)
+      f.set(f.current, .done)
+      f.records.flushPendingNotifications()
+      let revisionKey = "sidebar-publication:\(f.records.mutationCounter)"
+      try #require(
+        await observe(in: f.window) {
+          badge("Fully exported", id: folder ? "folder:folder" : "album:target", in: f)
+            && f.counter.count(for: revisionKey) > 0
+        })
+      try await f.barrier()
+      #expect(f.counter.count(for: "collection-row-body:album:other") == otherBodies)
+      #expect(f.counter.count(for: changedBodyKey) - changedBodies <= 1)
     }
-    private func loaded(_ f: Fixture) async throws {
-      let ready = await observe {
-        guard f.counter.renderedText["thumbnail-exported:changed-asset"] != nil else {
-          return false
-        }
-        if let id = f.sidebarFolderId {
-          return f.counter.renderedText["folder-summary"]?.first?.hasSuffix("/2") == true
-            && f.counter.renderedText["folder-sidebar:\(id)"] != nil
-        }
-        let id = f.current.kind == .sharedAlbum ? "shared:target" : "album:target"
-        return f.counter.renderedText["collection-sidebar:\(id)"] != nil
+
+    @Test func coalescedChildChangesLeaveNetZeroFolderBadgeQuiet() async throws {
+      let f = try await Fixture(change: .ancestorRename, notificationClock: TestClock())
+      defer { f.close() }
+      let stable = try #require(f.unchanged)
+      let folder = try #require(f.currentTree.first)
+      let target = try #require(folder.children.first { $0.localIdentifier == "target" })
+      let unchanged = try #require(folder.children.first { $0.localIdentifier == "stable" })
+      f.set(f.current, .done)
+      f.set(stable, .inProgress, assetId: "unchanged-asset")
+      f.records.flushPendingNotifications()
+      let folderStatus = f.records.sidebarStatus(for: folder)
+      let targetStatus = f.records.sidebarStatus(for: target)
+      let stableStatus = f.records.sidebarStatus(for: unchanged)
+      let folderProbe = ObservationProbe { _ = folderStatus.value }
+      let targetProbe = ObservationProbe { _ = targetStatus.value }
+      let stableProbe = ObservationProbe { _ = stableStatus.value }
+      defer {
+        folderProbe.stop()
+        targetProbe.stop()
+        stableProbe.stop()
       }
-      try #require(ready, "Wait for actual asset/count rendering before checking status")
+      f.set(f.current, .inProgress)
+      f.set(stable, .done, assetId: "unchanged-asset")
+      #expect(targetStatus.value.exportedCount == 1)
+      #expect(stableStatus.value.exportedCount == 0)
+      f.records.flushPendingNotifications()
+      #expect(folderStatus.value.exportedCount == 1)
+      #expect(folderProbe.changeCount == 0)
+      #expect(targetStatus.value.exportedCount == 0)
+      #expect(stableStatus.value.exportedCount == 1)
+      // Each source publication replaces one equatable snapshot per changed row.
+      #expect(targetProbe.changeCount > 0 && targetProbe.changeCount <= 1)
+      #expect(stableProbe.changeCount > 0 && stableProbe.changeCount <= 1)
+    }
+
+    enum BadgeReentry: CaseIterable { case identicalTree, firstBadgeFlush }
+
+    @Test(arguments: BadgeReentry.allCases)
+    func reentrantPublicationDeliversBothPendingBadges(reentry: BadgeReentry) async throws {
+      let f = try await Fixture(change: .ancestorRename, notificationClock: TestClock())
+      defer { f.close() }
+      let stable = try #require(f.unchanged)
+      let folder = try #require(f.currentTree.first)
+      let target = try #require(folder.children.first { $0.localIdentifier == "target" })
+      let unchanged = try #require(folder.children.first { $0.localIdentifier == "stable" })
+      f.set(f.current, .inProgress)
+      f.set(stable, .inProgress, assetId: "unchanged-asset")
+      f.records.flushPendingNotifications()
+      f.records.updateSidebarCollections(f.currentTree)
+      let targetStatus = f.records.sidebarStatus(for: target)
+      let stableStatus = f.records.sidebarStatus(for: unchanged)
+      var reentered = false
+      func reenter(placement: ExportPlacement, assetId: String) {
+        guard !reentered else { return }
+        reentered = true
+        switch reentry {
+        case .identicalTree: f.records.updateSidebarCollections(f.currentTree)
+        case .firstBadgeFlush:
+          // Changing another variant preserves this badge's any-done value.
+          f.records.markVariantInProgress(
+            assetId: assetId, placement: placement, variant: .edited, filename: "EDIT.JPG")
+          f.records.flushPendingNotifications()
+        }
+      }
+      let targetProbe = ObservationProbe(
+        { _ = targetStatus.value },
+        onChange: {
+          reenter(placement: f.current, assetId: "changed-asset")
+        })
+      let stableProbe = ObservationProbe(
+        { _ = stableStatus.value },
+        onChange: {
+          reenter(placement: stable, assetId: "unchanged-asset")
+        })
+      defer {
+        targetProbe.stop()
+        stableProbe.stop()
+      }
+      f.set(f.current, .done)
+      f.set(stable, .done, assetId: "unchanged-asset")
+      f.records.flushPendingNotifications()
+      #expect(reentered)
+      #expect(targetStatus.value.exportedCount == 1)
+      #expect(stableStatus.value.exportedCount == 1)
+      #expect(targetProbe.changeCount == 1)
+      #expect(stableProbe.changeCount == 1)
+      // An unchanged later publication cannot serve as a delayed delivery for either row.
+      f.records.updateSidebarCollections(f.currentTree)
+      #expect(targetProbe.changeCount == 1)
+      #expect(stableProbe.changeCount == 1)
+    }
+
+    @Test func badgePublicationCannotRestoreHistoryAfterReentrantConfigure() async throws {
+      let f = try await Fixture(change: .ancestorRename, notificationClock: TestClock())
+      defer { f.close() }
+      let folder = try #require(f.currentTree.first)
+      let target = try #require(folder.children.first { $0.localIdentifier == "target" })
+      f.set(f.current, .inProgress)
+      f.records.flushPendingNotifications()
+      let folderStatus = f.records.sidebarStatus(for: folder)
+      let targetStatus = f.records.sidebarStatus(for: target)
+      var reconfigured = false
+      let probe = ObservationProbe(
+        {
+          _ = folderStatus.value
+          _ = targetStatus.value
+        },
+        onChange: {
+          guard !reconfigured else { return }
+          reconfigured = true
+          f.records.beginConfigure(for: "B")
+        })
+      defer { probe.stop() }
+      f.set(f.current, .done)
+      f.records.flushPendingNotifications()
+      #expect(reconfigured)
+      await f.records.waitUntilSettled()
+      #expect(f.records.state == .ready)
+      #expect(f.records.recordBodies.isEmpty)
+      #expect(f.records.summary(for: f.current).totalCount == 0)
+      #expect(folderStatus.value.exportedCount == 0)
+      #expect(targetStatus.value.exportedCount == 0)
+      #expect(!targetStatus.value.hasPlacement)
+      #expect(f.records.currentGridPlacement(for: f.selection, collections: f.currentTree) == nil)
+    }
+
+    @Test func replacingSidebarTreeReleasesRemovedBadgesAndUpdatesCurrentPaths() async throws {
+      let f = try await Fixture(change: .rename, notificationClock: TestClock())
+      defer { f.close() }
+      let current = try #require(f.currentTree.first)
+      f.set(f.old, .done)
+      f.set(f.current, .inProgress)
+      f.records.flushPendingNotifications()
+      f.records.updateSidebarCollections([current])
+      var status: CollectionExportRecordStore.SidebarStatus? = f.records.sidebarStatus(for: current)
+      weak var released = status
+      let historical = PhotoCollectionDescriptor(
+        id: current.id, localIdentifier: current.localIdentifier, title: "Old", kind: .album,
+        pathComponents: [], children: [])
+      f.records.updateSidebarCollections([historical])
+      #expect(f.records.sidebarStatus(for: historical) === status)
+      #expect(status?.value.exportedCount == 1)
+      status = nil
+      f.records.updateSidebarCollections([])
+      #expect(released == nil)
+    }
+
+    private func summary(_ value: String, in f: Fixture) -> Bool {
+      f.window.map { NativeViewAccess.containsText(value + " exported", in: $0) } == true
+    }
+
+    private func badge(_ text: String, id: String, in f: Fixture) -> Bool {
+      guard let window = f.window else { return false }
+      return NativeViewAccess.identifiedElements("collection-row:" + id, in: window).contains {
+        element in
+        NativeViewAccess.texts(in: element).contains { $0 == text || $0.hasSuffix(", " + text) }
+      }
+    }
+
+    private func folderSummary(_ value: String, albums: Int = 2, in f: Fixture) -> Bool {
+      guard let window = f.window else { return false }
+      return NativeViewAccess.containsText("\(albums) albums · " + value + " exported", in: window)
+    }
+
+    private func loaded(_ f: Fixture) async throws {
+      try #require(
+        await observe(in: f.window) {
+          f.counter.count(for: "asset-tile-body:changed-asset") > 0
+            && (summary("0/1", in: f) || summary("1/1", in: f))
+        }, "Wait for the actual asset tile and native summary before checking status")
     }
 
     private func expectStatus(
       _ f: Fixture, exported: Bool, currentExists: Bool = true,
       sourceLocation: SourceLocation = #_sourceLocation
     ) async {
-      let expected = [exported ? "1/1" : "0/1"]
-      _ = await eventually("collection summary \(expected)", sourceLocation: sourceLocation) {
-        f.counter.renderedText["collection-summary"] == expected
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == [String(exported)]
+      if !currentExists {
+        #expect(
+          f.records.currentGridPlacement(for: f.selection, collections: f.currentTree) == nil,
+          sourceLocation: sourceLocation)
       }
       #expect(
-        f.counter.renderedText["collection-summary"] == expected, sourceLocation: sourceLocation)
-      #expect(
-        f.counter.renderedText["thumbnail-exported:changed-asset"] == [String(exported)],
+        await observe(in: f.window) { summary(exported ? "1/1" : "0/1", in: f) },
         sourceLocation: sourceLocation)
       if let id = f.sidebarFolderId {
-        let expectedFolder = exported ? "2/2" : "1/2"
-        let expectedBadge = exported ? "complete" : "partial(exported: 1, total: 2)"
-        let settled = await observe {
-          f.counter.renderedText["folder-summary"] == [expectedFolder]
-            && f.counter.renderedText["folder-sidebar:\(id)"] == [expectedBadge]
-            && f.counter.renderedText["folder-tile-exported:album:target"] == [String(exported)]
-            && f.counter.renderedText["folder-tile-exported:album:stable"] == ["true"]
-        }
-        #expect(settled, sourceLocation: sourceLocation)
         #expect(
-          f.counter.renderedText["folder-tile-exported:album:stable"] == ["true"],
-          sourceLocation: sourceLocation)
+          await observe(in: f.window) {
+            folderSummary(exported ? "2/2" : "1/2", in: f)
+              && badge(exported ? "Fully exported" : "1/2", id: id, in: f)
+          }, sourceLocation: sourceLocation)
       } else {
         let id = f.current.kind == .sharedAlbum ? "shared:target" : "album:target"
-        let expectedBadge =
-          exported ? "complete" : currentExists ? "notStarted(total: 1)" : "count:1"
-        let settled = await observe {
-          f.counter.renderedText["collection-sidebar:\(id)"] == [expectedBadge]
-        }
-        #expect(settled, sourceLocation: sourceLocation)
+        #expect(
+          await observe(in: f.window) {
+            badge(exported ? "Fully exported" : "1", id: id, in: f)
+          }, sourceLocation: sourceLocation)
       }
     }
 
@@ -268,7 +494,7 @@ import Testing
       }
       try await f.records.flush()
       let reopened = CollectionExportRecordStore(baseDirectoryURL: f.root)
-      reopened.configure(for: "A")
+      await reopened.configureAndWait(for: "A")
       #expect(
         reopened.placements.mapValues {
           [$0.relativePath, $0.displayName, String($0.createdAt.timeIntervalSince1970)]
@@ -279,20 +505,20 @@ import Testing
             == record.variants)
       }
       #expect(reopened.placement(id: f.old.id)?.relativePath == f.old.relativePath)
-      reopened.flushForTesting()
+      reopened.drainSynchronously()
     }
 
     @Test(.timeLimit(.minutes(3)), arguments: Change.allCases)
     func historicalSuccessDoesNotCompleteChangedTarget(change: Change) async throws {
-      let f = try Fixture(change: change)
+      let f = try await Fixture(change: change)
       defer { f.close() }
       f.set(f.old, .done)
       if let stable = f.unchanged { f.set(stable, .done, assetId: f.unchangedAsset.id) }
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
+      try await f.barrier()
       await expectStatus(f, exported: false, currentExists: false)
       try await verifyUnchangedHistory(f, mutations: mutations)
       #expect(f.old.id != f.current.id)
@@ -323,15 +549,14 @@ import Testing
     func conflictsUseCurrentHistoryRegardlessOfInsertionOrder(change: Change, reverse: Bool)
       async throws
     {
-      let f = try Fixture(change: change)
+      let f = try await Fixture(change: change)
       defer { f.close() }
       let placements = reverse ? [f.current, f.old] : [f.old, f.current]
       for placement in placements {
         f.set(placement, placement.id == f.current.id ? .failed : .done)
       }
       if let stable = f.unchanged { f.set(stable, .done, assetId: f.unchangedAsset.id) }
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       f.show()
       try await loaded(f)
       let firstMutations = f.records.mutationCounter
@@ -350,7 +575,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func mountedAncestorRenameMissingTreeAndRecoveryFollowCurrentTarget() async throws {
-      let f = try Fixture(change: .ancestorRename)
+      let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }
       let oldAlbum = PhotoCollectionDescriptor(
         id: "album:target", localIdentifier: "target", title: "Album", kind: .album,
@@ -365,16 +590,15 @@ import Testing
       ]
       f.set(f.old, .done)
       f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
-      let initial = await observe { f.counter.renderedText["collection-summary"] == ["1/1"] }
+      let initial = await observe { summary("1/1", in: f) }
       try #require(initial)
-      f.counter.reset()
       f.service.collectionTree = f.currentTree
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      f.library.libraryRefresh.flush()
       await expectStatus(f, exported: false, currentExists: false)
       try await verifyUnchangedHistory(f, mutations: mutations)
       f.set(f.current, .done)
@@ -383,20 +607,19 @@ import Testing
       await expectStatus(f, exported: true)
       let currentMutations = f.records.mutationCounter
       for fails in [false, true] {
-        f.counter.reset()
         f.service.collectionTree = []
         f.service.collectionTreeError = fails ? CocoaError(.fileReadUnknown) : nil
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
         let missing = await observe {
-          f.counter.renderedText["collection-summary"] == ["0/1"]
-            && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["false"]
+          summary("0/1", in: f)
         }
         #expect(missing)
         #expect(f.records.mutationCounter == currentMutations)
-        f.counter.reset()
         f.service.collectionTreeError = nil
         f.service.collectionTree = f.currentTree
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
         await expectStatus(f, exported: true)
       }
       try await verifyUnchangedHistory(f, mutations: currentMutations)
@@ -406,37 +629,31 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func favoritesIgnoreTreeErrorsAndDestinationSwitchDoesNotBorrowHistory() async throws {
-      let f = try Fixture(change: .rename)
+      let f = try await Fixture(change: .rename)
       defer { f.close() }
       let favorites = ExportPlacement.favorites()
       f.set(favorites, .done)
       f.service.favoritesAssets = [f.asset]
       f.service.collectionTreeError = CocoaError(.fileReadUnknown)
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       f.show(selectionOverride: .favorites)
       let original = await observe {
-        f.counter.renderedText["collection-summary"] == ["1/1"]
-          && f.counter.renderedText["collection-sidebar:favorites"] == ["complete"]
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["true"]
+        summary("1/1", in: f)
+          && badge("Fully exported", id: "favorites", in: f)
       }
       try #require(original)
       try await f.records.flush()
-      f.counter.reset()
-      f.records.configure(for: "B")
+      await f.records.configureAndWait(for: "B")
       let other = await observe {
-        f.counter.renderedText["collection-summary"] == ["0/1"]
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["false"]
-          && f.counter.renderedText["collection-sidebar:favorites"] == ["count:1"]
+        summary("0/1", in: f)
+          && badge("1", id: "favorites", in: f)
       }
       #expect(other)
       #expect(f.records.placements.isEmpty)
-      f.counter.reset()
-      f.records.configure(for: "A")
+      await f.records.configureAndWait(for: "A")
       let restored = await observe {
-        f.counter.renderedText["collection-summary"] == ["1/1"]
-          && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["true"]
-          && f.counter.renderedText["collection-sidebar:favorites"] == ["complete"]
+        summary("1/1", in: f)
+          && badge("Fully exported", id: "favorites", in: f)
       }
       #expect(restored)
       #expect(
@@ -454,23 +671,32 @@ import Testing
     /// and only a child that left the folder drops out of it.
     @Test(.timeLimit(.minutes(2)))
     func libraryChangeKeepsFolderSelectionAndPrunesRemovedChildren() async throws {
-      let f = try Fixture(change: .ancestorRename)
+      let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }
       f.useLiveCounts()
       f.show(sidebar: false)
-      let loaded = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
+      let loaded = await observe(in: f.window) { folderSummary("0/2", in: f) }
       try #require(loaded)
-      let selectAll = try #require(f.counter.renderedActions["folder-select-all"])
-      selectAll()
-      let both = ["album:stable", "album:target"]
-      let selected = await observe { f.counter.renderedText["folder-selection"] == both }
+      let window = try #require(f.window)
+      let selectAll = try #require(
+        NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+          windowNumber: window.windowNumber, context: nil, characters: "a",
+          charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+      #expect(window.performKeyEquivalent(with: selectAll))
+      let selected = await observe(in: window) {
+        NativeViewAccess.containsText("2 selected · 2 albums · 0/2 exported", in: window)
+      }
       try #require(selected)
 
       f.service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
       f.library.invalidateCache()
-      let refreshed = await observe { f.counter.renderedText["folder-summary"] == ["0/3"] }
+      f.library.libraryRefresh.flush()
+      let refreshed = await observe(in: window) {
+        NativeViewAccess.containsText("2 selected · 2 albums · 0/3 exported", in: window)
+      }
       try #require(refreshed)
-      #expect(f.counter.renderedText["folder-selection"] == both)
+      #expect(NativeViewAccess.containsText("2 selected · 2 albums · 0/3 exported", in: window))
 
       let folder = try #require(f.service.collectionTree.first)
       f.service.collectionTree = [
@@ -480,9 +706,63 @@ import Testing
           children: folder.children.filter { $0.id != "album:target" })
       ]
       f.library.invalidateCache()
-      let pruned = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
+      f.library.libraryRefresh.flush()
+      let pruned = await observe(in: window) {
+        NativeViewAccess.containsText("1 selected · 1 album · 0/2 exported", in: window)
+      }
       try #require(pruned)
-      #expect(f.counter.renderedText["folder-selection"] == ["album:stable"])
+      #expect(NativeViewAccess.containsText("1 selected · 1 album · 0/2 exported", in: window))
+    }
+
+    /// The caller must pass current-placement status to each real tile, independently. A tile's
+    /// label says "fully exported" exactly when it shows the completed badge.
+    @Test(.timeLimit(.minutes(1)))
+    func mountedFolderBadgesFollowCurrentPlacementAndKeepTheCompletedSibling() async throws {
+      let f = try await Fixture(change: .ancestorRename)
+      defer { f.close() }
+      // The folder pane's ScrollView lists no accessibility children; hit-testing reaches each
+      // tile. Neither fake cover loads, so each label is fixed once its load settles.
+      func tiles(_ expected: [String: Bool]) -> Bool {
+        guard let window = f.window else { return false }
+        return expected.allSatisfy { title, exported in
+          let label =
+            "Album, \(title), 1 photo, \(exported ? "fully exported, " : "")Couldn't load preview"
+          return NativeViewAccess.hitTestButton(label, in: window) != nil
+        }
+      }
+      f.set(f.old, .done)
+      f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
+      f.records.flushPendingNotifications()
+      f.show(sidebar: false, collectionPane: false)
+      try #require(
+        await observe(in: f.window) { folderSummary("1/2", in: f) && tiles(["Unchanged": true]) })
+      try await f.barrier()
+      #expect(tiles(["Album": false, "Unchanged": true]))
+      f.set(f.current, .done)
+      f.records.flushPendingNotifications()
+      #expect(
+        await observe(in: f.window) {
+          folderSummary("2/2", in: f) && tiles(["Album": true, "Unchanged": true])
+        })
+      let folder = try #require(f.currentTree.first)
+      f.service.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: folder.id, localIdentifier: folder.localIdentifier, title: folder.title,
+          kind: .folder,
+          pathComponents: folder.pathComponents,
+          children: folder.children.map { child in
+            guard child.localIdentifier == "target" else { return child }
+            return PhotoCollectionDescriptor(
+              id: child.id, localIdentifier: child.localIdentifier,
+              title: "Renamed", kind: .album, pathComponents: child.pathComponents, children: [])
+          })
+      ]
+      f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      f.library.libraryRefresh.flush()
+      try #require(
+        await observe(in: f.window) { folderSummary("1/2", in: f) && tiles(["Renamed": false]) })
+      try await f.barrier()
+      #expect(tiles(["Renamed": false, "Unchanged": true]))
     }
 
     enum FolderCountSurface: CaseIterable { case folderPane, sidebarBadge }
@@ -493,25 +773,23 @@ import Testing
     func supersededFolderCountLoadDoesNotOverwriteNewerCounts(
       surface: FolderCountSurface
     ) async throws {
-      let f = try Fixture(change: .ancestorRename)
+      let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }
       let older = AsyncCheckpoint()
       let newer = AsyncCheckpoint()
       try await withCleanup {
-        let (key, supersededKey, rendered): (String, String, (Int) -> [String]) =
-          switch surface {
-          case .folderPane: ("folder-summary", "folder-counts-superseded", { ["0/\($0)"] })
-          case .sidebarBadge:
-            (
-              "folder-sidebar:folder:folder", "sidebar-folder-count-superseded",
-              { ["notStarted(total: \($0))"] }
-            )
-          }
+        let supersededKey =
+          surface == .folderPane ? "folder-counts-superseded" : "sidebar-folder-count-superseded"
+        let displayed: (Int) -> Bool = { count in
+          surface == .folderPane
+            ? folderSummary("0/\(count)", in: f)
+            : badge(String(count), id: "folder:folder", in: f)
+        }
         // Exactly one view loads the folder's counts, so 'stable' fetches map to its loads.
         // The sidebar folder starts collapsed, so its album rows don't fetch 'stable' too.
         f.useLiveCounts()
         f.show(sidebar: surface == .sidebarBadge, folderPane: surface == .folderPane)
-        let loaded = await observe { f.counter.renderedText[key] == rendered(2) }
+        let loaded = await observe { displayed(2) }
         try #require(loaded)
 
         let service = f.service
@@ -531,23 +809,25 @@ import Testing
           return try await Fixture.liveCount(service, scope, adjusted: adjusted)
         }
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         let olderStarted = await older.waitForEnter(count: 1)
         try #require(olderStarted)
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         let newerStarted = await newer.waitForEnter(count: 1)
         try #require(newerStarted, "A newer library change must restart the folder count load")
         await newer.release()
-        let refreshed = await observe { f.counter.renderedText[key] == rendered(3) }
+        let refreshed = await observe { displayed(3) }
         try #require(refreshed)
 
         let supersededBefore = f.counter.count(for: supersededKey)
         await older.release()
         let settled = await observe {
           f.counter.count(for: supersededKey) > supersededBefore
-            || f.counter.renderedText[key] != rendered(3)
+            || !displayed(3)
         }
         #expect(settled)
-        #expect(f.counter.renderedText[key] == rendered(3))
+        #expect(displayed(3))
       } cleanup: {
         await older.releaseAll()
         await newer.releaseAll()

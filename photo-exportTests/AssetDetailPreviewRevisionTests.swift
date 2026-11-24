@@ -33,17 +33,17 @@ struct AssetDetailPreviewRevisionTests {
     var holdsReplacement = false
     var currentImage = image(.red)
 
-    init() {
+    init() async {
       manager = PhotoLibraryManager(overrideService: service)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "test")
-      collections.configure(for: "test")
+      await timeline.configureAndWait(for: "test")
+      await collections.configureAndWait(for: "test")
       let hosted = NSHostingView(
         rootView: AssetDetailView(
           asset: TestAssetFactory.makeAsset(id: "A"), placement: .timeline(year: 2025, month: 1)
         )
-        .environmentObject(manager).environmentObject(timeline).environmentObject(collections)
+        .environment(manager).environment(timeline).environment(collections)
         .environment(\.bodyInvalidationCounter, counter))
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 360, height: 540),
@@ -66,22 +66,13 @@ struct AssetDetailPreviewRevisionTests {
       window.contentView = nil
       window.close()
       await replacement.releaseAll()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
     }
 
-    func sampledColor() -> NSColor? {
-      guard let view = window.contentView else { return nil }
-      view.layoutSubtreeIfNeeded()
-      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-      view.cacheDisplay(in: view.bounds, to: bitmap)
-      return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
-        .usingColorSpace(.sRGB)
-    }
-
     var diagnostics: String {
-      let rgb = sampledColor().map {
+      let rgb = HostedViewHarness.centerColor(of: window).map {
         "RGB=(\($0.redComponent),\($0.greenComponent),\($0.blueComponent))"
       }
       return
@@ -89,13 +80,7 @@ struct AssetDetailPreviewRevisionTests {
     }
 
     func shows(_ color: NSColor) -> Bool {
-      guard
-        let actual = sampledColor(),
-        let expected = color.usingColorSpace(.sRGB)
-      else { return false }
-      return expected.redComponent > expected.blueComponent
-        ? actual.redComponent > actual.blueComponent + 0.4
-        : actual.blueComponent > actual.redComponent + 0.4
+      HostedViewHarness.sample(HostedViewHarness.centerColor(of: window), shows: color)
     }
 
     func invalidate(_ change: Change) {
@@ -111,15 +96,9 @@ struct AssetDetailPreviewRevisionTests {
     }
   }
 
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   @Test(.timeLimit(.minutes(2)), arguments: Change.allCases)
   func mountedSameIDEditAndRevertRefreshPixelsWithoutBlanking(change: Change) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       f.show()
       let initial = await observe { f.shows(.red) }
@@ -147,7 +126,7 @@ struct AssetDetailPreviewRevisionTests {
 
   @Test(.timeLimit(.minutes(1)))
   func unrelatedKnownEditRendersWithoutReloadingSelectedImage() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       f.show()
       let initial = await observe { f.shows(.red) }

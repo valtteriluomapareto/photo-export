@@ -36,10 +36,15 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
       !years.isEmpty,
       "screenshot mode must surface curated years; an empty list means the override didn't take")
     let firstYear = try #require(years.first)
-    let yearAssets = try await svc.fetchAssets(year: firstYear, month: nil, mediaType: nil)
+    var yearAssets: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .timeline(year: firstYear, month: nil), mediaType: nil, batchSize: 200)
+    {
+      yearAssets += batch
+    }
     #expect(
       !yearAssets.isEmpty,
-      "fetchAssets(year:month:) must return curated synthetic assets, not an empty production result"
+      "the timeline scope must return curated synthetic assets, not an empty production result"
     )
   }
 
@@ -52,11 +57,11 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
       "every screenshot year must surface a non-zero curated count")
   }
 
-  @Test func countAssetsForYearMonthReturnsCuratedData() throws {
+  @Test func countAssetsForYearMonthReturnsCuratedData() async throws {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
     let firstYear = try #require(years.first)
-    let total = try svc.countAssets(year: firstYear)
+    let total = try await svc.cachedCountAssets(in: .timeline(year: firstYear, month: nil))
     #expect(total > 0)
   }
 
@@ -64,8 +69,9 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
     let firstYear = try #require(years.first)
-    let total = try svc.countAssets(year: firstYear)
-    let adjusted = try await svc.countAdjustedAssets(year: firstYear)
+    let year = PhotoFetchScope.timeline(year: firstYear, month: nil)
+    let total = try await svc.cachedCountAssets(in: year)
+    let adjusted = try await svc.cachedCountAdjustedAssets(in: year)
     // Curated shape, as for scopes below; per-asset flags vary between processes.
     try #require(adjusted > 0)
     #expect(adjusted == total / 4)
@@ -73,9 +79,9 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Collections
 
-  @Test func fetchCollectionTreeReturnsCuratedTree() throws {
+  @Test func fetchCollectionTreeReturnsCuratedTree() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let tree = try svc.fetchCollectionTree()
+    let tree = try await svc.loadCollectionTree()
     #expect(!tree.isEmpty)
     let kinds = Set(tree.map(\.kind))
     #expect(kinds.contains(.favorites))
@@ -90,7 +96,12 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func fetchAssetsInFavoritesScopeReturnsCuratedFavorites() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let favs = try await svc.fetchAssets(in: .favorites, mediaType: nil)
+    var favs: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .favorites, mediaType: nil, batchSize: 200)
+    {
+      favs += batch
+    }
     #expect(
       !favs.isEmpty,
       "favorites scope must surface curated synthetic favorites, not empty production result")
@@ -98,11 +109,16 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func fetchAssetsInAlbumScopeReturnsCuratedAlbumAssets() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let tree = try svc.fetchCollectionTree()
+    let tree = try await svc.loadCollectionTree()
     let firstAlbum = tree.first { $0.kind == .album }
     let albumId = try #require(
       firstAlbum?.localIdentifier, "Curated tree must contain at least one album")
-    let assets = try await svc.fetchAssets(in: .album(collectionId: albumId), mediaType: nil)
+    var assets: [AssetDescriptor] = []
+    for try await batch in svc.fetchAssetsProgressive(
+      in: .album(collectionId: albumId), mediaType: nil, batchSize: 200)
+    {
+      assets += batch
+    }
     #expect(!assets.isEmpty)
   }
 
@@ -163,42 +179,25 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Thumbnails
 
-  @Test func loadThumbnailReturnsImage() async {
-    let svc = ScreenshotPhotoLibraryService()
-    let img = await svc.loadThumbnail(for: "family-1", allowNetwork: false)
-    #expect(
-      img != nil,
-      "screenshot service must return at minimum a placeholder gradient — nil means the override fell through to production"
-    )
+  @Test(arguments: [ThumbnailDeliveryMode.fast, .highQuality])
+  func thumbnailReaderReturnsCuratedImage(delivery: ThumbnailDeliveryMode) async throws {
+    let service: any PhotoLibraryService = ScreenshotPhotoLibraryService()
+    let assets = await service.resolveThumbnailAssets(ids: ["family-1"])
+    let asset = try #require(assets.first)
+    #expect(assets.count == 1)
+    #expect(asset.descriptor.id == "family-1")
+    let size = delivery == .fast ? ThumbnailRequestSpec.gridSize : CGSize(width: 1024, height: 1024)
+    let image = try #require(
+      await service.thumbnailReader.image(
+        for: asset, spec: ThumbnailRequestSpec(size: size, delivery: delivery)))
+    #expect(image.width > 0 && image.height > 0)
   }
 
-  @Test func loadThumbnailHighQualityReturnsImage() async {
+  @Test func requestPreviewReturnsImage() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    let img = await svc.loadThumbnailHighQuality(for: "family-1", allowNetwork: false)
-    #expect(img != nil)
-  }
-
-  @Test func requestFullImageReturnsImage() async throws {
-    let svc = ScreenshotPhotoLibraryService()
-    let img = try await svc.requestFullImage(for: "family-1")
-    _ = img  // non-throw is the pin
-  }
-
-  /// Limitation: production's `start/stopCachingThumbnails(for:)` also no-ops in unit
-  /// tests because `phAssetCache` is empty (it's populated by a prior `fetchAssets` on
-  /// the real Photos library, which never runs here). Removing the override therefore
-  /// would not fail this test — the override exists so the production path never reaches
-  /// `PHCachingImageManager.shared`, which would otherwise be poked on the real system
-  /// at runtime. The composition follow-up closes this hole structurally; until then
-  /// the assertion below pins method presence + call-shape only.
-  @Test func startStopCachingThumbnailsAreNoOps() {
-    let svc = ScreenshotPhotoLibraryService()
-    let asset = TestAssetFactory.makeAsset(id: "family-1")
-    svc.startCachingThumbnails(for: [asset])
-    svc.stopCachingThumbnails(for: [asset])
-    // Also exercise the empty path so a future override that crashes on empty input fails here.
-    svc.startCachingThumbnails(for: [])
-    svc.stopCachingThumbnails(for: [])
+    let img = try await svc.requestPreview(
+      for: "family-1", pixelSize: CGSize(width: 2048, height: 2048), onDegraded: { _ in })
+    #expect(img.size.width > 0 && img.size.height > 0)
   }
 
   // MARK: - Wiring
@@ -224,5 +223,28 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     #expect(
       wrapped.authorizationStatus == .authorized,
       "wrapped manager mirrors the override's auth status")
+  }
+
+  @Test(arguments: ["family-1", "synthetic-unlisted"])
+  func exportReaderReturnsOnlyCuratedValues(id: String) async throws {
+    let reader = ScreenshotPhotoKitReader(service: ScreenshotPhotoLibraryService())
+    let value = try #require(await reader.readAsset(id: id, livePhotosPaired: true))
+    #expect(value.descriptor.id == id)
+    #expect(value.descriptor.originalUTI == "public.jpeg")
+    #expect(value.descriptor.mediaType == .image)
+    #expect(!value.descriptor.isLivePhoto)
+    #expect(value.resources.count == 1)
+    #expect(value.resources.first?.originalFilename == "\(id).HEIC")
+    #expect(value.resources.first?.fileSize == 2_400_000)
+  }
+
+  @Test func screenshotCompositionSelectsSyntheticExportReader() async throws {
+    // test-scratch: allow inspects shipping composition without building a core or starting IO
+    let composition = AppComposition.screenshot(windowSize: nil)
+    #expect(composition.photoKitReader is ScreenshotPhotoKitReader)
+    let value = try #require(
+      await composition.photoKitReader.readAsset(id: "family-1", livePhotosPaired: false))
+    #expect(value.descriptor.id == "family-1")
+    #expect(value.resources.first?.originalFilename == "family-1.HEIC")
   }
 }

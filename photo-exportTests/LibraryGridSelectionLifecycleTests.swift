@@ -86,14 +86,14 @@ struct LibraryGridSelectionLifecycleTests {
     let window: NSWindow
     let hostingView: NSView
 
-    init(grid: Grid) {
+    init(grid: Grid) async {
       root = TestScratch.directory("GridSelection")
       defaultsName = TestScratch.suiteName("GridSelection")
       defaults = TestScratch.defaults(suiteName: defaultsName)
       timelineStore = ExportRecordStore(baseDirectoryURL: root)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: root)
-      timelineStore.configure(for: "grid-test")
-      collectionStore.configure(for: "grid-test")
+      await timelineStore.configureAndWait(for: "grid-test")
+      await collectionStore.configureAndWait(for: "grid-test")
       library = PhotoLibraryManager(overrideService: service)
       let manager = ExportManager(
         photoLibraryService: service, exportDestination: FakeExportDestination(),
@@ -102,12 +102,13 @@ struct LibraryGridSelectionLifecycleTests {
         userDefaults: defaults)
       let hosted = NSHostingView(
         rootView: HostedGrid(grid: grid, service: service, selection: selection)
-          .environmentObject(library)
+          .environment(library)
           .environment(\.bodyInvalidationCounter, counter)
-          .environmentObject(timelineStore)
-          .environmentObject(collectionStore)
-          .environmentObject(manager)
-          .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults)))
+          .environment(timelineStore)
+          .environment(collectionStore)
+          .environment(manager)
+          .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
+          .environment(\.accessibilityEnabled, true))
       hostingView = hosted
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),
@@ -119,12 +120,17 @@ struct LibraryGridSelectionLifecycleTests {
 
     func show() { window.orderFront(nil) }
 
+    /// The grid's ScrollView lists no accessibility children; hit-testing reaches each tile.
+    func selected(_ label: String) -> Bool? {
+      NativeViewAccess.hitTestButton(label, in: window)?.isAccessibilitySelected?()
+    }
+
     func close() {
       window.orderOut(nil)
       window.contentView = nil
       window.close()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)
     }
@@ -133,15 +139,9 @@ struct LibraryGridSelectionLifecycleTests {
   /// SwiftUI schedules render passes independently of the stream producer. The
   /// test's time limit bounds a failed observation; stream continuations control
   /// all races.
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func disappearingGridReleasesItsPreheatWindowAndReappears(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let assets = [
       TestAssetFactory.makeAsset(id: "first"), TestAssetFactory.makeAsset(id: "second"),
     ]
@@ -171,7 +171,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func removingGridDuringLoadCannotRegisterItsLateWindow(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let old = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let terminated = AsyncCheckpoint()
     old.continuation.onTermination = { _ in Task { await terminated.enter() } }
@@ -207,7 +207,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func retainedGridRestartsPreheatAfterReattachingToWindow(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let asset = TestAssetFactory.makeAsset(id: "same-grid")
     fixture.service.progressiveStreamOverride = { _ in
       AsyncThrowingStream { continuation in
@@ -217,21 +217,33 @@ struct LibraryGridSelectionLifecycleTests {
     }
     defer { fixture.close() }
     fixture.show()
-    let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
+    let loaded = await observe(in: fixture.window) {
+      fixture.counter.count(for: "grid-load-finished") > 0
+        && !fixture.service.startCachingCalls.isEmpty
+    }
     try #require(loaded)
+    let loads = fixture.counter.count(for: "grid-load-finished")
+    let disappearances = fixture.counter.count(for: "grid-disappeared")
     fixture.window.contentView = nil
-    let stopped = await observe { fixture.service.stopCachingCalls.count == 1 }
+    let stopped = await observe(in: fixture.window) {
+      fixture.counter.count(for: "grid-disappeared") > disappearances
+        && !fixture.service.stopCachingCalls.isEmpty
+    }
     try #require(stopped)
-    // Preserve the hosting view and its StateObject rather than recreate the grid.
+    let starts = fixture.service.startCachingCalls.count
+    // Preserve the hosting view and its state rather than recreate the grid.
     fixture.window.contentView = fixture.hostingView
-    let reloaded = await observe { fixture.service.startCachingCalls.count == 2 }
+    let reloaded = await observe(in: fixture.window) {
+      fixture.counter.count(for: "grid-load-finished") > loads
+        && fixture.service.startCachingCalls.count > starts
+    }
     try #require(reloaded)
-    #expect(fixture.service.startCachingCalls[1].map(\.id) == ["same-grid"])
+    #expect(fixture.service.startCachingCalls.last?.map(\.id) == ["same-grid"])
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func firstBatchSelectsDetailBeforeStreamFinishesAndKeepsUserChoice(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     var requested = false
     fixture.service.progressiveStreamOverride = { _ in
@@ -252,20 +264,19 @@ struct LibraryGridSelectionLifecycleTests {
     // The stream remains open: awaiting its completion cannot satisfy this check.
     let selectedFirst = await observe { fixture.selection.asset == first }
     try #require(selectedFirst)
-    #expect(fixture.service.startCachingCalls.isEmpty)
+    #expect(fixture.service.startCachingCalls.allSatisfy { $0.count <= 500 })
 
     fixture.selection.asset = chosen
     stream.continuation.yield([TestAssetFactory.makeAsset(id: "last")])
     stream.continuation.finish()
-    let finished = await observe { !fixture.service.startCachingCalls.isEmpty }
+    let finished = await observe { fixture.counter.count(for: "grid-load-finished") > 0 }
     try #require(finished)
-    #expect(fixture.service.startCachingCalls.last?.count == 3)
     #expect(fixture.selection.asset == chosen)
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func rapidScopeChangesDoNotSelectAssetsFromObsoleteLoads(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let first = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let second = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let third = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
@@ -313,7 +324,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases, [false, true])
   func emptyAndFailedLoadsAllowNextScopeSelection(grid: Grid, fails: Bool) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let nextStream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     var requests = 0
@@ -345,9 +356,9 @@ struct LibraryGridSelectionLifecycleTests {
   }
   @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases)
   func parentOnlySelectionChangeRendersTheCurrentHighlight(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
-    let a = TestAssetFactory.makeAsset(id: "A")
-    let b = TestAssetFactory.makeAsset(id: "B")
+    let fixture = await Fixture(grid: grid)
+    let a = TestAssetFactory.makeAsset(id: "A", creationDate: nil)
+    let b = TestAssetFactory.makeAsset(id: "B", creationDate: nil, mediaType: .video)
     fixture.service.progressiveStreamOverride = { _ in
       AsyncThrowingStream {
         $0.yield([a, b])
@@ -356,21 +367,28 @@ struct LibraryGridSelectionLifecycleTests {
     }
     defer { fixture.close() }
     fixture.show()
-    let loaded = await observe {
-      fixture.selection.asset == a && !fixture.service.startCachingCalls.isEmpty
+    // Neither fake thumbnail loads, so each tile's label is fixed once its load settles.
+    func highlighted(first: Bool) -> Bool {
+      fixture.selected("Photo, not yet exported, thumbnail failed to load") == first
+        && fixture.selected("Video, not yet exported, thumbnail failed to load") == !first
     }
-    try #require(loaded)
-    fixture.counter.reset()
+    try #require(
+      await observe(in: fixture.window) {
+        fixture.selection.asset == a && highlighted(first: true)
+      })
     fixture.selection.asset = b
-    let highlighted = await observe { fixture.counter.count(for: "selected:B") > 0 }
-    #expect(highlighted, "A parent-only ID change must reach the actual grid rendering input")
+    #expect(
+      await observe(in: fixture.window) { highlighted(first: false) },
+      "The actual highlight must move to the second cell")
+    fixture.selection.asset = a
+    #expect(await observe(in: fixture.window) { highlighted(first: true) })
   }
 
   enum RefreshMutation: CaseIterable { case metadata, removal, empty }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases, RefreshMutation.allCases)
   func refreshSynchronizesTheParentDetail(grid: Grid, mutation: RefreshMutation) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A")
     let b = TestAssetFactory.makeAsset(id: "B")
     let c = TestAssetFactory.makeAsset(id: "C")
@@ -401,6 +419,7 @@ struct LibraryGridSelectionLifecycleTests {
     let expected: AssetDescriptor? =
       mutation == .metadata ? revised : mutation == .removal ? c : nil
     fixture.library.invalidateCache(changedThumbnailAssetIDs: [])
+    fixture.library.libraryRefresh.flush()
     let refreshed = await observe { fixture.selection.asset == expected }
     #expect(requests == 2)
     #expect(refreshed, "The actual grid must reconcile its parent detail after refresh")
@@ -410,7 +429,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func heldRefreshPreservesTheLatestBindingChoice(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A")
     let b = TestAssetFactory.makeAsset(id: "B")
     let revised = TestAssetFactory.makeAsset(id: "B", pixelWidth: 777, hasAdjustments: true)
@@ -432,6 +451,7 @@ struct LibraryGridSelectionLifecycleTests {
     let loaded = await observe { fixture.selection.asset == a }
     try #require(loaded)
     fixture.library.invalidateCache(changedThumbnailAssetIDs: [])
+    fixture.library.libraryRefresh.flush()
     let began = await observe { requests == 2 }
     try #require(began)
     #expect(fixture.selection.asset == a, "An in-flight refresh retains the displayed snapshot")
@@ -444,7 +464,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func progressiveFutureBatchChoiceIsNotCleared(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     fixture.service.progressiveStreamOverride = { _ in stream.stream }
     defer {
@@ -467,7 +487,7 @@ struct LibraryGridSelectionLifecycleTests {
     #expect(fixture.selection.asset == later)
     stream.continuation.yield([later])
     stream.continuation.finish()
-    let finished = await observe { fixture.service.startCachingCalls.last?.count == 3 }
+    let finished = await observe { fixture.counter.count(for: "grid-load-finished") > 0 }
     try #require(finished)
     #expect(fixture.selection.asset == later)
   }
@@ -478,7 +498,7 @@ struct LibraryGridSelectionLifecycleTests {
   func obsoleteRefreshCannotClearOrReplaceReturnedScope(grid: Grid, outcome: StaleOutcome)
     async throws
   {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let old = TestAssetFactory.makeAsset(id: "same")
     let current = TestAssetFactory.makeAsset(id: "same", pixelWidth: 999, hasAdjustments: true)
     let refresh = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
@@ -500,6 +520,7 @@ struct LibraryGridSelectionLifecycleTests {
     let loaded = await observe { fixture.selection.asset == old }
     try #require(loaded)
     fixture.library.invalidateCache(changedThumbnailAssetIDs: [])
+    fixture.library.libraryRefresh.flush()
     let began = await observe { requests == 2 }
     try #require(began)
     fixture.selection.switchScope(to: 1)

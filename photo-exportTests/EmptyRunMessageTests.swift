@@ -11,40 +11,23 @@ import Testing
 struct EmptyRunMessageTests {
   // MARK: - Test harness
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let tempDir = TestScratch.directory("EmptyRunTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    let defaults = TestScratch.defaults("EmptyRun")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, store)
+    let h = await ExportManagerHarness(
+      label: "EmptyRunTest", userDefaults: TestScratch.defaults("EmptyRun"))
+    return (h.manager, h.photoLib, h.dest, h.store)
   }
 
   // MARK: - Empty Export Month
 
   @Test func startExportMonthSetsMessageWhenAllAssetsAreAlreadyDone() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId["done-asset"] = [
       TestAssetFactory.makeResource(originalFilename: "X.JPG")
@@ -61,7 +44,7 @@ struct EmptyRunMessageTests {
   }
 
   @Test func startExportYearSetsYearScopedMessageWhenAlreadyDone() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "done-y", creationDate: makeDate(2024, 5, 1))
@@ -80,7 +63,7 @@ struct EmptyRunMessageTests {
   }
 
   @Test func startExportAllSetsLibraryScopedMessageWhenAlreadyDone() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "done-all", creationDate: makeDate(2024, 5, 1))
@@ -102,10 +85,12 @@ struct EmptyRunMessageTests {
   // MARK: - Message NOT set when there is real work
 
   @Test func startExportMonthDoesNotSetMessageWhenWorkRemains() async throws {
-    let (manager, photoLib, dest, _) = makeTestHarness()
+    let (manager, photoLib, dest, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "todo-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "todo-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["todo-asset"] = [
       TestAssetFactory.makeResource(originalFilename: "T.JPG")
@@ -120,10 +105,12 @@ struct EmptyRunMessageTests {
   // MARK: - Clearing rules
 
   @Test func newStartExportClearsPriorMessage() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-1")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 5, day: 15))!)
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["done-1"] = [
       TestAssetFactory.makeResource(originalFilename: "A.JPG")
@@ -136,7 +123,9 @@ struct EmptyRunMessageTests {
     await manager.waitForQueueDrained()
     #expect(manager.emptyRunMessage != nil)
 
-    let workAsset = TestAssetFactory.makeAsset(id: "todo-2")
+    let workAsset = TestAssetFactory.makeAsset(
+      id: "todo-2",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!)
     photoLib.assetsByYearMonth["2025-6"] = [workAsset]
     photoLib.resourcesByAssetId["todo-2"] = [
       TestAssetFactory.makeResource(originalFilename: "B.JPG")
@@ -147,10 +136,12 @@ struct EmptyRunMessageTests {
   }
 
   @Test func versionSelectionChangeClearsMessage() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-sel")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-sel",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     photoLib.assetsByYearMonth["2025-7"] = [asset]
     photoLib.resourcesByAssetId["done-sel"] = [
       TestAssetFactory.makeResource(originalFilename: "S.JPG")
@@ -168,10 +159,12 @@ struct EmptyRunMessageTests {
   }
 
   @Test func cancelAndClearClearsMessage() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-cancel")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-cancel",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 8, day: 15))!)
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["done-cancel"] = [
       TestAssetFactory.makeResource(originalFilename: "C.JPG")

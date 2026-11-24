@@ -124,11 +124,11 @@ struct BackupScanCancellationTests {
     let monthListing = Read.contents(root.appendingPathComponent("2025/02").path)
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     defer {
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
     }
     nonisolated(unsafe) var manager: ExportManager?
     let reader = RecordingReader(

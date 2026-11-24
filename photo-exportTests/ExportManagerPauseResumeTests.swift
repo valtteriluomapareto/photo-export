@@ -26,46 +26,22 @@ struct ExportManagerPauseResumeTests {
 
   // MARK: - Fixtures
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let store: ExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() {
-      manager.cancelAndClear()
-      store.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let store = h.store
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    store.drainSynchronously()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
-  private func makeTestHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportManagerPause")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collections.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportManagerPause")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, storeRoot: storeRoot)
+  private func makeTestHarness() async -> Harness {
+    await Harness(label: "ExportManagerPause")
   }
 
   /// Polls until `condition` returns true or the timeout elapses. Used for parking
@@ -80,11 +56,13 @@ struct ExportManagerPauseResumeTests {
   // MARK: - Pause mid-run, then resume
 
   @Test func pauseDuringActiveRunStopsQueueAndResumeRestarts() async throws {
-    let h = makeTestHarness()
-    defer { h.cleanup() }
+    let h = await makeTestHarness()
+    defer { cleanupHarness(h) }
 
     let assets = (1...3).map {
-      TestAssetFactory.makeAsset(id: "pause-\($0)")
+      TestAssetFactory.makeAsset(
+        id: "pause-\($0)",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     }
     h.photoLib.assetsByYearMonth["2025-7"] = assets
     for asset in assets {
@@ -114,7 +92,7 @@ struct ExportManagerPauseResumeTests {
 
     // Queue parked: run loop has exited but jobs remain. (`hasActiveExportWork`
     // is intentionally NOT in this predicate — it's `isRunning || queueCount > 0
-    // || isEnqueueingAll`, so it's still true here, and that's correct.)
+    // || isPreparingExport`, so it's still true here, and that's correct.)
     await waitUntil {
       !h.manager.isRunning && h.manager.queueCount > 0
     }
@@ -140,10 +118,12 @@ struct ExportManagerPauseResumeTests {
   /// to pause). The mirror to `testPauseAndResumeToggle` which covers the "pause
   /// before start" no-op.
   @Test func pauseAfterQueueDrainsIsNoOp() async throws {
-    let h = makeTestHarness()
-    defer { h.cleanup() }
+    let h = await makeTestHarness()
+    defer { cleanupHarness(h) }
 
-    let asset = TestAssetFactory.makeAsset(id: "single")
+    let asset = TestAssetFactory.makeAsset(
+      id: "single",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
     h.photoLib.assetsByYearMonth["2025-1"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(originalFilename: "S.JPG")

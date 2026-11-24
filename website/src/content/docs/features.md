@@ -25,9 +25,10 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - Two sidebar sections via a Timeline / Collections segmented control
   - **Timeline**: year/month tree with asset counts and per-month export status
   - **Collections**: Favorites plus the user's albums and folders, grouped by Photos hierarchy
-- Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark). After Photos changes, badges keep their previous count pairs visible until fresh pairs are ready; export progress continues updating during the refresh. Each month’s pair is replaced together, and failed counts show unknown coverage for the affected month. Obsolete refreshes cannot overwrite newer counts. Historical sidebar summaries still approximate coverage from export records: deleting exported photos and adding new ones at unchanged counts can overstate completion.
+- Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark). After Photos changes, badges keep their previous count pairs visible until fresh pairs are ready; export progress continues updating during the refresh. Each month’s pair is replaced together. Canceling outdated count work keeps the last pair visible; genuine count failures show unknown coverage for the affected month. Obsolete refreshes cannot overwrite newer counts. Historical sidebar summaries still approximate coverage from export records: deleting exported photos and adding new ones at unchanged counts can overstate completion.
 - **Year overview** — selecting a year in the Timeline sidebar opens a Photos.app-style grid of month tiles (four cover thumbnails per month, a green checkmark when fully exported). Click a tile to drill into that month.
 - Collection headers, thumbnail badges, sidebar progress and folder summaries describe the current album name and folder location. Renaming or moving an album starts progress for the new target; existing files and historical records remain in their original folders.
+- Thumbnail preheating follows the visible grid while export runs. Image resolution and pixel decoding run off the main thread, with static placeholders during loading and bounded four-image cover queries.
 - Fast thumbnail grid with in-memory caching; the first available asset opens in the detail panel while the rest of the grid loads. Choosing another asset keeps your selection. After Photos changes, a surviving selection gets current details; removing it selects the first remaining asset, and an empty month or collection clears the detail panel.
 - Photos changes refresh the grid in place without blanking it. Edits update thumbnails already on screen without navigating away; the current image stays visible while its replacement loads, and older refreshes or image responses cannot replace newer results
 - Export status in the detail pane follows the current Timeline, Favorites, album, or Shared Album placement. Renamed or moved albums show history only for their current folder, and recorded converted versions and recovery messages stay visible
@@ -46,6 +47,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
   - Collections: any combination of Favorites, albums, folders, and shared albums. Selected folders expand to their nested albums; duplicates dedupe.
   - **Edit → Select All Years** / **Select All Collections** (⌘A) picks every top-level row in the active sidebar. Right-clicking a folder that's part of a multi-selection acts on the whole selection, matching the toolbar's primary action.
 - **iCloud Shared Albums** appear in their own Collections sidebar section and export when explicitly selected to `Collections/Shared Albums/<Album>/`. See the [reduced-fidelity note](#shared-albums-reduced-fidelity) below — Apple only serves shared photos as downscaled JPEGs
+- Export scans count as active work immediately. Import Existing Backup and Auto Export wait while a manual export scans and processes its queue.
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)
@@ -206,6 +208,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Standard macOS folder picker for selecting the export root
 - Works with local folders, external drives, or mounted network volumes
 - Selection persists across app launches via security-scoped bookmarks
+- Re-selecting the same folder keeps an active export and its history running; choosing a different folder cancels the old run
 - Drive status indicator in the toolbar (connected/disconnected)
 - Destination problems stay visible in the main window and disable export controls whether Auto Export is on or off. Reconnect an unavailable drive or share, or restore access with **Choose Folder**
 
@@ -228,7 +231,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 
 ## Existing backup import
 
-- Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I). Failed imports stop progress with an error and Close/Retry controls. Reconnect or reselect an unavailable folder; resolve export-history alerts before retrying
+- Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I). Failed imports, including failures saving history partway through, stop progress with an error and Close/Retry controls. Reconnect or reselect an unavailable folder; resolve export-history alerts before retrying
 - Five-stage process: scan backup folder, read Photos library, match files, rebuild state, reconcile against disk
 - The reconcile step **prunes records for files that no longer exist** at the destination. Cancelled or superseded scans discard their results; switching destinations cannot apply an old scan to the replacement destination’s history, and newer record changes are preserved
 - Rebuilds Favorites, album and shared-album history from the folders under `Collections/` too, so exporting those collections again skips files already there. Folders of albums renamed, moved or deleted in Photos since they were exported are reported and left in place
@@ -241,10 +244,10 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Export folder unavailable or write-protected detection
 - Individual asset failures are skipped and recorded — the batch continues
 - Failed assets are logged with error details
-- **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible. If a prior Auto Export run was interrupted mid-flight by the operating system, the report names which scope (timeline / favorites / albums / shared albums) was in flight at the time
+- **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible. The report also includes the latest Photos library catch-up result
 - When Photos can't provide an asset's edited version (`Edited resource unavailable`), the app **falls back to writing the original** with a `_orig` suffix so the asset still gets bytes on disk; the diagnostic report annotates the affected entries
 
-Export progress storage errors stop further exports using the affected records and show a Retry action. Restore storage access or free disk space, then retry while the app remains open to save retained progress without resetting history. Export runs acknowledge record writes before reporting completion.
+Export progress storage errors stop further exports using the affected records and show a Retry action. Restore storage access or free disk space, then retry while the app remains open to save retained progress without resetting history. If Retry finds damaged history, the Reset prompt appears so recovery can continue. Dismissing a timeline storage alert also allows a collection recovery alert to appear. Export runs acknowledge record writes before reporting completion.
 
 ## Current boundaries
 

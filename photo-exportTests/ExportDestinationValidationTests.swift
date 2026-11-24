@@ -10,7 +10,8 @@ struct ExportDestinationValidationTests {
 
   @Test func urlForMonthThrowsNoSelectionWhenNoFolderSelected() {
     let mgr = ExportDestinationManager(
-      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager")
+    )
     #expect(throws: ExportDestinationManager.ExportDestinationError.noSelection) {
       try mgr.urlForMonth(year: 2025, month: 6)
     }
@@ -21,49 +22,52 @@ struct ExportDestinationValidationTests {
   /// Helper that creates a manager pointing at a real temp directory so the
   /// noSelection / notAvailable / notWritable guards pass and we actually hit
   /// the year/month validation.
-  private func managerWithFolder() throws -> (ExportDestinationManager, URL) {
+  private func managerWithFolder() async throws -> (ExportDestinationManager, URL) {
     let dir = TestScratch.directory("ExportDestValidation")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let mgr = ExportDestinationManager(
-      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
-    mgr.setSelectedFolderForTesting(dir)
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
+      bookmarkSaver: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in })
+    await mgr.persistSelectionAndWait(dir)
     return (mgr, dir)
   }
 
-  @Test func urlForMonthThrowsInvalidYearForZero() throws {
-    let (mgr, dir) = try managerWithFolder()
+  @Test func urlForMonthThrowsInvalidYearForZero() async throws {
+    let (mgr, dir) = try await managerWithFolder()
     defer { try? FileManager.default.removeItem(at: dir) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.invalidYear) {
       try mgr.urlForMonth(year: 0, month: 6)
     }
   }
 
-  @Test func urlForMonthThrowsInvalidYearForNegative() throws {
-    let (mgr, dir) = try managerWithFolder()
+  @Test func urlForMonthThrowsInvalidYearForNegative() async throws {
+    let (mgr, dir) = try await managerWithFolder()
     defer { try? FileManager.default.removeItem(at: dir) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.invalidYear) {
       try mgr.urlForMonth(year: -1, month: 6)
     }
   }
 
-  @Test func urlForMonthThrowsInvalidMonthForZero() throws {
-    let (mgr, dir) = try managerWithFolder()
+  @Test func urlForMonthThrowsInvalidMonthForZero() async throws {
+    let (mgr, dir) = try await managerWithFolder()
     defer { try? FileManager.default.removeItem(at: dir) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.invalidMonth) {
       try mgr.urlForMonth(year: 2025, month: 0)
     }
   }
 
-  @Test func urlForMonthThrowsInvalidMonthForThirteen() throws {
-    let (mgr, dir) = try managerWithFolder()
+  @Test func urlForMonthThrowsInvalidMonthForThirteen() async throws {
+    let (mgr, dir) = try await managerWithFolder()
     defer { try? FileManager.default.removeItem(at: dir) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.invalidMonth) {
       try mgr.urlForMonth(year: 2025, month: 13)
     }
   }
 
-  @Test func urlForMonthThrowsInvalidMonthForNegative() throws {
-    let (mgr, dir) = try managerWithFolder()
+  @Test func urlForMonthThrowsInvalidMonthForNegative() async throws {
+    let (mgr, dir) = try await managerWithFolder()
     defer { try? FileManager.default.removeItem(at: dir) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.invalidMonth) {
       try mgr.urlForMonth(year: 2025, month: -1)
@@ -72,8 +76,8 @@ struct ExportDestinationValidationTests {
 
   // MARK: - Happy path (valid year/month creates directory)
 
-  @Test func urlForMonthCreatesYearMonthDirectory() throws {
-    let (mgr, dir) = try managerWithFolder()
+  @Test func urlForMonthCreatesYearMonthDirectory() async throws {
+    let (mgr, dir) = try await managerWithFolder()
     defer { try? FileManager.default.removeItem(at: dir) }
     let result = try mgr.urlForMonth(year: 2025, month: 6)
     #expect(result.lastPathComponent == "06")
@@ -94,7 +98,7 @@ struct ExportDestinationValidationTests {
   /// folder is removed before restore. The behavioural pin: restore reports
   /// the destination as unavailable, and the stored bookmark bytes are not
   /// rewritten (proving the synchronous refresh was deferred).
-  @Test func restoringBookmarkForMissingFolderDoesNotRewriteBookmark() throws {
+  @Test func restoringBookmarkForMissingFolderDoesNotRewriteBookmark() async throws {
     let dir = TestScratch.directory("ExportDest-Issue92")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -106,9 +110,11 @@ struct ExportDestinationValidationTests {
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let bookmarkBytesBefore = defaults.data(forKey: bookmarkKey)
     #expect(bookmarkBytesBefore != nil)
 
@@ -116,9 +122,12 @@ struct ExportDestinationValidationTests {
 
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
     )
 
+    await restored.waitForValidation()
     #expect(restored.isAvailable == false)
     #expect(restored.isWritable == false)
     #expect(restored.destinationId == nil)
@@ -126,12 +135,8 @@ struct ExportDestinationValidationTests {
     #expect(bookmarkBytesBefore == bookmarkBytesAfter)
   }
 
-  @Test(
-    .disabled(
-      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true (per Apple's docs) so this runs there."
-    ))
-  func persistedBookmarkRestoresFolderAcrossManagerInstances() throws {
+  @Test
+  func persistedBookmarkRestoresFolderAcrossManagerInstances() async throws {
     let dir = TestScratch.directory("ExportDestBookmark")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -141,26 +146,37 @@ struct ExportDestinationValidationTests {
     let bookmarkKey = "ExportDestinationBookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
+    var acquired: [URL] = []
+    var released: [URL] = []
     let writer = ExportDestinationManager(
       skipRestore: true,
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { url in
+        acquired.append(url)
+        return true
+      },
+      validationScopeReleaser: { released.append($0) }
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
 
     let restored = ExportDestinationManager(
       userDefaults: defaults,
-      bookmarkDefaultsKey: bookmarkKey
+      bookmarkDefaultsKey: bookmarkKey,
+      validationScopeAcquirer: { url in
+        acquired.append(url)
+        return true
+      },
+      validationScopeReleaser: { released.append($0) }
     )
 
+    await restored.waitForValidation()
     #expect(restored.selectedFolderURL?.standardizedFileURL == dir.standardizedFileURL)
     #expect(restored.canExportNow)
     #expect(restored.destinationId == writer.destinationId)
 
-    let scopedURL = restored.beginScopedAccess()
-    #expect(scopedURL?.standardizedFileURL == dir.standardizedFileURL)
-    if let scopedURL {
-      restored.endScopedAccess(for: scopedURL)
-    }
+    #expect(acquired.count >= 2)
+    #expect(acquired == released)
+    #expect(acquired.allSatisfy { $0.standardizedFileURL == dir.standardizedFileURL })
   }
 }

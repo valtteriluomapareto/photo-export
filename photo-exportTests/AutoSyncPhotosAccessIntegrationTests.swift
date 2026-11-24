@@ -60,7 +60,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
     let autoSync = AutoSyncManager()
     private(set) var summaries: SummaryProbe?
 
-    init() {
+    init() async {
       photoLibrary.favoritesAssets = [asset]
       photoLibrary.resourcesByAssetId[asset.id] = [
         TestAssetFactory.makeResource(originalFilename: "favorite-A.jpg")
@@ -77,9 +77,9 @@ struct AutoSyncPhotosAccessIntegrationTests {
         safety: .safe
       )
       timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-      timelineStore.configure(for: destinationSnapshot.id!)
+      await timelineStore.configureAndWait(for: destinationSnapshot.id!)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-      collectionStore.configure(for: destinationSnapshot.id!)
+      await collectionStore.configureAndWait(for: destinationSnapshot.id!)
       exportManager = ExportManager(
         photoLibraryService: library,
         exportDestination: destination,
@@ -120,8 +120,6 @@ struct AutoSyncPhotosAccessIntegrationTests {
           dirtyStateStore: builder.dirtyStore,
           retryStateStore: builder.retryStore,
           runSummaryStore: builder.runSummaryStore,
-          perDestinationTokenStore: builder.perDestinationTokenStore,
-          currentRunStore: builder.currentRunStore,
           clock: builder.clock,
           photosAuthorization: library,
           userDefaults: builder.userDefaults
@@ -139,8 +137,8 @@ struct AutoSyncPhotosAccessIntegrationTests {
     func tearDown() {
       autoSync.setEnabled(false)
       exportManager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       destination.cleanup()
     }
@@ -164,7 +162,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   }
 
   @Test func changeExportsWithAccess() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.attach()
     switch f.autoSync.state {
@@ -183,10 +181,10 @@ struct AutoSyncPhotosAccessIntegrationTests {
     await expectExported(f, summaries: 1)
   }
 
-  /// Without access nothing runs: no journal, no summary, the change stays pending. Once
+  /// Without access nothing runs: no summary, the change stays pending. Once
   /// access returns, the catch-up exports it.
   @Test func missingAccessHoldsTheChangeUntilAccessReturns() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.setAccess(false)
     f.activate()
@@ -197,7 +195,6 @@ struct AutoSyncPhotosAccessIntegrationTests {
     f.builder.clock.advance(by: 30)
     f.builder.clock.advance(by: 30)
     #expect(f.autoSync.activeRunFanOutTask == nil)
-    #expect(f.builder.currentRunStore.saveCount == 0)
     #expect(f.builder.runSummaryStore.saveCount == 0)
     #expect(f.photoLibrary.scopeFetchCalls.isEmpty)
     #expect(f.builder.clock.pendingCount == 0)
@@ -218,7 +215,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   /// Revoked while the app was in the background: the cached flag still says authorized,
   /// but the refresh before the run reads the live value and nothing runs.
   @Test func backgroundRevokeRunsNothing() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.attach()
     f.pushChange()
@@ -227,7 +224,6 @@ struct AutoSyncPhotosAccessIntegrationTests {
     f.builder.clock.advance(by: 30)
     #expect(f.autoSync.state == .blocked(.photosAccessMissing))
     #expect(f.autoSync.activeRunFanOutTask == nil)
-    #expect(f.builder.currentRunStore.saveCount == 0)
     #expect(f.builder.runSummaryStore.saveCount == 0)
     #expect(f.photoLibrary.scopeFetchCalls.isEmpty)
     #expect(f.favorites.pendingAssetIds.contains(f.asset.id))
@@ -239,7 +235,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   /// isn't reached under the override service (`PhotoLibraryManagerLiveAuthorizationTests`
   /// covers it).
   @Test func revokeDuringAScopesFetchFailsTheScopeAndTheNextRefreshBlocks() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.attach()
     f.pushChange()

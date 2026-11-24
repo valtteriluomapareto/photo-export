@@ -94,57 +94,24 @@ struct ExportAllAlbumsTests {
 
   // MARK: - Test harness
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let fileSystem: FakeFileSystem
-    let timelineStore: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    /// Tear down in the right order: cancel anything in flight, flush both stores'
-    /// IO queues so no async append is still racing toward the temp dirs, remove
-    /// the dirs, drop the per-suite UserDefaults. Tests using `AsyncCheckpoint`
-    /// must call `await checkpoint.releaseAll()` before this so suspended
-    /// writer/fetch tasks unblock — otherwise `cancelAndClear` waits on tasks
-    /// that have nothing to wake them up.
-    func cleanup() {
-      manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let timelineStore = h.timelineStore
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    timelineStore.drainSynchronously()
+    collectionStore.drainSynchronously()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportAllAlbums")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let suiteName = TestScratch.suiteName("ExportAllAlbums")
-    let defaults = TestScratch.defaults(suiteName: suiteName)
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer, fileSystem: fileSystem,
-      timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+  private func makeHarness() async -> Harness {
+    await Harness(label: "ExportAllAlbums")
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -186,8 +153,8 @@ struct ExportAllAlbumsTests {
   @Test(.timeLimit(.minutes(1))) func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites()
     async throws
   {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let topAlbum = seedAlbum(h.photoLib, localId: "top-A", ids: ["a1", "a2"])
     let nestedAlbum = seedAlbum(
@@ -238,9 +205,9 @@ struct ExportAllAlbumsTests {
     let fileSystem = FakeFileSystem()
     let storeRoot = TestScratch.directory("ExportAllAlbums-cache")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
+    await timelineStore.configureAndWait(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
+    await collectionStore.configureAndWait(for: "test")
     let suiteName = TestScratch.suiteName("ExportAllAlbums-cache")
     let defaults = TestScratch.defaults(suiteName: suiteName)
     let cacheControl = RecordingPHAssetCacheControl()
@@ -256,8 +223,8 @@ struct ExportAllAlbumsTests {
     )
     defer {
       manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -283,8 +250,8 @@ struct ExportAllAlbumsTests {
   }
 
   @Test func emptyAlbumTreeSetsNoAlbumsMessage() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     h.photoLib.collectionTree = [
       PhotoCollectionDescriptor(
@@ -305,8 +272,8 @@ struct ExportAllAlbumsTests {
   /// so the queue would resume processing as soon as the enqueue loop completed
   /// and called `processQueueIfNeeded()`.
   @Test func pauseHonoredDuringEnqueueWindow() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
     let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1"])
@@ -324,7 +291,7 @@ struct ExportAllAlbumsTests {
     // suspended on album B's fetch gate.
     await fetchGate.waitForEnter(count: 1)
     #expect(h.manager.queueCount > 0)
-    #expect(h.manager.isEnqueueingAll)
+    #expect(h.manager.isPreparingExport)
     #expect(!h.manager.isRunning)
 
     // The pre-fix bug: pause() guarded on `isRunning`, so this no-op'd.
@@ -334,7 +301,7 @@ struct ExportAllAlbumsTests {
     // Release the fetch gate so the enqueue loop can complete and call
     // processQueueIfNeeded(). With pause held, the run loop must NOT start.
     await fetchGate.release(1)
-    await waitUntil(!h.manager.isEnqueueingAll)
+    await waitUntil(!h.manager.isPreparingExport)
     #expect(h.manager.isPaused)
     #expect(!h.manager.isRunning)
     #expect(h.manager.queueCount > 0)
@@ -351,8 +318,8 @@ struct ExportAllAlbumsTests {
   /// `pendingJobs` with no active processor. The catch path drains what was queued and
   /// surfaces the partial state via the empty-run message slot.
   @Test func partialEnqueueFailureDrainsTheJobsAlreadyQueued() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "album-A", ids: ["a1", "a2"])
     let albumB = seedAlbum(h.photoLib, localId: "broken-album", ids: ["b1"])
@@ -377,7 +344,7 @@ struct ExportAllAlbumsTests {
     // and the queue empties.
     #expect(h.manager.totalJobsCompleted == 2)
     #expect(h.manager.queueCount == 0)
-    #expect(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isPreparingExport)
     // The partial-failure message lands in the queue-warning slot (rendered alongside
     // active progress). emptyRunMessage stays nil because the queue isn't empty.
     #expect(
@@ -388,8 +355,8 @@ struct ExportAllAlbumsTests {
 
   @Test(.timeLimit(.minutes(2))) func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws
   {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "done-album", ids: ["d1"])
     h.photoLib.collectionTree = [album]
@@ -408,29 +375,27 @@ struct ExportAllAlbumsTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
-    var messages: [String] = []
-    let subscription = h.manager.progressState.$emptyRunMessage
-      .compactMap { $0 }
-      .sink { messages.append($0) }
-    defer { subscription.cancel() }
+    let subscription = ObservedValues { h.manager.progressState.emptyRunMessage }
     h.manager.startExportAllAlbums()
     await h.manager.waitForQueueDrained()
 
     #expect(
-      messages == ["All albums in this destination are already exported."])
+      subscription.values.compactMap { $0 } == [
+        "All albums in this destination are already exported."
+      ])
     #expect(h.manager.totalJobsEnqueued == 0)
     #expect(h.manager.totalJobsCompleted == 0)
     #expect(h.writer.writeCalls.isEmpty)
     #expect(h.fileSystem.moveCalls.isEmpty)
-    #expect(!h.manager.isRunning && !h.manager.isEnqueueingAll && h.manager.queueCount == 0)
+    #expect(!h.manager.isRunning && !h.manager.isPreparingExport && h.manager.queueCount == 0)
   }
 
   /// AutoSync passes `selectionOverride` so a scheduled run honours the AutoSync
   /// version selection regardless of the current UI toggle. The override must
   /// thread through to every queued `ExportJob.selection`, not just the first.
   @Test func selectionOverrideThreadsToEveryQueuedJob() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
     let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1"])
@@ -467,8 +432,8 @@ struct ExportAllAlbumsTests {
   /// equal the same default value. Two opposite-direction tests isolate the
   /// parameter-threading from a coincidental match.
   @Test func selectionOverrideWinsOverToggleInBothDirections() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "A", ids: ["a1", "a2"])
     h.photoLib.collectionTree = [album]

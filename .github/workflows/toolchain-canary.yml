@@ -11,6 +11,7 @@ on:
   pull_request:
     paths:
       - .xcode-version
+      - photo-export.xcodeproj/project.pbxproj
       - scripts/ci/select-xcode.sh
       - scripts/ci/build-app.sh
       - scripts/ci/run-unit-tests.sh
@@ -68,8 +69,6 @@ jobs:
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
         timeout-minutes: 15
-        env:
-          TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"
         run: bash scripts/ci/run-unit-tests.sh
 
       - name: Check regression gates ran
@@ -96,14 +95,7 @@ jobs:
 
       - name: Print build and test failure diagnostics
         if: failure()
-        run: |
-          for log in debug-build.log debug-werror-build.log test.log release-build.log; do
-            if [[ -f "$log" ]]; then
-              echo "::group::Failure diagnostics: $log"
-              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
-              echo "::endgroup::"
-            fi
-          done
+        run: bash scripts/ci/print-failure-diagnostics.sh
 
       - name: Collect test process diagnostics
         if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}

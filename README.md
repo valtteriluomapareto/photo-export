@@ -22,7 +22,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 **read-only** — it can't modify or delete anything in your Photos library. It does not upload your photos, use any third-party cloud
 service, require an account, or ask for your Apple Account password.
 
-If Photos access is denied, choose **Open System Settings**, enable access under **Privacy & Security → Photos**, then return to Photo Export. The app checks access again so you can continue setup or browsing.
+The access screen, Auto Export Settings and manual export failures share one recovery instruction: turn on Photos access for Photo Export in **System Settings → Privacy & Security → Photos**. Choose **Open System Settings** on the access screen, then return to the app to continue.
 
 If Auto Export shows "Blocked — Photos access needed", Photos access is off and Auto Export doesn't run. Turn it back on under **System Settings → Privacy & Security → Photos**; pending changes are kept and export shortly after you return to Photo Export.
 
@@ -30,11 +30,11 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
 
 - Browse your library by **Timeline** or **Collections**, including Favorites, albums and folders. [Browsing
   guide](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
-- Open thumbnails and full-size previews while the first batch loads. Details show the current collection’s export history. [Preview
+- Open thumbnails and full-size previews while the first batch loads. Thumbnail preheating follows scrolling, with static placeholders while images arrive. Details show the current collection’s export history. [Preview
   details](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
-- Photos edits refresh the grid and previews in place while keeping surviving selections. [Refresh
+- Photos edits refresh the grid and previews in place while keeping surviving selections. Timeline progress badges retain their last counts when an outdated count request is canceled. [Refresh
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
-- Export a month, year or queued batch while skipping completed files and protecting existing copies. [File naming and
+- Export a month, year or queued batch while skipping completed files and protecting existing copies. Scanning counts as active export work immediately, so Import and Auto Export wait. [File naming and
   reuse](https://valtteriluomapareto.github.io/photo-export/features/#files-already-at-the-destination).
 - Cmd/Shift-click sidebar rows or album tiles to export a mix of months, years, Favorites, albums and folders. [Batch
   actions](https://valtteriluomapareto.github.io/photo-export/features/#export).
@@ -54,21 +54,22 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   settings](https://valtteriluomapareto.github.io/photo-export/features/#live-photos).
 - Follow progress below the toolbar, then pause, resume, cancel or clear queued work. [Queue and safe-restart
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#queue-controls).
-- See completed and failed counts after a manual export, with **View Issues** for failures. [Export
+- See completed and failed counts after a manual export, with wrapped failure details and **View Issues**. [Export
   outcomes](https://valtteriluomapareto.github.io/photo-export/export-icloud-photos/#resuming-an-interrupted-export).
-- Enable **Auto Export** to add new photos automatically, retry transient failures and optionally open at login. [Auto Export
+- Enable **Auto Export** to add new photos automatically, retry transient failures and optionally open at login. Auto Export waits for a newly selected destination to finish its safety check before starting. [Auto Export
   guide](https://valtteriluomapareto.github.io/photo-export/auto-export/).
 - See destination problems in the main window and reconnect a drive or restore folder access. [Destination
   guidance](https://valtteriluomapareto.github.io/photo-export/features/#export-destination).
+- Re-select the same backup folder without interrupting an active export.
 - Track progress separately for each destination and resume interrupted exports. [History and
   recovery](https://valtteriluomapareto.github.io/photo-export/features/#tracking-and-resume).
-- Import an existing backup to rebuild history for Timeline, Favorites, albums and Shared Albums. [Import and
+- Import an existing backup to rebuild history for Timeline, Favorites, albums and Shared Albums. Failures saving import history show an error. [Import and
   recovery](https://valtteriluomapareto.github.io/photo-export/export-icloud-photos/#rebuilding-state-from-an-existing-backup).
-- Save a diagnostic report from the **Help** menu when an export needs investigation.
+- Save a diagnostic report from the **Help** menu with failed or in-progress exports and the latest Photos library catch-up result.
   [Diagnostics](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
 - Keep an original backup when Photos cannot supply an edited version. [Fallback
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
-- Retry export-history storage errors without resetting retained progress. [Storage
+- Retry export-history storage errors without resetting retained progress. If Retry finds damaged history, its Reset prompt appears. [Storage
   recovery](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
 - Recover conservatively from damaged Auto Export metadata while retaining known retry history. [Auto Export
   safety](https://valtteriluomapareto.github.io/photo-export/auto-export/#safety).
@@ -141,6 +142,9 @@ xcodebuild \
 ```
 
 Optional local tools: `swiftlint`, `swift-format`, `xcpretty`.
+
+For automatic real-export measurement capture and the local synthetic benchmark, see
+[`scripts/README.md` → Export measurements](scripts/README.md#export-measurements).
 
 Marketing screenshots are captured with `scripts/screenshots/capture.sh`, which builds the app, then for each marketing surface launches it
 with `--screenshot-mode --screenshot-surface=<key>` against a curated synthetic Photos library (no personal photos involved) and captures

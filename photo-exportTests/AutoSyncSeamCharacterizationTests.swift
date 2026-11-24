@@ -18,7 +18,7 @@ import Testing
 /// The tests assert on the canonical sequence (after de-duplicating adjacent
 /// identical states) rather than raw frame count, because
 /// `exportRunStatePublisher` is a `CombineLatest4` over `activeRunContext`,
-/// `isRunning`, `queueCount` and `isEnqueueingAll`, and intermediate tuples land in
+/// `isRunning`, `queueCount` and `isPreparingExport`, and intermediate tuples land in
 /// unobservable order across `await` hops. Asserting raw counts or exact emission timing would flake under future
 /// refactors that reorder property mutation; asserting canonical transitions
 /// captures the invariant AutoSync actually depends on.
@@ -51,65 +51,41 @@ struct AutoSyncSeamCharacterizationTests {
 
   // MARK: - Harness
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let store: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() async {
-      if let checkpoint = writer.checkpoint {
-        await checkpoint.releaseAll()
-      }
-      manager.cancelAndClear()
-      store.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
+  private func cleanupHarness(_ h: Harness) async {
+    let manager = h.manager
+    let dest = h.dest
+    let writer = h.writer
+    let store = h.store
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    if let checkpoint = writer.checkpoint {
+      await checkpoint.releaseAll()
     }
+    manager.cancelAndClear()
+    store.drainSynchronously()
+    collectionStore.drainSynchronously()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("AutoSyncSeam")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("AutoSyncSeam")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+  private func makeHarness() async -> Harness {
+    await Harness(label: "AutoSyncSeam")
   }
 
   /// Runs `body` with a fresh harness and always awaits its cleanup, including when the
   /// body throws.
   private func withHarness(_ body: (Harness) async throws -> Void) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     do {
       try await body(harness)
     } catch {
-      await harness.cleanup()
+      await cleanupHarness(harness)
       throw error
     }
-    await harness.cleanup()
+    await cleanupHarness(harness)
   }
 
   /// A state that is both manual- and AutoSync-active would let the canonical mapping
@@ -253,8 +229,8 @@ struct AutoSyncSeamCharacterizationTests {
   }
 
   /// A manual export that supersedes an AutoSync run: the AutoSync run resolves as
-  /// superseded, the state passes through `idle` while the manual scan runs (AutoSync's
-  /// debounce covers that window), and the manual export reads as `manualActive`.
+  /// superseded, the state reads `idle` until the manual export starts, and the manual export
+  /// reads as `manualActive` from its scan onwards.
   @Test func manualExportSupersedingAutoSyncYieldsCanonicalSequence() async throws {
     try await withHarness { harness in
       harness.photoLib.favoritesAssets = [TestAssetFactory.makeAsset(id: "auto")]
@@ -314,17 +290,17 @@ struct AutoSyncSeamCharacterizationTests {
     }
   }
 
-  /// Issue #67 item 4a: `isEnqueueingAll` participates in the AutoSync
+  /// Issue #67 item 4a: `isPreparingExport` participates in the AutoSync
   /// `CombineLatest4`. The bulk-enqueue window — after the dispatcher flips
-  /// `isEnqueueingAll = true` but before the first job lands in `pendingJobs`
+  /// `isPreparingExport = true` but before the first job lands in `pendingJobs`
   /// — must register as `manualActive` so AutoSync does not race to start its
   /// own background run on top of a user-initiated multi-select bulk export.
   ///
   /// The test gates the *enqueue-time PhotoKit fetch* (not the writer) so
   /// when the assertion runs, `pendingJobs.isEmpty`, `isRunning == false`,
-  /// `queueCount == 0`, and `isEnqueueingAll == true`. The publisher must
-  /// have emitted `.manualActive` *purely* on `isEnqueueingAll`. If a future
-  /// regression dropped `isEnqueueingAll` from the CombineLatest tuple, the
+  /// `queueCount == 0`, and `isPreparingExport == true`. The publisher must
+  /// have emitted `.manualActive` *purely* on `isPreparingExport`. If a future
+  /// regression dropped `isPreparingExport` from the CombineLatest tuple, the
   /// publisher would still be `.idle` here — no other observable property
   /// has flipped yet — and the assertion below fails. Gating the writer
   /// instead would not catch the regression (the coordinator's `isRunning`
@@ -335,7 +311,9 @@ struct AutoSyncSeamCharacterizationTests {
       // One asset in 2026-03; the dispatcher iterates [2026] and calls
       // enqueueYear → photoLibraryService.fetchAssets(year: 2026, month: nil),
       // which the fake routes through `fetchAssetsCheckpointByYear[2026]`.
-      let asset = TestAssetFactory.makeAsset(id: "a1")
+      let asset = TestAssetFactory.makeAsset(
+        id: "a1",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 3, day: 15))!)
       harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
       harness.photoLib.resourcesByAssetId["a1"] = [
         TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
@@ -352,9 +330,9 @@ struct AutoSyncSeamCharacterizationTests {
       harness.manager.startExportTimelineSelection(years: [2026], months: [])
       await fetchGate.waitForEnter(count: 1)
 
-      // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isEnqueueingAll=true.
+      // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isPreparingExport=true.
       // The publisher must already have emitted `.manualActive` from
-      // `isEnqueueingAll` alone — no other input has flipped.
+      // `isPreparingExport` alone — no other input has flipped.
       #expect(
         harness.manager.pendingJobs.isEmpty,
         "test sanity: dispatcher must be suspended before any job lands")
@@ -362,7 +340,7 @@ struct AutoSyncSeamCharacterizationTests {
         !harness.manager.isRunning,
         "test sanity: queue must not yet be running")
       #expect(
-        harness.manager.isEnqueueingAll,
+        harness.manager.isPreparingExport,
         "test sanity: the dispatcher's mid-enqueue flag must be set")
       let midGate = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
       #expect(
@@ -371,8 +349,8 @@ struct AutoSyncSeamCharacterizationTests {
         AutoSync seam contract violation: while the multi-select timeline \
         dispatcher is suspended inside the enqueue fetch (pending=0, \
         isRunning=false, queueCount=0), the publisher must already be in \
-        `manualActive` because `isEnqueueingAll` participates in \
-        CombineLatest4. Got: \(midGate). If `isEnqueueingAll` is no longer in \
+        `manualActive` because `isPreparingExport` participates in \
+        CombineLatest4. Got: \(midGate). If `isPreparingExport` is no longer in \
         `exportRunStatePublisher`'s tuple, restore it (issue #67 item 4a).
         """
       )
@@ -381,7 +359,7 @@ struct AutoSyncSeamCharacterizationTests {
       await fetchGate.releaseAll()
       // Not a `#require`: a stalled drain must still reach the canonical-sequence diff below.
       _ = await eventually("queue drained") {
-        !(harness.manager.isRunning || harness.manager.isEnqueueingAll
+        !(harness.manager.isRunning || harness.manager.isPreparingExport
           || harness.manager.queueCount > 0)
       }
 

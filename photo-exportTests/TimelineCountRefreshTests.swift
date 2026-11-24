@@ -17,8 +17,8 @@ struct TimelineCountRefreshTests {
     let root = TestScratch.directory("TimelineCountRefresh")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
-    defer { store.flushForTesting() }
-    store.configure(for: "A")
+    defer { store.drainSynchronously() }
+    await store.configureAndWait(for: "A")
     store.markVariantExported(
       assetId: "old", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "old.jpg", exportedAt: Date())
@@ -80,9 +80,12 @@ struct TimelineCountRefreshTests {
       responses.continuation.yield(adjusted)
       return adjusted ? 1 : 2
     }
-    var observed: [String] = []
-    let subscription = loader.$countsByYearMonth.sink { snapshot in
-      observed.append("\(snapshot["2025-1"]?.total ?? -1):\(snapshot["2025-1"]?.adjusted ?? -1)")
+    let initial = loader.countsByYearMonth
+    let subscription = ObservedValues { loader.countsByYearMonth }
+    func observed() -> [String] {
+      ([initial] + subscription.values).map {
+        "\($0["2025-1"]?.total ?? -1):\($0["2025-1"]?.adjusted ?? -1)"
+      }
     }
     let refresh = Task { await loader.loadCounts(forYears: [2025]) }
     var failure: Error?
@@ -98,16 +101,59 @@ struct TimelineCountRefreshTests {
       #expect(await iterator.next() == !totalFirst)
       #expect(loader.assetCountsByYearMonth["2025-1"] == 1)
       #expect(loader.adjustedCountsByYearMonth["2025-1"] == 0)
-      #expect(observed == ["1:0"])
+      #expect(observed() == ["1:0"])
     } catch { failure = error }
     await totalGate.releaseAll()
     await adjustedGate.releaseAll()
     await refresh.value
     #expect(loader.assetCountsByYearMonth["2025-1"] == 2)
     #expect(loader.adjustedCountsByYearMonth["2025-1"] == 1)
-    #expect(observed == ["1:0", "2:1"])
+    #expect(observed() == ["1:0", "2:1"])
     withExtendedLifetime(subscription) {}
     if let failure { throw failure }
+  }
+
+  @Test(arguments: [true, false])
+  func invalidatedCountWorkRetainsLoadedPairAndCanRecover(cancelAdjusted: Bool) async throws {
+    let service = FakePhotoLibraryService()
+    service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }
+    let loader = TimelineSidebarCounts(service: service)
+    await loader.loadCounts(forYears: [2025])
+    let initial = loader.countsByYearMonth
+    let subscription = ObservedValues { loader.countsByYearMonth }
+    let cache = CollectionCountCache()
+    let gate = AsyncCheckpoint()
+    service.cachedCountOverride = { scope, adjusted in
+      guard scope == .timeline(year: 2025, month: 1) else { return adjusted ? 0 : 1 }
+      if adjusted == cancelAdjusted {
+        return try await cache.count(for: "held") {
+          await gate.enter()
+          return adjusted ? 1 : 2
+        }
+      }
+      return adjusted ? 1 : 2
+    }
+    let refresh = Task { await loader.loadCounts(forYears: [2025]) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      await cache.invalidateAll()
+      await gate.releaseAll()
+      await refresh.value
+      #expect(loader.countsByYearMonth == initial)
+      #expect(subscription.values.isEmpty)
+      #expect(loader.lastError == nil)
+      service.cachedCountOverride = { scope, adjusted in
+        guard scope == .timeline(year: 2025, month: 1) else { return adjusted ? 0 : 1 }
+        return adjusted ? 1 : 2
+      }
+      await loader.loadCounts(forYears: [2025])
+      #expect(loader.countsByYearMonth["2025-1"] == .init(total: 2, adjusted: 1))
+      #expect(loader.lastError == nil)
+    } cleanup: {
+      await gate.releaseAll()
+      await refresh.value
+      withExtendedLifetime(subscription) {}
+    }
   }
 
   @Test func identicalRefreshDoesNotPublish() async {
@@ -115,14 +161,12 @@ struct TimelineCountRefreshTests {
     service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }
     let loader = TimelineSidebarCounts(service: service)
     await loader.loadCounts(forYears: [2025])
-    var publications = 0
-    let subscription = loader.objectWillChange.sink { publications += 1 }
-    var snapshots = 0
-    let countSubscription = loader.$countsByYearMonth.dropFirst().sink { _ in snapshots += 1 }
+    let probe = ObservationProbe {
+      _ = loader.countsByYearMonth
+      _ = loader.lastError
+    }
     await loader.loadCounts(forYears: [2025])
-    #expect(publications == 0)
-    #expect(snapshots == 0)
-    withExtendedLifetime((subscription, countSubscription)) {}
+    #expect(probe.changeCount == 0)
   }
 
   @Test(arguments: [true, false])
@@ -240,10 +284,14 @@ struct PhotoLibraryCountInvalidationTests {
     let service = FakePhotoLibraryService()
     let scope = PhotoFetchScope.timeline(year: 2025, month: 1)
     let old = AssetDescriptor(
-      id: "old", creationDate: Date(), mediaType: .image, pixelWidth: 1,
+      id: "old",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      mediaType: .image, pixelWidth: 1,
       pixelHeight: 1, duration: 0, hasAdjustments: false)
     let edited = AssetDescriptor(
-      id: "new", creationDate: Date(), mediaType: .image, pixelWidth: 1,
+      id: "new",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      mediaType: .image, pixelWidth: 1,
       pixelHeight: 1, duration: 0, hasAdjustments: true)
     service.assetsByYearMonth["2025-1"] = [old]
     #expect(try await service.cachedCountAssets(in: scope) == 1)

@@ -38,47 +38,43 @@ struct JSONLRecordFileTests {
     return (dir, file, queue)
   }
 
-  private func emptySnapshot() -> Snapshot { Snapshot(records: [:]) }
-
   // MARK: - Load (empty / missing)
 
-  @Test func loadReturnsEmptyWhenNothingOnDisk() throws {
+  @Test func loadReturnsEmptyWhenNothingOnDisk() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(result.snapshot == nil)
     #expect(result.ops.isEmpty)
-    #expect(result.malformedLineCount == 0)
   }
 
   // MARK: - Append + load roundtrip
 
-  @Test func appendThenLoadRecoversOps() throws {
+  @Test func appendThenLoadRecoversOps() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let op1 = Operation(kind: .upsert, key: "a", value: "1")
     let op2 = Operation(kind: .upsert, key: "b", value: "2")
-    file.append(op1, currentSnapshot: { Snapshot(records: ["a": "1"]) })
-    file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
-    file.flushForTesting()
+    file.append(op1)
+    file.append(op2)
+    file.drainSynchronously()
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(result.snapshot == nil)  // neither append crossed the threshold
     #expect(result.ops == [op1, op2])
-    #expect(result.malformedLineCount == 0)
   }
 
   // MARK: - Malformed lines
 
-  @Test func loadSkipsMalformedLinesAndCountsThem() throws {
+  @Test func loadSkipsMalformedLines() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let op = Operation(kind: .upsert, key: "a", value: "1")
-    file.append(op, currentSnapshot: { Snapshot(records: ["a": "1"]) })
-    file.flushForTesting()
+    file.append(op)
+    file.drainSynchronously()
 
     // Inject a malformed line into the log.
     let logURL = dir.appendingPathComponent("log.jsonl")
@@ -87,39 +83,38 @@ struct JSONLRecordFileTests {
     try logBytes.write(to: logURL)
     // Append another good line after the malformed one.
     let op2 = Operation(kind: .upsert, key: "b", value: "2")
-    file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
-    file.flushForTesting()
+    file.append(op2)
+    file.drainSynchronously()
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(result.ops == [op, op2])
-    #expect(result.malformedLineCount == 1)
   }
 
   // MARK: - writeSnapshot
 
-  @Test func writeSnapshotPersistsAndTruncates() throws {
+  @Test func writeSnapshotPersistsAndTruncates() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let op = Operation(kind: .upsert, key: "a", value: "1")
-    file.append(op, currentSnapshot: { emptySnapshot() })
-    file.flushForTesting()
+    file.append(op)
+    file.drainSynchronously()
 
     // Manual snapshot write should leave only the snapshot, no log content.
-    try file.writeSnapshot(Snapshot(records: ["a": "1", "b": "2"]))
+    try await file.checkpoint(Snapshot(records: ["a": "1", "b": "2"]), recovering: true)
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(result.snapshot == Snapshot(records: ["a": "1", "b": "2"]))
     #expect(result.ops.isEmpty)
   }
 
   // MARK: - Atomic write: snapshot fsync produces durable file
 
-  @Test func writeSnapshotProducesFileEvenAfterSubsequentTruncate() throws {
+  @Test func writeSnapshotProducesFileEvenAfterSubsequentTruncate() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    try file.writeSnapshot(Snapshot(records: ["x": "y"]))
+    try await file.checkpoint(Snapshot(records: ["x": "y"]), recovering: true)
     let snapshotPath = dir.appendingPathComponent("snapshot.json").path
     let logPath = dir.appendingPathComponent("log.jsonl").path
     #expect(FileManager.default.fileExists(atPath: snapshotPath))
@@ -133,30 +128,6 @@ struct JSONLRecordFileTests {
     #expect(tmpFiles.isEmpty)
   }
 
-  // MARK: - clearOnDiskState
-
-  @Test func clearOnDiskStateRemovesBothFiles() throws {
-    let (dir, file, _) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    let op = Operation(kind: .upsert, key: "a", value: "1")
-    file.append(op, currentSnapshot: { emptySnapshot() })
-    try file.writeSnapshot(Snapshot(records: ["a": "1"]))
-    file.flushForTesting()
-
-    file.clearOnDiskState()
-
-    let snapshotPath = dir.appendingPathComponent("snapshot.json").path
-    let logPath = dir.appendingPathComponent("log.jsonl").path
-    #expect(!FileManager.default.fileExists(atPath: snapshotPath))
-    #expect(!FileManager.default.fileExists(atPath: logPath))
-
-    // Subsequent load returns empty.
-    let result = file.load()
-    #expect(result.snapshot == nil)
-    #expect(result.ops.isEmpty)
-  }
-
   // MARK: - Bulk reader edge cases
   //
   // The line reader was rewritten from per-byte `FileHandle.read(upToCount: 1)`
@@ -164,7 +135,7 @@ struct JSONLRecordFileTests {
   // on warm reads. These tests pin the file-shape edge cases where the two
   // implementations differ subtly.
 
-  @Test func loadHandlesLogWithoutTrailingNewline() throws {
+  @Test func loadHandlesLogWithoutTrailingNewline() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -181,16 +152,15 @@ struct JSONLRecordFileTests {
     let logURL = dir.appendingPathComponent("log.jsonl")
     try bytes.write(to: logURL)
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(
       result.ops == [
         Operation(kind: .upsert, key: "a", value: "1"),
         Operation(kind: .upsert, key: "b", value: "2"),
       ])
-    #expect(result.malformedLineCount == 0)
   }
 
-  @Test func loadSkipsConsecutiveBlankLines() throws {
+  @Test func loadSkipsConsecutiveBlankLines() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -208,16 +178,15 @@ struct JSONLRecordFileTests {
     let logURL = dir.appendingPathComponent("log.jsonl")
     try bytes.write(to: logURL)
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(
       result.ops == [
         Operation(kind: .upsert, key: "a", value: "1"),
         Operation(kind: .upsert, key: "b", value: "2"),
       ])
-    #expect(result.malformedLineCount == 0)
   }
 
-  @Test func loadHandlesZeroByteLogFile() throws {
+  @Test func loadHandlesZeroByteLogFile() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -229,31 +198,29 @@ struct JSONLRecordFileTests {
     try Data().write(to: logURL)
     #expect(FileManager.default.fileExists(atPath: logURL.path))
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(result.ops.isEmpty)
-    #expect(result.malformedLineCount == 0)
   }
 
   // MARK: - Compaction trigger
 
-  /// Crossing the mutation-count threshold writes a snapshot and truncates the log so the
+  /// An explicit checkpoint writes a snapshot and truncates the log so the
   /// next load returns the snapshot alone (no log replay).
-  @Test func compactionWritesSnapshotAndTruncatesLog() throws {
+  @Test func compactionWritesSnapshotAndTruncatesLog() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    // Stuff `compactEveryNMutations` ops through. The last one triggers compaction.
+    // Accumulate independently durable operations before maintenance.
     let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
     var rolling: [String: String] = [:]
     for i in 0..<n {
       let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
       rolling["k\(i)"] = "v\(i)"
-      let captured = rolling
-      file.append(op, currentSnapshot: { Snapshot(records: captured) })
+      file.append(op)
     }
-    file.flushForTesting()
+    try await file.checkpoint(Snapshot(records: rolling))
 
-    let result = file.load()
+    let result = (await file.load())
     #expect(result.snapshot == Snapshot(records: rolling))
     #expect(result.ops.isEmpty)
   }

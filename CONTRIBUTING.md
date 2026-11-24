@@ -122,8 +122,8 @@ checked patterns and the narrow allow marker for tests that must inspect a real 
 ### Static guards
 
 Run the repository checks that CI runs, including self-tests of the guards.
-Install the pinned Swift tools from [Style checks](#style-checks) first; the runner
-includes the strict app-and-test formatter check:
+Install the pinned tools from [Style checks](#style-checks) first; the runner includes native
+workflow/shell validation and strict app-and-test formatting:
 
 ```bash
 scripts/ci/run-guards.sh
@@ -137,23 +137,26 @@ build/test step in CI; the runner covers the static guards.
 
 ### Style checks
 
-CI pins **SwiftLint 0.65.1** and **swift-format 603.0.0** with SHA256-verified downloads. Use those
-versions for matching strict diagnostics. On macOS15+ arm64 with Command Line Tools installed, the
-same installer can prepare a local temporary session:
+CI pins **SwiftLint 0.65.1**, **swift-format 603.0.0**, **actionlint 1.7.12** and **ShellCheck
+0.11.0** with SHA256-verified downloads. Use those versions for matching strict diagnostics. On
+macOS15+ arm64 with Command Line Tools installed, the same installer can prepare a local temporary
+session:
 
 ```bash
-SWIFT_TOOLS_DIR="$(mktemp -d)"
-RUNNER_TEMP="$SWIFT_TOOLS_DIR" GITHUB_PATH="$SWIFT_TOOLS_DIR/paths" bash scripts/ci/install-swift-tools.sh
-while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$SWIFT_TOOLS_DIR/paths"
+CI_TOOLS_DIR="$(mktemp -d)"
+RUNNER_TEMP="$CI_TOOLS_DIR" GITHUB_PATH="$CI_TOOLS_DIR/paths" bash scripts/ci/install-ci-tools.sh
+while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$CI_TOOLS_DIR/paths"
 swiftlint version
 swift-format --version
+actionlint -version
+shellcheck --version
 ```
 
-The installer checks both hashes and exact versions before publishing paths; it has no
+The installer checks every hash and exact version before publishing paths; it has no
 Homebrew/latest fallback. Installed binaries remain in the temporary session directory. Other
 platforms can install the same tagged tools from their upstream sources; the CI installer targets
 its macOS arm64 image. Update pins/checksums and the installer fixtures deliberately when upgrading.
-Download provenance is recorded in [`install-swift-tools.sh`](scripts/ci/install-swift-tools.sh).
+Download provenance is recorded in [`install-ci-tools.sh`](scripts/ci/install-ci-tools.sh).
 
 Run the same enforcing style checks as CI from the repository root:
 
@@ -210,19 +213,19 @@ npm run dev
 ## Developing new features
 
 Before adding an export entry point, placement kind, variant, collaborator, or
-`@Published` property AutoSync observes:
+property or named publisher accessor AutoSync observes:
 
 1. Read [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) —
    the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a
    new X, touch these files" recipes.
 2. If your change touches the queue, AutoSync surface, record stores, the final file commit or its
-   name planning, or the screenshot photo library service, the following **regression-gate tests**
+   name planning, destination identity or root resolution, or the screenshot photo library service,
+   the following [regression-gate tests](docs/reference/architecture-conventions.md#regression-gates)
    must pass *without re-recording* unless you have explicitly audited the new behavior:
-   - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence.
-   - `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence` — pins the AutoSync
-     run's state sequence.
-   - `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence` —
-     pins a manual export superseding an AutoSync run.
+   - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence, including
+     `[idle, autoSyncActive, idle]` for an automatic run and
+     `[idle, autoSyncActive, idle, manualActive, idle]` when a manual run supersedes it.
+     The superseded summary stays `.superseded` / `.supersededByManualRun`.
    - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors` — pins
      synchronous coordinator→manager mirrors.
    - `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` — pins
@@ -233,6 +236,8 @@ Before adding an export entry point, placement kind, variant, collaborator, or
      already-exported check before retry eligibility.
    - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` — pins
      that Auto Export waits for, then runs after, the history check that "Same Folder" starts.
+   - `PublisherParityTests` — pins what subscribers of every named publisher accessor receive
+     (replay, synchronous delivery before the store, nested subscription, unchanged writes).
    - `CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing` — pins that
      exporting albums, shared albums and Favorites again, manually or from Auto Export, after Import
      Existing Backup writes nothing for files already there, against a no-import control that does
@@ -250,12 +255,30 @@ Before adding an export entry point, placement kind, variant, collaborator, or
    - `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` — pins that a deleted file's name
      stays reserved for its record, so Import Existing Backup drops that record and the next export
      writes the file back at its own name.
-
-   The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it
-   or if a gate is skipped.
+   - `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId` — pins that the real
+     destination manager, adapter, lifecycle, record stores and safety monitor keep the stable key
+     through remount fingerprint drift.
+   - `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId` — pins
+     that real bookmark and file-identity evidence gives a genuinely different folder a new nonnil
+     destination id.
+   - `ExportDestinationEscapeProtectionTests` — pins that real directory resolution refuses root
+     escapes, including symlinks and reparented cached directories, while valid directories succeed.
+   - `JSONLRecordFileIOFailureTests` — pins that flush cannot acknowledge JSONL I/O failures or a
+     newer mutation, and that snapshot recovery retains queued work.
+   - `RecordStorePersistenceHealthTests` — pins that timeline and collection history are
+     flushed and healthy before retry acknowledgement, and that recovery retains pending and
+     in-flight records.
+   - `HistoricalPersistenceFixtureTests` — pins that shipping record loaders replay immutable
+     released snapshots and logs with their original history and placement semantics.
+   - `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice` —
+     pins that shipping dirty, retry, summary and safety loaders read released state twice,
+     including targeted/manual summary compatibility.
+   - `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl` — pins that an
+     import with a failed history append reports failure; the successful control reopens durable
+     records.
 3. For a new collaborator, follow the reference's Host pattern and state ownership
-   rules. Coordinator state has one owner; intentional `@Published` mirrors on the
-   manager use synchronous sinks so AutoSync sees consistent state.
+   rules. Coordinator state has one owner; synchronous sinks update the manager's
+   bridged named-accessor state or plain tracked UI state so AutoSync sees consistent state.
 
 ## Reference material
 
@@ -265,6 +288,8 @@ Before adding an export entry point, placement kind, variant, collaborator, or
   [`docs/reference/auto-export-behavior.md`](docs/reference/auto-export-behavior.md)
 - **Style and Swift/SwiftUI patterns**:
   [`docs/reference/swift-swiftui-best-practices.md`](docs/reference/swift-swiftui-best-practices.md)
+- **Observation migration and publisher delivery contracts**:
+  [`docs/reference/observation-migration-recipe.md`](docs/reference/observation-migration-recipe.md)
 - **Persistence details**:
   [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
 - **Agent entry point**: [`AGENTS.md`](AGENTS.md)
@@ -283,7 +308,29 @@ the same pull request.
 Agent-authored PRs follow this workflow unless the user explicitly requests a
 different flow. Keep PRs focused; an unrelated PR still needs its own review and
 current-head checks. If reviewer agents are unavailable, report the limitation
-instead of presenting self-review as three-agent review:
+instead of presenting self-review as the requested independent review.
+
+### Small count-gated performance PRs
+
+The following exception applies only when **all** of these are true:
+
+- The PR is size S.
+- Its sole purpose is performance; behavior is otherwise unchanged.
+- Count tests and existing regression gates guard it.
+- It changes no regression gate, existing parity row, persisted format, never-overwrite
+  rule, or filename-claim rule.
+
+Use one Pragmatic Developer reviewer for the implementation. Their brief is: Does it
+work? Do the gates and stated budgets pass? Is anything over-engineered or outside
+scope? The issue's recorded decisions serve as the plan, so no separate plan review
+is needed. Fill in missing scope, compatibility, or validation details on the issue
+before implementing. Meaningful tests before production changes, resolving actionable
+findings, recording review outcomes, and green CI on the current head remain required.
+Explicit issue-level reviewer or plan-first requirements take precedence.
+
+### Standard flow
+
+All other PRs use the following three-role flow:
 
 1. Post the implementation plan on the relevant GitHub issue, including scope, compatibility, and
    validation.
@@ -320,14 +367,12 @@ proposes weekly Action updates and website npm updates; routine minor/patch webs
 grouped, while major updates remain separate. Maintainers review these PRs and merge only after
 current-head CI passes. No automatic merging is enabled.
 
-CI selects app and website validation by changed area. The existing `build-and-test`
-and `website` check names remain conclusive result gates, including when unrelated
-validation is skipped. Shared/unknown paths select both. See the [routing rules and
-local tests](scripts/README.md#ci-area-routing); release workflow triggers are unchanged.
+CI runs the `build-and-test` and `website` jobs on every pull request and main push. Static
+guards run through the single `scripts/ci/run-guards.sh` entry point. See the [CI validator
+guide](scripts/README.md#ci-validators).
 
 Main branch protection requires the final `build-and-test` and `website` checks,
-both from GitHub Actions (app ID `15368`). Conditional validator jobs and release
-workflows are not required checks. Pending, failed or cancelled required results
+both from GitHub Actions (app ID `15368`). Release workflows are not required checks. Pending, failed or cancelled required results
 block the normal protected merge path.
 
 Branch freshness is deliberately loose (`strict=false`): a PR may have an older
@@ -362,11 +407,20 @@ files people expect in an open source project.
 
 ### UI behavior test strategy
 
-Keep combinatorial rules in pure policy tests and use the existing native `NSHostingView`
-behavior tests for SwiftUI bindings and rendered actions. Platform services use injected
-fakes; login-item tests never change System Settings and volume tests use isolated
-notification centers, preferences and temporary folders. No view-inspection or snapshot
-package is required.
+Keep combinatorial captions, eligibility and action choices in production value policies,
+with literal expected results in pure tests. Hosted `NSHostingView` tests exercise actual
+controls through public native accessibility APIs and require downstream effects from
+injected fakes. A copied label or captured action registry does not prove that a Button
+exists or is wired. When a scrollable Form hides its accessibility children, host the same
+small production control component directly; retain a separate real parent binding or
+layout check.
+
+Keep real record-store reads in their summary, row and asset views. The optional DEBUG
+`BodyInvalidationCounter` measures body/summary-scan budgets and retains narrowly required
+owned-task completion witnesses; it does not collect text or actions. Keep existing budget
+bounds and deterministic stale-work completion proof. Platform services use injected fakes;
+login-item tests never change System Settings and volume tests use isolated notification
+centers, preferences and temporary folders. No view-inspection or snapshot package is required.
 
 The dedicated CI XCUITest onboarding/navigation smoke remains deferred in
 [issue #108](https://github.com/valtteriluomapareto/photo-export/issues/108).

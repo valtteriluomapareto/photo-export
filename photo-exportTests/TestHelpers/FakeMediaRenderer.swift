@@ -18,7 +18,6 @@ final class FakeMediaRenderer: MediaRenderer, @unchecked Sendable {
   private var _renderError: Error?
   private var _shouldCreateFile: Bool = true
   private var _fileWriter: ((URL) -> Void)?
-  private var _renderDelay: Duration?
   private var _renderLatch: AsyncSemaphore?
   private var _enteredSignal: AsyncSemaphore?
   private var _beforeRenderCheckpoint: AsyncCheckpoint?
@@ -79,19 +78,6 @@ final class FakeMediaRenderer: MediaRenderer, @unchecked Sendable {
     }
   }
 
-  var renderDelay: Duration? {
-    get {
-      lock.lock()
-      defer { lock.unlock() }
-      return _renderDelay
-    }
-    set {
-      lock.lock()
-      _renderDelay = newValue
-      lock.unlock()
-    }
-  }
-
   /// Installs a latch the next render call must wait on before it does
   /// anything. Used by cancel-during-render tests so the cancel can land
   /// while the renderer is parked, deterministically — no sleeps. The
@@ -125,8 +111,6 @@ final class FakeMediaRenderer: MediaRenderer, @unchecked Sendable {
     }()
     enteredSignal?.signal()
     if let latch { await latch.wait() }
-
-    if let delay = renderDelay { try await Task.sleep(for: delay) }
 
     lock.lock()
     _renderCalls.append(RenderCall(request: request, url: url))

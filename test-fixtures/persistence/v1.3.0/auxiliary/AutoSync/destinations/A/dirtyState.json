@@ -1,0 +1,27 @@
+{
+  "lastUpdatedAt" : 700000000,
+  "scopes" : {
+    "albums" : {
+      "pendingAssetIds" : [
+
+      ],
+      "pendingFullReconciliation" : false,
+      "pendingPlacementReconciliation" : true
+    },
+    "favorites" : {
+      "pendingAssetIds" : [
+
+      ],
+      "pendingFullReconciliation" : true,
+      "pendingPlacementReconciliation" : false
+    },
+    "timeline" : {
+      "pendingAssetIds" : [
+        "asset-a",
+        "asset-b"
+      ],
+      "pendingFullReconciliation" : false,
+      "pendingPlacementReconciliation" : false
+    }
+  }
+}

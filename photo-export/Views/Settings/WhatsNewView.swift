@@ -13,7 +13,7 @@ import SwiftUI
 /// Single dismiss button. No tour, no marketing scroll, no blocking — the
 /// user can close it instantly and get on with their work.
 struct WhatsNewView: View {
-  @ObservedObject var state: WhatsNewState
+  let state: WhatsNewState
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {

@@ -166,6 +166,13 @@ enum AutoSyncReducer {
       if sameId && !availabilityOrSafetyChanged {
         break
       }
+      // The end of a safety check is not new work: the trigger that started the wait (launch,
+      // pick, Export Now) is still pending and is served below.
+      if sameId, destination.isAvailable == state.destination.isAvailable,
+        state.destination.safety == .checking
+      {
+        break
+      }
       let wasUnavailableOrMissing =
         !state.destination.isAvailable || state.destination.id == nil
       if destination.id != nil && destination.isAvailable {
@@ -261,14 +268,6 @@ enum AutoSyncReducer {
       {
         effects.append(.pruneDoneRetryEntries(destinationId: destinationId))
       }
-      // AutoSync emits `exportRunStarted` before awaiting the runner. Rebinding an
-      // auto context from a later publisher emission would assign an old run to
-      // whichever destination happened to be selected by then.
-      if let context = runState.activeContext, context.source == .manual,
-        let destinationId = newState.destination.id
-      {
-        captureRunBoundary(context, destinationId: destinationId, in: &newState)
-      }
 
     case .autoSyncRunCompleted(let summary, let destinationId):
       guard destinationId == newState.destination.id,
@@ -344,9 +343,7 @@ enum AutoSyncReducer {
         // Deleted assets require no export or destination cleanup.
         // A deleted-only event (no inserts/updates) — and one whose
         // collection-only signal isn't relevant to a selected scope — produces no
-        // export work, so skip dirty mutation, persistence, and the debounce. Token
-        // acknowledgement is still emitted below; the manager withholds it
-        // while an earlier dirty snapshot for this destination remains unsaved.
+        // export work, so skip dirty mutation, persistence, and the debounce.
         let producesExportWork = !changedIds.isEmpty || albumsRelevantCollectionChange
 
         if producesExportWork {
@@ -373,14 +370,6 @@ enum AutoSyncReducer {
           effects.append(.persistDirtyState(dirty, destinationId: destinationId))
           triggerReason = .photosChanged
         }
-
-        // Emit advisory destination acknowledgement even for a no-work event.
-        // The manager gates it on successful dirty persistence across events.
-        // PhotoKit fetching uses the adapter's independent global cursor.
-        if let nextToken = event.nextToken {
-          effects.append(
-            .advancePersistentChangeToken(nextToken, destinationId: destinationId))
-        }
       }
 
     case .photosChangeFetchFailed(let failure):
@@ -393,8 +382,8 @@ enum AutoSyncReducer {
       if state.enabled, let destinationId = state.destination.id,
         !state.scopeSelection.isEmpty
       {
-        // Mark every selected scope as needing full reconciliation. No destination
-        // token is reset here; the adapter independently rebases its global cursor.
+        // Mark every selected scope as needing full reconciliation. The adapter
+        // rebases its own cursor.
         var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
         for scope in state.scopeSelection.enabledScopes {
           var scopeState = dirty.scope(scope)
@@ -431,27 +420,6 @@ enum AutoSyncReducer {
             scope: position.scope, assetId: position.assetId, variant: position.variant) == entry
         }
       }
-
-    case .manualFullExportCompleted(let summary):
-      // A manual full export acknowledges compatible dirty work. Compatibility is
-      // strict — only `.completed` runs from `.manual` source over a full
-      // scope (timelineFullLibrary / favoritesFull / allAlbumsFull) clear
-      // anything, and the run's `selection` must match the current
-      // versionSelection. Targeted asset runs and partial-failure runs leave
-      // dirty state untouched: they didn't process the full scope, so pending
-      // assets that *weren't* in their target list are still pending.
-      guard summary.context.source == .manual else { break }
-      if let boundary = newState.runDirtyBoundary,
-        boundary.context == summary.context,
-        boundary.destinationId == newState.destination.id
-      {
-        effects.append(.pruneDoneRetryEntries(destinationId: boundary.destinationId))
-        // A manual stop would cost one Auto Export attempt 30 seconds later otherwise.
-        noteDestinationStop(
-          summary, previous: state.current, in: &newState,
-          cancelsHook: &cancelsResumeHookSchedule)
-      }
-      acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
     case .runNowRequested:
       // The user clicked Export Now. Route through the existing
@@ -616,8 +584,8 @@ enum AutoSyncReducer {
     pending == .userExportNow && incoming != .userExportNow && suppressibleRunInProgress(previous)
   }
 
-  /// The states a destination stop's summary can arrive in before its run goes idle: an
-  /// Auto Export run, or a manual export that AutoSync waits for.
+  /// An export not yet idle: an Auto Export run, whose destination-stop summary can come first,
+  /// or a manual export AutoSync waits for. Export Now pressed during either stays pending.
   private static func suppressibleRunInProgress(_ current: AutoSyncState) -> Bool {
     switch current {
     case .running, .waiting(.manualExportActive): return true
@@ -671,10 +639,7 @@ enum AutoSyncReducer {
       summary.context.selection == state.versionSelection
     else { return }
 
-    let covered: Set<AutoExportLibraryScope> =
-      summary.context.source == .manual
-      ? (summary.context.scope.clearableScope.map { [$0] } ?? [])
-      : coveredScopes(summary: summary, currentSelection: state.scopeSelection)
+    let covered = coveredScopes(summary: summary, currentSelection: state.scopeSelection)
     let scopes = covered.intersection(Set(state.scopeSelection.enabledScopes))
       .subtracting(boundary.changedScopes)
     var dirty = state.dirtyStateByDestination[boundary.destinationId] ?? .empty
@@ -785,6 +750,9 @@ enum AutoSyncReducer {
       return .waiting(.destinationUnavailable)
     }
     switch state.destination.safety {
+    case .checking:
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .waiting(.destinationChecking)
     case .unsafeNeedsConfirmation, .unsafeMigrationConflict:
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       return .blocked(.destinationUnsafe)
@@ -817,7 +785,7 @@ enum AutoSyncReducer {
     if case .scheduled(let reason, let fireAt) = previous, triggerReason == nil {
       // A photos-related debounce that's still scheduled but has no remaining
       // work for any selected scope is stale — it would fire a run with
-      // nothing to export. Common path: manualFullExportCompleted just
+      // nothing to export. Common path: a completed scope just
       // cleared the dirty work the debounce was waiting on. Cancel and drop
       // to idle. Other reasons (appLaunch, destinationSelected, scope/version
       // changes) preserve their schedule because they aren't gated on

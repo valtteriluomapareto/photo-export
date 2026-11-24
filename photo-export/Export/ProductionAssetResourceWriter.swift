@@ -7,7 +7,7 @@ struct ProductionAssetResourceWriter: AssetResourceWriter {
   struct ResolvedResource {
     let type: PHAssetResourceType
     let originalFilename: String
-    let writeData: (URL, @escaping (Error?) -> Void) -> Void
+    let writeData: (URL, @escaping @Sendable (Error?) -> Void) -> Void
   }
 
   final class Backend: @unchecked Sendable {

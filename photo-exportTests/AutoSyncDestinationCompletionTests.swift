@@ -52,10 +52,8 @@ struct AutoSyncDestinationCompletionTests {
       await oldGate.waitForEnter(count: 1)
       let oldTask = try #require(manager.activeRunFanOutTask)
       fanOuts.append(oldTask)
-      #expect(builder.currentRunStore.load(destinationId: "A") != nil)
 
       builder.destination.subject.send(destination("B"))
-      #expect(builder.currentRunStore.load(destinationId: "A") == nil)
       builder.exportRunner.nextRunSummary = failedSummary(at: builder.clock.now())
       await oldGate.release()
       await oldTask.value
@@ -96,7 +94,6 @@ struct AutoSyncDestinationCompletionTests {
       await oldGate.release()
       await oldTask.value
 
-      #expect(builder.currentRunStore.load(destinationId: "A") == nil)
       #expect(builder.runSummaryStore.load(destinationId: "A") == nil)
       #expect(builder.exportRunner.receivedContexts.count == 1)
       #expect(manager.lastRunSummary == nil)
@@ -109,7 +106,7 @@ struct AutoSyncDestinationCompletionTests {
   }
 
   @Test(.timeLimit(.minutes(1)))
-  func lateATaskCannotClearNewAJournalOrTaskAfterAtoBtoA() async throws {
+  func lateATaskCannotClearNewATaskAfterAtoBtoA() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let oldGate = AsyncCheckpoint()
@@ -134,18 +131,15 @@ struct AutoSyncDestinationCompletionTests {
       await newGate.waitForEnter(count: 1)
       let newTask = try #require(manager.activeRunFanOutTask)
       fanOuts.append(newTask)
-      let newJournal = try #require(builder.currentRunStore.load(destinationId: "A"))
 
       // The cancelled A runner ignores cancellation and returns after the newer A
-      // fan-out has started. Its defer must not erase the new journal or task slot.
+      // fan-out has started. Its defer must not erase the new task slot.
       await oldGate.release()
       await oldTask.value
-      #expect(builder.currentRunStore.load(destinationId: "A") == newJournal)
-      #expect(manager.activeRunFanOutTask != nil)
+      #expect(manager.activeRunFanOutTask == newTask)
 
       await newGate.release()
       await newTask.value
-      #expect(builder.currentRunStore.load(destinationId: "A") == nil)
       #expect(manager.activeRunFanOutTask == nil)
     } cleanup: {
       await oldGate.releaseAll()
@@ -211,28 +205,4 @@ struct AutoSyncDestinationCompletionTests {
       })
   }
 
-  @Test func manualRunFromPriorDestinationCannotRebindAfterSwitch() {
-    let now = Date(timeIntervalSince1970: 1_700_000_000)
-    var state = AutoSyncReducer.State.initial
-    state.enabled = true
-    state.destination = destination("A")
-    state.scopeSelection = AutoExportScopeSelection(timeline: true)
-    let oldContext = ExportRunContext(
-      source: .manual, visibility: .userVisible,
-      scope: .timelineFullLibrary, selection: .edited)
-    let active = ExportRunState(
-      activeContext: oldContext, isManualActive: true, isAutoSyncActive: false)
-    state = AutoSyncReducer.reduce(.exportRunStateChanged(active), in: state, now: now).0
-    #expect(state.runDirtyBoundary?.destinationId == "A")
-    state =
-      AutoSyncReducer.reduce(
-        .destinationChanged(destination("B")), in: state, now: now
-      ).0
-    state =
-      AutoSyncReducer.reduce(
-        .destinationChanged(destination("A")), in: state, now: now
-      ).0
-    state = AutoSyncReducer.reduce(.exportRunStateChanged(active), in: state, now: now).0
-    #expect(state.runDirtyBoundary == nil)
-  }
 }

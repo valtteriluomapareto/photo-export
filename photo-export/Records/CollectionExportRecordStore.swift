@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 import os
 
 /// Per-destination record store for **collection** exports (favorites + user albums).
@@ -18,14 +18,15 @@ import os
 /// The store **rejects** `.timeline` placements at every entry point. Three layers of
 /// defense uphold the disjoint-key-space invariant:
 /// 1. The mutation API gate `accept(_:)` returns `false` and logs an error on `.timeline`.
-/// 2. `configure(for:)` filters `.timeline` placements out of the loaded snapshot before
+/// 2. `beginConfigure(for:)` filters `.timeline` placements out of the loaded snapshot before
 ///    they enter `placements`.
 /// 3. `apply(.upsertPlacement)` filters `.timeline` placements out of the log replay.
 /// `ExportManager` is responsible for routing record mutations to the correct store via
 /// `placement.kind`; this store's defenses ensure that even a tampered-on-disk file
 /// cannot violate the invariant.
+@Observable
 @MainActor
-final class CollectionExportRecordStore: ObservableObject {
+final class CollectionExportRecordStore {
   enum Constants {
     static let logFileName = "collection-records.jsonl"
     static let snapshotFileName = "collection-records.json"
@@ -64,12 +65,11 @@ final class CollectionExportRecordStore: ObservableObject {
     }
   }
 
-  /// One log line, representing one of four operations:
-  /// `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord`.
+  /// One log line, representing one of three operations:
+  /// `upsertPlacement`, `upsertRecord`, `deleteRecord`.
   /// The `op` discriminator keeps replay dispatch explicit and stable.
   enum LogOp: Codable, Sendable, Equatable {
     case upsertPlacement(placementId: String, placement: ExportPlacement)
-    case deletePlacement(placementId: String)
     case upsertRecord(placementId: String, assetId: String, body: RecordBody)
     case deleteRecord(placementId: String, assetId: String)
 
@@ -78,7 +78,7 @@ final class CollectionExportRecordStore: ObservableObject {
     }
 
     private enum OpDiscriminator: String, Codable {
-      case upsertPlacement, deletePlacement, upsertRecord, deleteRecord
+      case upsertPlacement, upsertRecord, deleteRecord
     }
 
     func encode(to encoder: Encoder) throws {
@@ -88,9 +88,6 @@ final class CollectionExportRecordStore: ObservableObject {
         try c.encode(OpDiscriminator.upsertPlacement, forKey: .op)
         try c.encode(placementId, forKey: .placementId)
         try c.encode(placement, forKey: .placement)
-      case .deletePlacement(let placementId):
-        try c.encode(OpDiscriminator.deletePlacement, forKey: .op)
-        try c.encode(placementId, forKey: .placementId)
       case .upsertRecord(let placementId, let assetId, let body):
         try c.encode(OpDiscriminator.upsertRecord, forKey: .op)
         try c.encode(placementId, forKey: .placementId)
@@ -111,8 +108,6 @@ final class CollectionExportRecordStore: ObservableObject {
       case .upsertPlacement:
         let placement = try c.decode(ExportPlacement.self, forKey: .placement)
         self = .upsertPlacement(placementId: placementId, placement: placement)
-      case .deletePlacement:
-        self = .deletePlacement(placementId: placementId)
       case .upsertRecord:
         let assetId = try c.decode(String.self, forKey: .assetId)
         let body = try c.decode(RecordBody.self, forKey: .record)
@@ -130,12 +125,29 @@ final class CollectionExportRecordStore: ObservableObject {
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.collection-records-io", qos: .utility)
 
+  private struct TileRecordKey: Hashable {
+    let placementId: String
+    let assetId: String
+  }
+  private var tileHistoryRevision = 0
+  private var gridPlacementsRevision = 0
+  @ObservationIgnored private var pendingTileRecords: Set<TileRecordKey> = []
+  @ObservationIgnored private var invalidatesAllTiles = false
+  @ObservationIgnored private var placementsChanged = false
+
+  /// Raw storage: view readers use a query or register `mutationCounter`.
   /// Top-level placement metadata, keyed by placement id. Stale entries from deleted albums
   /// remain here intentionally — they are load-bearing for collision detection and rename
   /// history. Deleted-album placements retain their export history.
-  private(set) var placements: [String: ExportPlacement] = [:]
+  @ObservationIgnored private var storedPlacements: [String: ExportPlacement] = [:]
+  var placements: [String: ExportPlacement] {
+    configurationPending ? [:] : storedPlacements
+  }
   /// Per-placement record bodies, keyed by `[placementId][assetId]`.
-  private(set) var recordBodies: [String: [String: RecordBody]] = [:]
+  @ObservationIgnored private var storedRecordBodies: [String: [String: RecordBody]] = [:]
+  var recordBodies: [String: [String: RecordBody]] {
+    configurationPending ? [:] : storedRecordBodies
+  }
 
   /// A variant's folder: its placement (whose relative path is fixed at creation) plus
   /// the subfolder it was written into.
@@ -148,59 +160,65 @@ final class CollectionExportRecordStore: ObservableObject {
       self.subfolder = subfolder ?? ""
     }
   }
-  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query, at
-  /// a session's first collection export, and maintained in `apply` after that; nil until
-  /// then, and again whenever `recordBodies` is replaced wholesale. See
-  /// `ExportRecordStore.filenameClaims` for why it is built lazily.
-  private var filenameClaims: FilenameClaims<ClaimFolder>?
+  /// The installed history's claims, maintained with every accepted record mutation.
+  @ObservationIgnored private var filenameClaims = FilenameClaims<ClaimFolder>()
+  @ObservationIgnored private(set) var recordsEpoch: UInt64 = 0
 
   /// Per-store load state. See `RecordStoreState` for semantics.
-  @Published private(set) var state: RecordStoreState = .unconfigured
-  @Published private(set) var persistenceError: String?
-  private var hasUnsavedChanges = false
+  private var configurationPending = false
+  private(set) var state: RecordStoreState = .unconfigured
+  @ObservationIgnored private var configurationRequest: UInt64 = 0
+  @ObservationIgnored private var pendingConfiguration: Task<Void, Never>?
+  @ObservationIgnored private var cancellationCleanups: [UUID: Task<Void, Never>] = [:]
+  @ObservationIgnored private var applyingCancellationCleanup = false
+  private(set) var persistenceError: String?
+  @ObservationIgnored private var hasUnsavedChanges = false
+  @ObservationIgnored private var resettingCorruptFile: RecordFile?
   // Immediate ownership token, separate from coalesced UI notifications. Any
   // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
-  private var reconciliationRevision: UInt64 = 0
-  private var finalCommitContext: FinalCommitContext<Snapshot, LogOp>?
+  @ObservationIgnored private var reconciliationRevision: UInt64 = 0
+  @ObservationIgnored private var finalCommitContext: FinalCommitContext<Snapshot, LogOp>?
   // Only completion deltas survive a corrupt load; full snapshots must not bypass
   // the corruption alert or its explicit reset/forensic-backup path.
-  private var deferredFinalCompletions: [String: [() -> Void]] = [:]
+  @ObservationIgnored private var deferredFinalCompletions: [String: [() -> Void]] = [:]
   // Final commits acknowledged while their destination loaded, landed once it has finished.
-  private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
-  private var configuredDestinationId: String?
-  var destinationId: String? { configuredDestinationId }
+  private typealias HeldLanding = (context: FinalCommitContext<Snapshot, LogOp>, replay: () -> Void)
+  @ObservationIgnored private var commitsLandedWhileLoading: [String: [HeldLanding]] = [:]
+  @ObservationIgnored private var configuredDestinationId: String?
+  var destinationId: String? {
+    trackRecords()
+    return configuredDestinationId
+  }
   // Failed writes must survive destination switches until the user can retry saving.
-  private var pendingRecovery: [String: Snapshot] = [:]
+  @ObservationIgnored private var pendingRecovery: [String: Snapshot] = [:]
   // Each configure starts a new generation; only the newest load is installed.
-  private var loadGeneration: UInt64 = 0
+  @ObservationIgnored private var loadGeneration: UInt64 = 0
   private let latestLoad = RecordStoreLoadGeneration()
-  private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+  @ObservationIgnored private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-  @Published private(set) var mutationCounter: Int = 0
+  /// Coalesced revision registered by queries over the ignored record storage.
+  private(set) var mutationCounter = 0
 
-  /// Mirror of `ExportManager.convertHEICToJPEG`. Kept in sync by the manager
-  /// (init + didSet on the published property). Read by
-  /// `isExported(asset:placement:selection:)` so collection-grid view callers
-  /// see the right answers without threading the toggle through every
-  /// `@EnvironmentObject` site.
-  ///
-  /// `@Published` (rather than plain stored) so `@EnvironmentObject` views
-  /// re-render when the toggle flips. See `ExportRecordStore`'s sibling
-  /// docstring; the same reasoning applies to collection placements.
-  @Published var convertHEICToJPEG: Bool = false
+  /// Mirrors the manager's conversion setting at initialization and on each setting write.
+  /// Queries register this flag so conversion changes refresh exported badges without waiting
+  /// for another coalesced record notification.
+  var convertHEICToJPEG: Bool = false
   private let notificationClock: any AutoSyncClock
-  private lazy var changeNotifier = RecordStoreChangeNotifier(clock: notificationClock) {
+  @ObservationIgnored private lazy var changeNotifier = RecordStoreChangeNotifier(
+    clock: notificationClock
+  ) {
     [weak self] in
-    self?.mutationCounter &+= 1
+    self?.publishRecordChanges()
   }
 
   private let fileManager = FileManager.default
+  private let snapshotReplacer: any AtomicFileReplacing
+  @ObservationIgnored let mutationAdmission = RecordStoreMutationAdmission()
   private let recordLogIO: any JSONLRecordLogIO
   private let reconciliationFileChecker: any ReconciliationFileChecking
   let storeRootURL: URL
-  private var currentStoreDirURL: URL?
   typealias RecordFile = JSONLRecordFile<Snapshot, LogOp>
-  private var jsonl: RecordFile?
+  @ObservationIgnored private var jsonl: RecordFile?
 
   // MARK: - Init
 
@@ -210,8 +228,10 @@ final class CollectionExportRecordStore: ObservableObject {
     baseDirectoryURL: URL,
     reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker(),
     recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO(),
+    snapshotReplacer: any AtomicFileReplacing = FileIOService(),
     notificationClock: (any AutoSyncClock)? = nil
   ) {
+    self.snapshotReplacer = snapshotReplacer
     self.recordLogIO = recordLogIO
     self.notificationClock = notificationClock ?? SystemAutoSyncClock()
     self.reconciliationFileChecker = reconciliationFileChecker
@@ -221,19 +241,52 @@ final class CollectionExportRecordStore: ObservableObject {
 
   // MARK: - Destination configuration
 
-  /// Points the store at a specific destination id (subdirectory) and loads its history before
-  /// returning. Passing `nil` clears in-memory state and detaches from any on-disk files.
-  /// Publishes no `.loading`; the app's destination changes use `beginConfigure(for:)`.
-  func configure(for destinationId: String?) {
-    let signpost = AppDiagnostics.beginConfigure(label: "collection")
-    defer { signpost.end() }
-    guard let file = startConfiguring(for: destinationId) else { return }
-    let inputs = file.readInputs
-    let raw = ioQueue.sync { inputs.read() }
-    let decoded = inputs.decode(raw)
-    finishLoad(
-      LoadTicket(generation: loadGeneration, file: file, signpost: nil),
-      separator: decoded.needsLogSeparator, outcome: Self.prepare(decoded, logger: logger))
+  var mutationTicket: RecordMutationTicket {
+    RecordMutationTicket(
+      file: jsonl.map(ObjectIdentifier.init), load: loadGeneration, epoch: recordsEpoch)
+  }
+
+  func prepareForMutation() async throws {
+    await waitForCancellationCleanup()
+    if jsonl?.needsMaintenance == true { _ = requestHistoryCheckpoint() }
+    try await mutationAdmission.waitUntilOpen()
+  }
+
+  /// Waits before reading or changing active history, then applies one synchronous batch.
+  func withMutationAdmission<T>(_ body: () throws -> T) async throws -> T {
+    let ticket = mutationTicket
+    try await prepareForMutation()
+    guard mutationTicket == ticket, state == .ready else { throw CancellationError() }
+    let result = try mutationAdmission.perform(body)
+    requestCheckpointIfPressured()
+    return result
+  }
+
+  func requestCheckpointIfPressured() {
+    if jsonl?.needsMaintenance == true { _ = requestHistoryCheckpoint() }
+  }
+
+  /// Requests a physical checkpoint without changing queue mirrors or durability semantics.
+  @discardableResult
+  func requestHistoryCheckpoint(force: Bool = false) -> Task<Void, Never>? {
+    guard let file = jsonl, state == .ready,
+      force ? file.hasReplayWork : file.needsIdleMaintenance
+    else { return nil }
+    let generation = loadGeneration
+    let epoch = recordsEpoch
+    return mutationAdmission.requestCheckpoint { [weak self] in
+      guard let self else { return }
+      do {
+        try await file.flush()
+        guard jsonl === file, loadGeneration == generation, recordsEpoch == epoch else { return }
+        try await file.checkpoint(
+          Snapshot(
+            version: Constants.snapshotVersion, placements: storedPlacements,
+            records: storedRecordBodies))
+      } catch {
+        logger.error("History checkpoint failed: \(error.localizedDescription, privacy: .public)")
+      }
+    }
   }
 
   /// Points the store at a specific destination id and loads its history off the main actor.
@@ -242,8 +295,63 @@ final class CollectionExportRecordStore: ObservableObject {
   /// file read is queued behind the previous destination's writes on the IO queue; decoding
   /// and preparing run in a detached task.
   func beginConfigure(for destinationId: String?) {
+    if let context = finalCommitContext, context.destinationId == configuredDestinationId,
+      state == .ready || hasUnsavedChanges, let file = jsonl
+    {
+      context.file = file
+      context.snapshot = Snapshot(
+        version: Constants.snapshotVersion, placements: storedPlacements,
+        records: storedRecordBodies)
+    }
+    if !mutationAdmission.isClosed, cancellationCleanups.isEmpty,
+      jsonl?.hasUnflushedChanges != true, finalCommitContext?.file.hasUnflushedChanges != true,
+      pendingConfiguration == nil
+    {
+      beginConfigureImmediately(for: destinationId)
+      return
+    }
+    configurationRequest &+= 1
+    let request = configurationRequest
+    loadGeneration &+= 1
+    latestLoad.advance(to: loadGeneration)
+    configurationPending = true
+    state = .loading
+    changeNotifier.notifyNow()
+    pendingConfiguration = Task { [weak self] in
+      guard let self else { return }
+      await waitForCancellationCleanup()
+      try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+      guard request == configurationRequest else { return }
+      // Delivery of old write failures must precede parking/replacing their history.
+      if let file = jsonl { try? await file.flush() }
+      if let context = finalCommitContext, context.file !== jsonl {
+        try? await context.file.flush()
+      }
+      guard request == configurationRequest else { return }
+      let transition = mutationAdmission.requestCheckpoint { [weak self] in
+        guard let self, request == configurationRequest else { return }
+        mutationAdmission.installAfterMaintenance {
+          self.configurationPending = false
+          self.pendingConfiguration = nil
+          self.beginConfigureImmediately(for: destinationId)
+        }
+      }
+      await transition?.value
+    }
+  }
+
+  func waitForCancellationCleanup() async {
+    while !cancellationCleanups.isEmpty {
+      let pending = Array(cancellationCleanups.values)
+      for task in pending { await task.value }
+    }
+  }
+
+  private func beginConfigureImmediately(for destinationId: String?) {
     let signpost = AppDiagnostics.beginConfigure(label: "collection")
-    guard let file = startConfiguring(for: destinationId) else {
+    guard
+      let file = startConfiguring(for: destinationId)
+    else {
       signpost.end()
       return
     }
@@ -263,16 +371,20 @@ final class CollectionExportRecordStore: ObservableObject {
           separator = decoded.needsLogSeparator
           outcome = Self.prepare(decoded, logger: logger)
         }
-        await self?.finishLoad(ticket, separator: separator, outcome: outcome)
+        let transfer = RecordValueTransfer(consume outcome)
+        guard let self else { return }
+        try? await self.mutationAdmission.waitUntilOpen(respectingCancellation: false)
+        await MainActor.run { [separator] in
+          self.installPreparedLoad(ticket, separator: separator, outcome: transfer.take())
+        }
       }
     }
   }
 
   /// Returns once the store is not `.loading`, or as soon as the calling task is cancelled.
-  /// A blocking configure, or one to nil, ends the wait at once. An asynchronous configure that
-  /// replaces the load keeps the store `.loading`, so the wait ends when the newest load settles.
+  /// A replacement load keeps the store `.loading`, so the wait ends when the newest load settles.
   func waitUntilSettled() async {
-    while state == .loading, !Task.isCancelled {
+    while configurationPending || state == .loading, !Task.isCancelled {
       let id = UUID()
       await withTaskCancellationHandler {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -289,7 +401,10 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// Loads that finished, applied or discarded. Exists for tests, to wait on progress.
-  private(set) var finishedLoadCount = 0
+  @ObservationIgnored private(set) var finishedLoadCount = 0
+  #if DEBUG
+    @ObservationIgnored private(set) var finishedResetCount = 0
+  #endif
 
   /// Tasks waiting in `waitUntilSettled()`. Exists for tests, to wait on progress.
   var pendingSettleWaiterCount: Int { settleWaiters.count }
@@ -299,14 +414,13 @@ final class CollectionExportRecordStore: ObservableObject {
   private struct LoadTicket: Sendable {
     let generation: UInt64
     let file: RecordFile
-    /// Ends when the load finishes; `nil` when the caller's own interval covers it.
-    let signpost: ConfigureSignpost?
+    let signpost: ConfigureSignpost
   }
 
   private static let retainedProgressMessage =
     "Progress from this destination still needs to be saved."
 
-  /// What every configure does before reading: drain and park the old destination, switch,
+  /// What every configure does before reading: park the old destination, switch,
   /// clear the in-memory history, and end there for nil or for history retained after a failed
   /// write. Returns the new destination's file when its history still has to be read.
   private func startConfiguring(for destinationId: String?) -> RecordFile? {
@@ -314,23 +428,10 @@ final class CollectionExportRecordStore: ObservableObject {
     loadGeneration &+= 1
     latestLoad.advance(to: loadGeneration)
 
-    // Finish the old destination's queued writes before replacing its file owner.
-    jsonl?.flushForTesting()
-    // A parked final commit can fail while another destination is active. Deliver
-    // that owner's failure before consulting pendingRecovery or loading it again.
-    if let context = finalCommitContext {
-      if context.file !== jsonl { context.file.flushForTesting() }
-      if context.destinationId == configuredDestinationId,
-        state == .ready || hasUnsavedChanges, let file = jsonl
-      {
-        context.file = file
-        context.snapshot = Snapshot(
-          version: Constants.snapshotVersion, placements: placements, records: recordBodies)
-      }
-    }
     if hasUnsavedChanges, let id = configuredDestinationId {
       pendingRecovery[id] = Snapshot(
-        version: Constants.snapshotVersion, placements: placements, records: recordBodies)
+        version: Constants.snapshotVersion, placements: storedPlacements,
+        records: storedRecordBodies)
     }
     let departingId = configuredDestinationId
     configuredDestinationId = destinationId
@@ -343,12 +444,9 @@ final class CollectionExportRecordStore: ObservableObject {
       replayCommitsLandedWhileLoading(for: departingId)
     }
 
-    placements = [:]
-    recordBodies = [:]
-    filenameClaims = nil
+    installHistory(.empty, releaseRetainedOwners: false)
 
     guard let destinationId else {
-      currentStoreDirURL = nil
       jsonl = nil
       setState(.unconfigured)
       changeNotifier.notifyNow()
@@ -357,17 +455,21 @@ final class CollectionExportRecordStore: ObservableObject {
 
     let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
     createDirectoryIfNeeded(dir)
-    currentStoreDirURL = dir
     let file = RecordFile(
       snapshotURL: dir.appendingPathComponent(Constants.snapshotFileName),
       logURL: dir.appendingPathComponent(Constants.logFileName),
       ioQueue: ioQueue,
       logger: logger,
+      fileReplacer: snapshotReplacer,
       logIO: recordLogIO
     )
     jsonl = file
     file.onPersistenceFailure = { [weak self, weak file] error in
       guard let self, let file else { return }
+      // A failed reset leaves corrupt history unreadable; its IO failure remains latched.
+      guard self.resettingCorruptFile !== file,
+        self.jsonl !== file || self.state != .failed
+      else { return }
       if let context = self.finalCommitContext, context.file === file {
         self.retainFinalCommitFailure(error, context: context)
       }
@@ -377,10 +479,8 @@ final class CollectionExportRecordStore: ObservableObject {
       self.setState(.persistenceFailed)
     }
 
-    if let retained = pendingRecovery[destinationId] {
-      placements = retained.placements
-      recordBodies = retained.records
-      filenameClaims = nil
+    if let snapshot = pendingRecovery[destinationId] {
+      installHistory(Self.prepareRetained(snapshot, logger: logger))
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
@@ -395,38 +495,49 @@ final class CollectionExportRecordStore: ObservableObject {
 
   /// Installs a finished load in one main-actor turn, unless a newer configure replaced it.
   /// `outcome` is nil when the load skipped decoding because it was already replaced.
-  private func finishLoad(_ ticket: LoadTicket, separator: Bool?, outcome: LoadOutcome?) {
-    defer { ticket.signpost?.end() }
+  private func installPreparedLoad(
+    _ ticket: LoadTicket, separator: Bool?, outcome: consuming LoadOutcome?
+  ) {
+    defer { ticket.signpost.end() }
     finishedLoadCount += 1
-    guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome else {
+    guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome = consume outcome
+    else {
       logger.debug("Discarded a collection history load that a newer configure replaced")
       return
     }
     ticket.file.adoptLogSeparator(separator)
-    // A claim query during the load built its index from the empty in-memory records.
-    filenameClaims = nil
-    if let id = configuredDestinationId, let retained = pendingRecovery[id] {
-      // A final commit's write failure was parked while the load ran; its history wins.
-      placements = retained.placements
-      recordBodies = retained.records
+    var result = consume outcome
+    if let id = configuredDestinationId {
+      if let snapshot = pendingRecovery[id] {
+        result = .retained(Self.prepareRetained(snapshot, logger: logger))
+      } else if case .ioFailure = result,
+        let held = commitsLandedWhileLoading[id]?.first(where: {
+          !$0.context.needsCorruptionRecovery
+        })
+      {
+        result = .retained(Self.prepareRetained(held.context.snapshot, logger: logger))
+      }
+    }
+    switch consume result {
+    case .retained(let prepared):
+      installHistory(consume prepared)
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
-    } else {
-      switch outcome {
-      case .ioFailure(let error):
-        persistenceError = error.localizedDescription
-        setState(.persistenceFailed)
-      case .corrupt:
-        logger.error(
-          "Collection records snapshot at \(ticket.file.snapshotURL.path, privacy: .public) failed to decode; store transitioning to .failed."
-        )
-        setState(.failed)
-      case .loaded(let prepared):
-        placements = prepared.placements
-        recordBodies = prepared.recordBodies
-        setState(.ready)
-      }
+
+    case .ioFailure(let error):
+      persistenceError = error.localizedDescription
+      setState(.persistenceFailed)
+    case .corrupt:
+      logger.error(
+        "Collection records snapshot at \(ticket.file.snapshotURL.path, privacy: .public) failed to decode; store transitioning to .failed."
+      )
+      setState(.failed)
+    case .loaded(let prepared):
+      ticket.file.adoptReplaySize(
+        operationCount: prepared.replayOperationCount, bytes: prepared.replayBytes)
+      installHistory(consume prepared)
+      setState(.ready)
     }
     if state == .failed, finalCommitContext?.destinationId == configuredDestinationId {
       finalCommitContext?.needsCorruptionRecovery = true
@@ -439,6 +550,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Every state change goes through here, so leaving `.loading` by any path resumes the
   /// tasks in `waitUntilSettled()`.
   private func setState(_ newState: RecordStoreState) {
+    guard !configurationPending else { return }
     state = newState
     guard newState != .loading, !settleWaiters.isEmpty else { return }
     let waiters = settleWaiters
@@ -446,10 +558,200 @@ final class CollectionExportRecordStore: ObservableObject {
     for waiter in waiters.values { waiter.resume() }
   }
 
+  struct PlacementCounts: Sendable {
+    var total = 0
+    var done = 0
+  }
+
+  struct CollectionKey: Hashable, Sendable {
+    let kind: ExportPlacement.Kind
+    let identifier: String?
+    init(_ placement: ExportPlacement) {
+      kind = placement.kind
+      identifier = placement.collectionLocalIdentifier
+    }
+    init(kind: ExportPlacement.Kind, identifier: String?) {
+      self.kind = kind
+      self.identifier = identifier
+    }
+  }
+
+  @ObservationIgnored private var placementCounts: [String: PlacementCounts] = [:]
+  @ObservationIgnored private var placementCandidates: [CollectionKey: [String: ExportPlacement]] =
+    [:]
+  @ObservationIgnored private var sidebarDescriptors: [String: PhotoCollectionDescriptor] = [:]
+  @ObservationIgnored private var sidebarStatuses: [String: SidebarStatus] = [:]
+  @ObservationIgnored private var isPublishingSidebarChanges = false
+
+  /// A row observes one committed badge value, independently of record revisions.
+  @Observable @MainActor
+  final class SidebarStatus {
+    struct Value: Equatable {
+      let hasPlacement: Bool
+      let exportedCount: Int
+    }
+    @ObservationIgnored private var committed: Value
+    @ObservationIgnored fileprivate var needsPublication = false
+    var value: Value {
+      access(keyPath: \.value)
+      return committed
+    }
+    fileprivate init(_ value: Value) { committed = value }
+    fileprivate func stage(_ value: Value) {
+      guard committed != value else { return }
+      committed = value
+      needsPublication = true
+    }
+    fileprivate func publishIfNeeded() {
+      guard needsPublication else { return }
+      // A synchronous observer can stage another value that still needs delivery.
+      needsPublication = false
+      withMutation(keyPath: \.value) {}
+    }
+  }
+
+  func sidebarStatus(for descriptor: PhotoCollectionDescriptor) -> SidebarStatus {
+    if let status = sidebarStatuses[descriptor.id] { return status }
+    let status = SidebarStatus(sidebarValue(for: descriptor))
+    sidebarDescriptors[descriptor.id] = descriptor
+    sidebarStatuses[descriptor.id] = status
+    return status
+  }
+
+  /// The tree owner replaces metadata and releases badges for collections that disappeared.
+  func updateSidebarCollections(_ collections: [PhotoCollectionDescriptor]) {
+    var current: [String: PhotoCollectionDescriptor] = [:]
+    func append(_ descriptors: [PhotoCollectionDescriptor]) {
+      for descriptor in descriptors {
+        current[descriptor.id] = descriptor
+        append(descriptor.children)
+      }
+    }
+    append(collections)
+    sidebarDescriptors = current
+    sidebarStatuses = sidebarStatuses.filter { current[$0.key] != nil }
+    publishSidebarChanges()
+  }
+
+  private func sidebarValue(for descriptor: PhotoCollectionDescriptor) -> SidebarStatus.Value {
+    let selection: LibrarySelection
+    switch descriptor.kind {
+    case .favorites: selection = .favorites
+    case .album:
+      guard let id = descriptor.localIdentifier else {
+        return .init(hasPlacement: false, exportedCount: 0)
+      }
+      selection = .album(collectionId: id)
+    case .sharedAlbum:
+      guard let id = descriptor.localIdentifier else {
+        return .init(hasPlacement: false, exportedCount: 0)
+      }
+      selection = .sharedAlbum(collectionId: id)
+    case .folder:
+      return .init(hasPlacement: true, exportedCount: sidebarAlbumCount(in: descriptor.children))
+    }
+    let placement = indexedPlacement(for: selection, collections: [descriptor])
+    return .init(
+      hasPlacement: placement != nil,
+      exportedCount: placement.flatMap { placementCounts[$0.id]?.done } ?? 0)
+  }
+
+  private func sidebarAlbumCount(in descriptors: [PhotoCollectionDescriptor]) -> Int {
+    descriptors.reduce(0) { sum, descriptor in
+      switch descriptor.kind {
+      case .folder: return sum + sidebarAlbumCount(in: descriptor.children)
+      case .album:
+        guard let id = descriptor.localIdentifier,
+          let placement = indexedPlacement(for: .album(collectionId: id), collections: [descriptor])
+        else { return sum }
+        return sum + (placementCounts[placement.id]?.done ?? 0)
+      case .favorites, .sharedAlbum: return sum
+      }
+    }
+  }
+
+  private func publishSidebarChanges() {
+    // Stage the entire committed projection before invoking synchronous observers.
+    for (id, status) in sidebarStatuses {
+      guard let descriptor = sidebarDescriptors[id] else { continue }
+      status.stage(sidebarValue(for: descriptor))
+    }
+    guard !isPublishingSidebarChanges else { return }
+    isPublishingSidebarChanges = true
+    defer { isPublishingSidebarChanges = false }
+    while true {
+      let pending = sidebarStatuses.compactMap { id, status in
+        status.needsPublication ? (id, status) : nil
+      }
+      guard !pending.isEmpty else { return }
+      for (id, status) in pending where sidebarStatuses[id] === status {
+        status.publishIfNeeded()
+      }
+    }
+  }
+
+  private func indexedPlacement(
+    for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
+  ) -> ExportPlacement? {
+    guard !configurationPending else { return nil }
+    let key: CollectionKey
+    switch selection {
+    case .favorites: key = CollectionKey(kind: .favorites, identifier: nil)
+    case .album(let id): key = CollectionKey(kind: .album, identifier: id)
+    case .sharedAlbum(let id): key = CollectionKey(kind: .sharedAlbum, identifier: id)
+    case .timelineMonth, .timelineYear, .folder: return nil
+    }
+    let candidates = placementCandidates[key].map { Array($0.values) } ?? []
+    return ExportPlacementResolver().existingCollectionPlacement(
+      for: selection, collections: collections, existingPlacements: candidates)
+  }
+
+  nonisolated private static func countRecords(
+    _ records: [String: [String: RecordBody]]
+  ) -> [String: PlacementCounts] {
+    records.mapValues { bodies in
+      PlacementCounts(
+        total: bodies.count,
+        done: bodies.values.filter { $0.variants.values.contains { $0.status == .done } }.count)
+    }
+  }
+
+  /// Replaces active history and its derived query indexes as one owned transaction.
+  private func installHistory(_ history: consuming PreparedLoad, releaseRetainedOwners: Bool = true)
+  {
+    var prepared = consume history
+    recordsEpoch &+= 1
+    storedPlacements = prepared.placements
+    prepared.placements = [:]
+    storedRecordBodies = prepared.recordBodies
+    prepared.recordBodies = [:]
+    placementCounts = prepared.counts
+    prepared.counts = [:]
+    placementCandidates = prepared.candidates
+    prepared.candidates = [:]
+    filenameClaims = prepared.claims
+    prepared.claims = FilenameClaims()
+    invalidatesAllTiles = true
+    if releaseRetainedOwners, let id = configuredDestinationId {
+      pendingRecovery.removeValue(forKey: id)
+      if finalCommitContext?.destinationId == id { finalCommitContext?.snapshot = .empty }
+      for landing in commitsLandedWhileLoading[id] ?? [] { landing.context.snapshot = .empty }
+    }
+  }
+
   /// The placements and records a successful load installs.
   struct PreparedLoad: Sendable {
-    let placements: [String: ExportPlacement]
-    let recordBodies: [String: [String: RecordBody]]
+    var placements: [String: ExportPlacement]
+    var recordBodies: [String: [String: RecordBody]]
+    var counts: [String: PlacementCounts]
+    var candidates: [CollectionKey: [String: ExportPlacement]]
+    var claims: FilenameClaims<ClaimFolder>
+    var replayOperationCount = 0
+    var replayBytes = 0
+    static var empty: Self {
+      .init(
+        placements: [:], recordBodies: [:], counts: [:], candidates: [:], claims: FilenameClaims())
+    }
   }
 
   /// How a load ends. A failed read outranks a corrupt snapshot, as in `ExportRecordStore`.
@@ -457,11 +759,12 @@ final class CollectionExportRecordStore: ObservableObject {
     case ioFailure(any Error)
     case corrupt
     case loaded(PreparedLoad)
+    case retained(PreparedLoad)
   }
 
-  /// Builds what `configure(for:)` installs from a decoded load: the snapshot without
+  /// Builds what `beginConfigure(for:)` installs from a decoded load: the snapshot without
   /// `.timeline` placements, the log replayed over it, then interrupted variants recovered.
-  /// Builds no claim index; that waits for the first claim query.
+  /// Prepares claims with the same recovered records before installation.
   nonisolated static func prepare(_ loaded: RecordFile.LoadResult, logger: Logger) -> LoadOutcome {
     if let error = loaded.ioFailure { return .ioFailure(error) }
     switch loaded.snapshotStatus {
@@ -490,40 +793,96 @@ final class CollectionExportRecordStore: ObservableObject {
         }
         recordBodies = snapshot.records.filter { !droppedTimelineIds.contains($0.key) }
       }
-      var noClaims: FilenameClaims<ClaimFolder>?
       for op in loaded.ops {
         apply(
-          op, placements: &placements, recordBodies: &recordBodies, claims: &noClaims,
+          op, placements: &placements, recordBodies: &recordBodies,
           logger: logger)
       }
       recoverInProgressVariants(in: &recordBodies)
-      return .loaded(PreparedLoad(placements: placements, recordBodies: recordBodies))
+      var prepared = prepareRetained(
+        Snapshot(version: Constants.snapshotVersion, placements: placements, records: recordBodies),
+        logger: logger)
+      prepared.replayOperationCount = loaded.ops.count
+      prepared.replayBytes = loaded.replayBytes
+      return .loaded(prepared)
     }
   }
 
-  /// Retry storage access without resetting export history. After an append failure,
-  /// save the retained in-memory state; after a read failure, reload the original files.
-  ///
-  /// No commit held for a load can be waiting here: a store leaves `.loading` only through a
-  /// finished load or the retained-recovery exit, and both land those commits.
-  func retryPersistence() {
+  nonisolated private static func prepareRetained(_ snapshot: Snapshot, logger: Logger)
+    -> PreparedLoad
+  {
+    var candidates: [CollectionKey: [String: ExportPlacement]] = [:]
+    for (id, placement) in snapshot.placements {
+      candidates[CollectionKey(placement), default: [:]][id] = placement
+    }
+    return PreparedLoad(
+      placements: snapshot.placements, recordBodies: snapshot.records,
+      counts: countRecords(snapshot.records), candidates: candidates,
+      claims: buildClaims(from: snapshot.records, logger: logger))
+  }
+
+  /// Retries retained history only after earlier physical maintenance has completed.
+  func retryHistoryPersistence() async {
+    await waitForCancellationCleanup()
+    try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
     guard state == .persistenceFailed else { return }
-    guard hasUnsavedChanges, let jsonl else {
-      configure(for: configuredDestinationId)
+    guard hasUnsavedChanges, let file = jsonl else {
+      beginConfigure(for: configuredDestinationId)
+      await waitUntilSettled()
       return
     }
-    do {
-      try jsonl.writeSnapshot(
-        Snapshot(version: Constants.snapshotVersion, placements: placements, records: recordBodies))
-      hasUnsavedChanges = false
-      if let id = configuredDestinationId { pendingRecovery.removeValue(forKey: id) }
-      persistenceError = nil
-      setState(.ready)
-      replayFinalCompletions()
-      changeNotifier.notifyNow()
-    } catch {
-      persistenceError = error.localizedDescription
+    let ticket = mutationTicket
+    let operation = mutationAdmission.requestCheckpoint { [weak self] in
+      guard let self, mutationTicket == ticket else { return }
+      do {
+        try await file.checkpoint(
+          Snapshot(
+            version: Constants.snapshotVersion, placements: storedPlacements,
+            records: storedRecordBodies),
+          recovering: true)
+        guard mutationTicket == ticket else { return }
+        mutationAdmission.installAfterMaintenance {
+          self.hasUnsavedChanges = false
+          if let id = self.configuredDestinationId { self.pendingRecovery.removeValue(forKey: id) }
+          self.persistenceError = nil
+          self.setState(.ready)
+          self.replayFinalCompletions()
+          self.changeNotifier.notifyNow()
+        }
+      } catch { persistenceError = error.localizedDescription }
     }
+    await operation?.value
+  }
+
+  /// Preserves corrupt bytes before replacing history, then claims any rebuild synchronously.
+  func resetHistory(afterReset: @escaping @MainActor () -> Void = {}) async {
+    await waitForCancellationCleanup()
+    try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+    guard state == .failed, let file = jsonl else { return }
+    #if DEBUG
+      defer { finishedResetCount += 1 }
+    #endif
+    let ticket = mutationTicket
+    let operation = mutationAdmission.requestCheckpoint { [weak self] in
+      guard let self, mutationTicket == ticket else { return }
+      resettingCorruptFile = file
+      defer { resettingCorruptFile = nil }
+      do {
+        try await file.checkpoint(Snapshot.empty, recovering: true, resetCorrupt: true)
+        guard mutationTicket == ticket else { return }
+        mutationAdmission.installAfterMaintenance {
+          self.reconciliationRevision &+= 1
+          self.installHistory(.empty)
+          self.setState(.ready)
+          self.replayFinalCompletions()
+          afterReset()
+          self.changeNotifier.notifyNow()
+        }
+      } catch {
+        logger.error("History reset failed: \(String(describing: error), privacy: .public)")
+      }
+    }
+    await operation?.value
   }
 
   /// True only when the current in-memory records have a successful write barrier.
@@ -539,28 +898,6 @@ final class CollectionExportRecordStore: ObservableObject {
     guard state == .ready else { throw RecordPersistenceUnavailable() }
   }
 
-  /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
-  /// with an empty snapshot + log. See `ExportRecordStore.resetToEmpty` for the same
-  /// pattern; the timeline and collection stores recover identically.
-  func resetToEmpty() {
-    guard state == .failed else { return }
-    reconciliationRevision &+= 1
-    guard let jsonl else { return }
-    do {
-      try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
-      placements = [:]
-      recordBodies = [:]
-      filenameClaims = nil
-      setState(.ready)
-      replayFinalCompletions()
-      changeNotifier.notifyNow()
-    } catch {
-      logger.error(
-        "resetToEmpty failed: \(String(describing: error), privacy: .public). Store remains .failed."
-      )
-    }
-  }
-
   // MARK: - Placement metadata API
 
   func upsertPlacement(_ placement: ExportPlacement) {
@@ -568,20 +905,32 @@ final class CollectionExportRecordStore: ObservableObject {
     append(.upsertPlacement(placementId: placement.id, placement: placement))
   }
 
-  func deletePlacement(id: String) {
-    // `accept(_:)` takes a placement object; this entry point only has an id. Look up the
-    // existing placement to validate kind. If we don't know the placement (already deleted
-    // or never-recorded), we still allow the no-op `deleteRecord` op to land — a stray
-    // delete is harmless. We *do* refuse if the id matches a `.timeline`-kind entry that
-    // somehow snuck into memory (the snapshot-decode guard above is the primary defense;
-    // this is belt-and-braces).
-    if let existing = placements[id], existing.kind == .timeline {
-      logger.error(
-        "CollectionExportRecordStore.deletePlacement called for a .timeline placement \(id, privacy: .public); drop and ignore."
-      )
+  func removeInProgressAfterAdmission(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant
+  ) {
+    guard let expected = storedRecordBodies[placement.id]?[assetId]?.variants[variant.rawValue],
+      expected.status == .inProgress
+    else { return }
+    if !mutationAdmission.isClosed, !configurationPending {
+      removeVariant(assetId: assetId, placement: placement, variant: variant)
       return
     }
-    append(.deletePlacement(placementId: id))
+    let file = jsonl
+    let epoch = recordsEpoch
+    let id = UUID()
+    cancellationCleanups[id] = Task { [weak self] in
+      guard let self else { return }
+      defer { cancellationCleanups[id] = nil }
+      try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+      guard jsonl === file, recordsEpoch == epoch,
+        storedRecordBodies[placement.id]?[assetId]?.variants[variant.rawValue] == expected
+      else { return }
+      mutationAdmission.perform {
+        self.applyingCancellationCleanup = true
+        defer { self.applyingCancellationCleanup = false }
+        self.removeVariant(assetId: assetId, placement: placement, variant: variant)
+      }
+    }
   }
 
   /// Current persisted collection slot; caller supplies the Photos tree so this
@@ -589,26 +938,21 @@ final class CollectionExportRecordStore: ObservableObject {
   func currentPlacement(
     for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
   ) -> ExportPlacement? {
-    ExportPlacementResolver().existingCollectionPlacement(
-      for: selection, collections: collections, existingPlacements: Array(placements.values))
+    trackRecords()
+    return indexedPlacement(for: selection, collections: collections)
+  }
+
+  /// Grid placement lookup follows metadata changes, independently of individual record writes.
+  func currentGridPlacement(
+    for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
+  ) -> ExportPlacement? {
+    _ = gridPlacementsRevision
+    return indexedPlacement(for: selection, collections: collections)
   }
 
   func placement(id: String) -> ExportPlacement? {
-    placements[id]
-  }
-
-  func placements(matching kind: ExportPlacement.Kind) -> [ExportPlacement] {
-    if kind == .timeline {
-      // The collection store never holds `.timeline` placements (snapshot-decode and
-      // log-apply guards enforce that), so an empty array is the correct answer for the
-      // `.timeline` query. Log the call so a routing bug surfaces in diagnostics rather
-      // than the empty result quietly hiding it.
-      logger.error(
-        "CollectionExportRecordStore.placements(matching:) called with .timeline; returning empty."
-      )
-      return []
-    }
-    return placements.values.filter { $0.kind == kind }
+    trackRecords()
+    return placements[id]
   }
 
   // MARK: - Record write API
@@ -686,7 +1030,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
   func removeVariant(assetId: String, placement: ExportPlacement, variant: ExportVariant) {
     guard accept(placement) else { return }
-    guard var body = recordBodies[placement.id]?[assetId] else { return }
+    guard var body = storedRecordBodies[placement.id]?[assetId] else { return }
     guard body.variants[variant.rawValue] != nil else { return }
     body.variants.removeValue(forKey: variant.rawValue)
     if body.variants.isEmpty {
@@ -698,7 +1042,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
   func remove(assetId: String, placement: ExportPlacement) {
     guard accept(placement) else { return }
-    guard recordBodies[placement.id]?[assetId] != nil else { return }
+    guard storedRecordBodies[placement.id]?[assetId] != nil else { return }
     append(.deleteRecord(placementId: placement.id, assetId: assetId))
   }
 
@@ -781,6 +1125,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// How many of the batches' variants the history records as exported now, for reporting
   /// what an import adopted after the reconcile that follows it.
   func recordedVariantCount(of batches: [ImportBatch]) -> Int {
+    trackRecords()
     var count = 0
     for batch in batches {
       guard let placement = placements[batch.placement.id],
@@ -843,28 +1188,27 @@ final class CollectionExportRecordStore: ObservableObject {
         } catch { return .failure(error) }
       }
 
-    // Evaluate caller ownership first; then reject configuration/mutation changes
-    // before the whole synchronous commit (whose own appends advance the revision).
+    do { try await prepareForMutation() } catch is CancellationError { return .zero }
     guard isCurrent(), !Task.isCancelled, state == .ready,
       reconciliationRevision == revision
     else { return .zero }
-
     let toPrune = try outcome.get()
-
-    // Commit on main: apply the whole verified batch synchronously.
     var prunedVariants = 0
     var prunedRecords = 0
-    for (placementId, assetId, variantKey) in toPrune {
-      guard var body = recordBodies[placementId]?[assetId] else { continue }
-      guard body.variants.removeValue(forKey: variantKey) != nil else { continue }
-      prunedVariants += 1
-      if body.variants.isEmpty {
-        append(.deleteRecord(placementId: placementId, assetId: assetId))
-        prunedRecords += 1
-      } else {
-        append(.upsertRecord(placementId: placementId, assetId: assetId, body: body))
+    mutationAdmission.perform {
+      for (placementId, assetId, variantKey) in toPrune {
+        guard var body = recordBodies[placementId]?[assetId] else { continue }
+        guard body.variants.removeValue(forKey: variantKey) != nil else { continue }
+        prunedVariants += 1
+        if body.variants.isEmpty {
+          append(.deleteRecord(placementId: placementId, assetId: assetId))
+          prunedRecords += 1
+        } else {
+          append(.upsertRecord(placementId: placementId, assetId: assetId, body: body))
+        }
       }
     }
+    requestCheckpointIfPressured()
     logger.info(
       "Reconciled collections: pruned \(prunedVariants) variants, \(prunedRecords) records"
     )
@@ -908,6 +1252,7 @@ final class CollectionExportRecordStore: ObservableObject {
   func containsCompletedFile(
     at root: URL, isCurrent: @MainActor () -> Bool = { true }
   ) async throws -> Bool? {
+    trackRecords()
     guard isCurrent(), !Task.isCancelled, state == .ready else { return nil }
     let paths = try completedVariantProbes(root: root).map(\.path)
     guard !paths.isEmpty else { return nil }
@@ -915,9 +1260,13 @@ final class CollectionExportRecordStore: ObservableObject {
     return try await runDetached { try await fileChecker.containsAnyFile(paths, root: root) }
   }
 
+  /// Registers reads against the same revision that coalesces record notifications.
+  private func trackRecords() { _ = mutationCounter }
+
   // MARK: - Read API
 
   func exportInfo(assetId: String, placement: ExportPlacement) -> ScopedExportRecord? {
+    trackRecords()
     guard accept(placement) else { return nil }
     guard let body = recordBodies[placement.id]?[assetId] else { return nil }
     var variantMap: [ExportVariant: ExportVariantRecord] = [:]
@@ -935,7 +1284,8 @@ final class CollectionExportRecordStore: ObservableObject {
     _ filename: String, placement: ExportPlacement, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, placement: placement, subfolder: subfolder, assetId: assetId,
       excluding: { $0 == variant.rawValue })
   }
@@ -946,15 +1296,33 @@ final class CollectionExportRecordStore: ObservableObject {
     _ filename: String, placement: ExportPlacement, subfolder: String?,
     exceptAsset assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, placement: placement, subfolder: subfolder, assetId: assetId,
       excluding: { _ in true })
+  }
+
+  /// Captures just this folder and the permitted own-record exclusions for worker naming.
+  func filenameClaimSnapshot(
+    placement: ExportPlacement, subfolder: String?, exceptVariant variant: ExportVariant?,
+    of assetId: String
+  ) -> FilenameClaimSnapshot {
+    let own = (recordBodies[placement.id]?[assetId]?.variants ?? [:])
+      .filter { variant == nil || $0.key == variant?.rawValue }.values.map {
+        (
+          filename: $0.filename,
+          folder: ClaimFolder(placementId: placement.id, subfolder: $0.subfolder)
+        )
+      }
+    return filenameClaims.snapshot(
+      in: ClaimFolder(placementId: placement.id, subfolder: subfolder), excluding: own)
   }
 
   private func isFilenameClaimed(
     _ filename: String, placement: ExportPlacement, subfolder: String?, assetId: String,
     excluding isOwn: (String) -> Bool
   ) -> Bool {
+    guard !configurationPending else { return false }
     let variants = recordBodies[placement.id]?[assetId]?.variants ?? [:]
     let own = variants.filter { isOwn($0.key) }.values.map {
       (
@@ -963,7 +1331,7 @@ final class CollectionExportRecordStore: ObservableObject {
       )
     }
     let folder = ClaimFolder(placementId: placement.id, subfolder: subfolder)
-    return currentFilenameClaims().count(filename, in: folder, excluding: own) > 0
+    return filenameClaims.count(filename, in: folder, excluding: own) > 0
   }
 
   /// True when every required variant for `asset` under `selection` is `.done`, OR the
@@ -982,40 +1350,39 @@ final class CollectionExportRecordStore: ObservableObject {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> Bool {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
+    return isExportedUntracked(
+      asset: asset, placement: placement, selection: selection,
+      livePhotosPaired: livePhotosPaired, convertHEIC: convertHEIC)
+  }
+
+  /// Observes one asset within one placement; aggregate queries retain their shared revision.
+  func isExportedForTile(
+    asset: AssetDescriptor, placement: ExportPlacement,
+    selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> Bool {
+    _ = tileHistoryRevision
+    access(keyPath: \.recordBodies[placement.id]?[asset.id])
+    return isExportedUntracked(
+      asset: asset, placement: placement, selection: selection,
+      livePhotosPaired: livePhotosPaired, convertHEIC: convertHEICToJPEG)
+  }
+
+  private func isExportedUntracked(
+    asset: AssetDescriptor, placement: ExportPlacement, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, convertHEIC: Bool
+  ) -> Bool {
     guard accept(placement) else { return false }
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: body.typedVariants, asset: asset, selection: selection,
       policy: placement.kind.variantPolicy,
-      convertHEICToJPEG: convertHEICToJPEG,
+      convertHEICToJPEG: convertHEIC,
       livePhotosPaired: livePhotosPaired)
   }
 
   // MARK: - Scoped queries
-
-  func recordCount(in scope: CollectionPlacementScope) -> Int {
-    var count = 0
-    for (placementId, byAsset) in recordBodies {
-      guard let placement = placements[placementId] else { continue }
-      let matches: Bool
-      switch scope {
-      case .favorites: matches = (placement.kind == .favorites)
-      case .album(let id):
-        matches = (placement.kind == .album && placement.collectionLocalIdentifier == id)
-      case .sharedAlbum(let id):
-        matches =
-          (placement.kind == .sharedAlbum && placement.collectionLocalIdentifier == id)
-      case .any:
-        matches =
-          (placement.kind == .favorites || placement.kind == .album
-            || placement.kind == .sharedAlbum)
-      }
-      if matches {
-        count += byAsset.count
-      }
-    }
-    return count
-  }
 
   /// Asset-aware summary used by the collection grid header (`CollectionContentView`).
   /// Mirrors `ExportRecordStore.monthSummary(assets:selection:)` on the timeline side:
@@ -1029,15 +1396,17 @@ final class CollectionExportRecordStore: ObservableObject {
     assets: [AssetDescriptor], placement: ExportPlacement, selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> MonthStatusSummary {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
     guard accept(placement) else {
       return MonthStatusSummary(
         year: 0, month: 0, exportedCount: 0, totalCount: assets.count, status: .notExported)
     }
     var exported = 0
     for asset in assets
-    where isExported(
+    where isExportedUntracked(
       asset: asset, placement: placement, selection: selection,
-      livePhotosPaired: livePhotosPaired)
+      livePhotosPaired: livePhotosPaired, convertHEIC: convertHEIC)
     {
       exported += 1
     }
@@ -1056,17 +1425,18 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   func summary(for placement: ExportPlacement) -> PlacementSummary {
+    trackRecords()
     guard accept(placement) else {
       return PlacementSummary(
         placementId: placement.id, exportedCount: 0, totalCount: 0, status: .notExported)
     }
-    let bodies = recordBodies[placement.id] ?? [:]
-    let total = bodies.count
-    var done = 0
-    for (_, body) in bodies
-    where body.variants.values.contains(where: { $0.status == .done }) {
-      done += 1
+    guard !configurationPending else {
+      return PlacementSummary(
+        placementId: placement.id, exportedCount: 0, totalCount: 0, status: .notExported)
     }
+    let counts = placementCounts[placement.id] ?? PlacementCounts()
+    let total = counts.total
+    let done = counts.done
     let status: MonthExportStatus
     if total == 0 {
       status = .notExported
@@ -1081,12 +1451,19 @@ final class CollectionExportRecordStore: ObservableObject {
       placementId: placement.id, exportedCount: done, totalCount: total, status: status)
   }
 
-  // MARK: - Testing helpers
+  // MARK: - Synchronous IO drain
 
-  /// Blocks until pending IO is flushed.
-  func flushForTesting() {
-    jsonl?.flushForTesting()
+  /// Blocks the caller until queued IO finishes and delivers any pending failure.
+  /// Must not be called from the IO queue.
+  func drainSynchronously() {
+    jsonl?.drainSynchronously()
   }
+
+  #if DEBUG
+    func retainedFinalCommitContains(assetId: String, placement: ExportPlacement) -> Bool {
+      finalCommitContext?.snapshot.records[placement.id]?[assetId] != nil
+    }
+  #endif
 
   /// Captures the existing writer before physical final IO. A successful move is
   /// acknowledged even after cancellation; failure retains history for Retry. The
@@ -1121,6 +1498,7 @@ final class CollectionExportRecordStore: ObservableObject {
     }
     // Writes the completion into the parked history of a destination the store has left.
     let writeParked = { (filename: String) in
+      precondition(!self.mutationAdmission.isClosed, "Parked history requires mutation admission")
       let exportedAt = Date()
       let done = ExportVariantRecord(
         filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
@@ -1128,8 +1506,7 @@ final class CollectionExportRecordStore: ObservableObject {
       if context.snapshot.placements[placement.id] == nil {
         context.snapshot.placements[placement.id] = placement
         context.file.append(
-          .upsertPlacement(placementId: placement.id, placement: placement),
-          currentSnapshot: { context.snapshot })
+          .upsertPlacement(placementId: placement.id, placement: placement))
       }
       var body = context.snapshot.records[placement.id]?[assetId] ?? RecordBody(variants: [:])
       body.variants[variant.rawValue] = done
@@ -1146,14 +1523,16 @@ final class CollectionExportRecordStore: ObservableObject {
       }
       context.snapshot.records[placement.id, default: [:]][assetId] = body
       context.file.append(
-        .upsertRecord(placementId: placement.id, assetId: assetId, body: body),
-        currentSnapshot: { context.snapshot })
+        .upsertRecord(placementId: placement.id, assetId: assetId, body: body))
     }
     return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
       guard let filename = finalFilename else { return }
-      let landing = landFinalCommit(
-        filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
+      try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+      let landing = mutationAdmission.perform {
+        landFinalCommit(
+          filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
+      }
       guard landing != .held else { return }
       do {
         try await context.file.flush()
@@ -1164,9 +1543,10 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// Lands an acknowledged final commit where its destination now stands: deferred behind a
-  /// corrupt load, held while the destination loads, recorded in the active history, or written
-  /// to the parked history of a destination the store has left. A held commit comes back here
-  /// when that load finishes, or when the store leaves the destination first.
+  /// corrupt load, held while the destination loads, recorded in the active history (on top of
+  /// its captured history after an unreadable reload), or written to the parked history of a
+  /// destination the store has left. A held commit comes back here when that load finishes, or
+  /// when the store leaves the destination first.
   private func landFinalCommit(
     _ filename: String, context: FinalCommitContext<Snapshot, LogOp>,
     applyCompletion: @escaping (String) -> Void,
@@ -1183,54 +1563,37 @@ final class CollectionExportRecordStore: ObservableObject {
       writeParked(filename)
       return .parked
     }
-    guard state != .loading else {
+    guard state != .loading, !configurationPending else {
       // Land against whatever the load ends in, as if the commit had arrived just after.
-      commitsLandedWhileLoading[destinationId, default: []].append { [weak self] in
-        guard let self else { return }
-        let landing = self.landFinalCommit(
-          filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
-        guard landing == .parked else { return }
-        // Nobody awaits this commit any more. Finish its write before the store moves on, so a
-        // failure is retained for Retry like any parked commit's.
-        context.file.flushForTesting()
-        if context.file.hasUnflushedChanges {
-          self.retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
-        }
-      }
+      commitsLandedWhileLoading[destinationId, default: []].append(
+        (
+          context: context,
+          replay: { [weak self] in
+            guard let self else { return }
+            let landing = self.landFinalCommit(
+              filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked
+            )
+            guard landing == .parked else { return }
+            // Nobody awaits this commit any more. Finish its write before the store moves on, so a
+            // failure is retained for Retry like any parked commit's.
+            context.file.drainSynchronously()
+            if context.file.hasUnflushedChanges {
+              self.retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
+            }
+          }
+        ))
       return .held
     }
-    return landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
-      ? .recorded : .held
-  }
-
-  /// Records an acknowledged final commit in the active destination's history: deferred
-  /// behind a corrupt load, added to the parked history after an unreadable reload, or
-  /// recorded. Returns whether the completion was written and its flush is still owed.
-  @discardableResult
-  private func landOnActiveDestination(
-    _ filename: String, context: FinalCommitContext<Snapshot, LogOp>,
-    applyCompletion: @escaping (String) -> Void
-  ) -> Bool {
-    if state == .failed {
-      deferredFinalCompletions[context.destinationId, default: []].append {
-        applyCompletion(filename)
-      }
-      return false
-    }
-    if state == .persistenceFailed && !hasUnsavedChanges {
-      // The known pre-switch history is intact in the parked owner, even
-      // when its later reload was unreadable. Retry must retain the new file.
-      placements = context.snapshot.placements
-      recordBodies = context.snapshot.records
-      filenameClaims = nil
+    if state == .persistenceFailed, !hasUnsavedChanges {
+      installHistory(Self.prepareRetained(context.snapshot, logger: logger))
       hasUnsavedChanges = true
     }
     applyCompletion(filename)
-    if state == .persistenceFailed {
+    guard state != .persistenceFailed else {
       retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
-      return false
+      return .held
     }
-    return true
+    return .recorded
   }
 
   /// Lands the final commits acknowledged while `destinationId` loaded, by default the active
@@ -1239,7 +1602,7 @@ final class CollectionExportRecordStore: ObservableObject {
   private func replayCommitsLandedWhileLoading(for destinationId: String? = nil) {
     guard let id = destinationId ?? configuredDestinationId else { return }
     let landings = commitsLandedWhileLoading.removeValue(forKey: id) ?? []
-    for land in landings { land() }
+    for land in landings { land.replay() }
   }
 
   private func replayFinalCompletions() {
@@ -1259,12 +1622,13 @@ final class CollectionExportRecordStore: ObservableObject {
     let isActive = configuredDestinationId == context.destinationId
     // While the destination loads, its in-memory records are empty and must not replace the
     // commit's own snapshot; the finished load installs what is parked here.
-    let isLoading = isActive && state == .loading
+    let isLoading = isActive && state == .loading && !configurationPending
     if isActive && !isLoading {
       // Active state is already current; snapshot only on failure, avoiding a full
       // dictionary CoW on every ordinary successful file commit.
       context.snapshot = Snapshot(
-        version: Constants.snapshotVersion, placements: placements, records: recordBodies)
+        version: Constants.snapshotVersion, placements: storedPlacements,
+        records: storedRecordBodies)
     }
     pendingRecovery[context.destinationId] = context.snapshot
     guard isActive, !isLoading else { return }
@@ -1280,7 +1644,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Validates that this store should accept the placement. Returns `false` and logs an
   /// error when given a `.timeline` placement; the store is then a no-op for the call.
   /// Combined with the snapshot-decode and log-replay guards in `apply(_:)` and
-  /// `configure(for:)`, this is one of three layers that uphold the disjoint-key-space
+  /// `beginConfigure(for:)`, this is one of three layers that uphold the disjoint-key-space
   /// invariant — a `.timeline` placement should never enter the collection store via any
   /// path. (Earlier versions tripped `assertionFailure` here, which made the rejection
   /// path untestable in debug builds; the routing-bug surfacing now happens via `Logger`
@@ -1296,9 +1660,14 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   private func append(_ op: LogOp) {
+    precondition(!mutationAdmission.isClosed, "Production writes must enter mutation admission")
     // Keep an in-flight export's final filename in memory after a write failure,
     // so Retry can save it without exporting the file again. Failed loads stay read-only.
-    guard state == .ready || (state == .persistenceFailed && hasUnsavedChanges) else {
+    guard !configurationPending || applyingCancellationCleanup else { return }
+    guard
+      state == .ready || (state == .persistenceFailed && hasUnsavedChanges)
+        || applyingCancellationCleanup
+    else {
       return
     }
     reconciliationRevision &+= 1
@@ -1309,28 +1678,55 @@ final class CollectionExportRecordStore: ObservableObject {
       context.file = file
     }
     scheduleCoalescedNotify()
-    guard state == .ready, let jsonl else { return }
-    jsonl.append(
-      op,
-      currentSnapshot: {
-        Snapshot(
-          version: Constants.snapshotVersion,
-          placements: self.placements,
-          records: self.recordBodies)
-      })
+    guard state == .ready || applyingCancellationCleanup, let jsonl else { return }
+    jsonl.append(op)
   }
 
   private func apply(_ op: LogOp) {
-    Self.apply(
-      op, placements: &placements, recordBodies: &recordBodies, claims: &filenameClaims,
-      logger: logger)
+    switch op {
+    case .upsertPlacement(let id, let placement):
+      let oldPlacement = storedPlacements[id]
+      placementsChanged = placementsChanged || oldPlacement != placement
+      Self.apply(
+        op, placements: &storedPlacements, recordBodies: &storedRecordBodies, logger: logger)
+      if let oldPlacement {
+        placementCandidates[CollectionKey(oldPlacement)]?.removeValue(forKey: id)
+      }
+      if let placement = storedPlacements[id] {
+        placementCandidates[CollectionKey(placement), default: [:]][id] = placement
+      }
+    case .upsertRecord(let placementId, let assetId, _),
+      .deleteRecord(let placementId, let assetId):
+      let oldBody = storedRecordBodies[placementId]?[assetId]
+      pendingTileRecords.insert(TileRecordKey(placementId: placementId, assetId: assetId))
+      Self.apply(
+        op, placements: &storedPlacements, recordBodies: &storedRecordBodies, logger: logger)
+      let newBody = storedRecordBodies[placementId]?[assetId]
+      if let oldBody {
+        Self.update(&filenameClaims, placementId: placementId, body: oldBody, adding: false)
+      }
+      if let newBody {
+        Self.update(&filenameClaims, placementId: placementId, body: newBody, adding: true)
+      }
+      var counts = placementCounts[placementId] ?? PlacementCounts()
+      counts.total += (newBody == nil ? 0 : 1) - (oldBody == nil ? 0 : 1)
+      counts.done += Self.doneContribution(newBody) - Self.doneContribution(oldBody)
+      if counts.total == 0 {
+        placementCounts.removeValue(forKey: placementId)
+      } else {
+        placementCounts[placementId] = counts
+      }
+    }
   }
 
-  /// Applies one log operation to `placements` and `recordBodies`, keeping `claims` current
-  /// when there is an index. Shared by mutations and the load's replay.
+  nonisolated private static func doneContribution(_ body: RecordBody?) -> Int {
+    body?.variants.values.contains { $0.status == .done } == true ? 1 : 0
+  }
+
+  /// Shared record replay; live mutations update claims and counters beside this change.
   nonisolated static func apply(
     _ op: LogOp, placements: inout [String: ExportPlacement],
-    recordBodies: inout [String: [String: RecordBody]], claims: inout FilenameClaims<ClaimFolder>?,
+    recordBodies: inout [String: [String: RecordBody]],
     logger: Logger
   ) {
     switch op {
@@ -1344,13 +1740,6 @@ final class CollectionExportRecordStore: ObservableObject {
         return
       }
       placements[placementId] = placement
-    case .deletePlacement(let placementId):
-      placements.removeValue(forKey: placementId)
-      if let removed = recordBodies.removeValue(forKey: placementId) {
-        for body in removed.values {
-          updateClaims(&claims, placementId: placementId, body: body, adding: false)
-        }
-      }
     case .upsertRecord(let placementId, let assetId, let body):
       // Reject orphan records: the on-disk format requires every record to reference an
       // existing placement. If a log truncation or partial write loses the upsertPlacement
@@ -1365,30 +1754,17 @@ final class CollectionExportRecordStore: ObservableObject {
         return
       }
       var byAsset = recordBodies[placementId] ?? [:]
-      if let old = byAsset.updateValue(body, forKey: assetId) {
-        updateClaims(&claims, placementId: placementId, body: old, adding: false)
-      }
-      updateClaims(&claims, placementId: placementId, body: body, adding: true)
+      byAsset[assetId] = body
       recordBodies[placementId] = byAsset
     case .deleteRecord(let placementId, let assetId):
       var byAsset = recordBodies[placementId] ?? [:]
-      if let old = byAsset.removeValue(forKey: assetId) {
-        updateClaims(&claims, placementId: placementId, body: old, adding: false)
-      }
+      byAsset.removeValue(forKey: assetId)
       if byAsset.isEmpty {
         recordBodies.removeValue(forKey: placementId)
       } else {
         recordBodies[placementId] = byAsset
       }
     }
-  }
-
-  nonisolated private static func updateClaims(
-    _ claims: inout FilenameClaims<ClaimFolder>?, placementId: String, body: RecordBody,
-    adding: Bool
-  ) {
-    guard claims != nil else { return }
-    update(&claims!, placementId: placementId, body: body, adding: adding)
   }
 
   nonisolated private static func update(
@@ -1405,14 +1781,6 @@ final class CollectionExportRecordStore: ObservableObject {
     }
   }
 
-  private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
-    if let filenameClaims { return filenameClaims }
-    let claims = Self.buildClaims(from: recordBodies, logger: logger)
-    filenameClaims = claims
-    return claims
-  }
-
-  /// The claim index for `recordBodies`: every filename a variant names, in its folder.
   nonisolated static func buildClaims(
     from recordBodies: [String: [String: RecordBody]], logger: Logger
   ) -> FilenameClaims<ClaimFolder> {
@@ -1475,6 +1843,25 @@ final class CollectionExportRecordStore: ObservableObject {
         )
       }
     }
+  }
+
+  private func publishRecordChanges() {
+    let allTiles = invalidatesAllTiles
+    let records = pendingTileRecords
+    let metadataChanged = placementsChanged
+    invalidatesAllTiles = false
+    pendingTileRecords = []
+    placementsChanged = false
+    mutationCounter &+= 1
+    if allTiles {
+      tileHistoryRevision &+= 1
+    } else {
+      for key in records {
+        withMutation(keyPath: \.recordBodies[key.placementId]?[key.assetId]) {}
+      }
+    }
+    if allTiles || metadataChanged { gridPlacementsRevision &+= 1 }
+    publishSidebarChanges()
   }
 
   private func scheduleCoalescedNotify() {

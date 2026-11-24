@@ -79,8 +79,9 @@ The removed manual-clear comment stated:
 
 > A manual full export for the same destination / selection / scope clears compatible dirty flags.
 
-The current run boundary limits that rule, rather than clearing changes that arrived after
-work started. The [AutoSyncReducer](../../photo-export/AutoSync/AutoSyncReducer.swift) run-boundary comment
+Production manual UI actions do not create awaitable run summaries, so they do not use
+that proposed manual-clear path. AutoSync completions acknowledge only their own start boundary,
+rather than clearing changes that arrived after work started. The [AutoSyncReducer](../../photo-export/AutoSync/AutoSyncReducer.swift) run-boundary comment
 states:
 
 > A single active run only covers work known at its start. A scope is
@@ -131,8 +132,12 @@ cleanup remains separate from user-visible destination content.
 [DestinationSafetyMonitor](../../photo-export/Destination/DestinationSafetyMonitor.swift)
 uses the stable destination id. It requires confirmation when both record stores are empty,
 the destination root has a non-hidden entry, and there is no saved confirmation.
+Its verdict names the stable id it was reached for. Until that id matches the current
+destination, the destination is `.checking` and Auto Export waits
+(`.waiting(.destinationChecking)`); a trigger that arrives meanwhile (launch, pick, Export Now)
+runs as itself once the check passes.
 [DestinationSnapshotAdapter](../../photo-export/Destination/DestinationSnapshotAdapter.swift)
-gives migration conflicts precedence over confirmation. Neither confirmation nor a fingerprint
+gives migration conflicts precedence over the check and confirmation. Neither confirmation nor a fingerprint
 is a substitute for the [stable destination identity](architecture-conventions.md#destination-identity).
 
 ## Persistence and token authority
@@ -143,24 +148,15 @@ From [Persistence Keys](../project/archive/auto-sync-background-sync-plan.md#per
 
 Global preferences are `AutoSync.enabled` and `AutoSync.scopeSelection`. The global Photos
 cursor is `AutoSync/photo-library-change-token.data`. Destination files include
-`safetyRecord.json`, `lastRunSummary.json`, `retryState.json`, `dirtyState.json` and
-`lastDurablyRecordedToken.data`.
+`safetyRecord.json`, `lastRunSummary.json`, `retryState.json` and `dirtyState.json`.
+Only the global Photos cursor drives persistent-change fetching. Dirty state records
+pending work independently; after a failed save, the manager retains its latest snapshot
+across destination switches until a later save succeeds. Startup full-scope reconciliation
+recovers work that was not saved before process exit.
 
-The existing [AutoSyncEffect](../../photo-export/Models/AutoSyncEffect.swift) contract states:
-
-> when a `photosChanged` event produces both `persistDirtyState` and
-> `advancePersistentChangeToken`, the persist effect is emitted *before* the token
-> advance. The runner must also withhold that destination's acknowledgement after
-> a failed dirty save, including token-only events in later effect batches. These
-> destination snapshots are advisory; the Photos adapter owns an independent global
-> fetch cursor, so this ordering does not establish crash-safe PhotoKit replay.
-
-The [per-destination token store](../../photo-export/Protocols/AutoSyncPerDestinationTokenStore.swift)
-contract states:
-
-> The token records advisory acknowledgement after dirty-state persistence.
-> It is currently loaded but does not drive fetching or resume decisions;
-> the PhotoKit adapter owns an independent global cursor.
+Older `lastDurablyRecordedToken.data` and `currentRun.json` files are ignored and left
+untouched. Diagnostic reports list failed and in-progress variants and the latest Photos
+catch-up result; they do not infer a previous session's interrupted scope.
 
 ## Run ownership and presentation
 

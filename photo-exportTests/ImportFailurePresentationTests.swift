@@ -11,6 +11,13 @@ import Testing
   struct ImportFailurePresentationTests {
     enum History: CaseIterable { case timeline, collection }
 
+    private struct SheetHost: View {
+      @State private var presented = true
+      var body: some View {
+        Color.clear.frame(width: 300, height: 200).sheet(isPresented: $presented) { ImportView() }
+      }
+    }
+
     private final class FailingLogIO: JSONLRecordLogIO, @unchecked Sendable {
       private let lock = NSLock()
       private var armed = false
@@ -37,7 +44,6 @@ import Testing
       let collections: CollectionExportRecordStore
       let manager: ExportManager
       let destinationManager: ExportDestinationManager
-      let counter = BodyInvalidationCounter()
       let root = TestScratch.directory("ImportFailurePresentation")
       let defaultsName = TestScratch.suiteName("ImportFailure")
       let defaults: UserDefaults
@@ -46,7 +52,7 @@ import Testing
       var hosted: NSView?
       static let hostHeight: CGFloat = 600
 
-      init(fault: History? = nil) {
+      init(fault: History? = nil) async {
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(
           baseDirectoryURL: root, reconciliationFileChecker: checker,
@@ -54,8 +60,8 @@ import Testing
         collections = CollectionExportRecordStore(
           baseDirectoryURL: root, reconciliationFileChecker: checker,
           recordLogIO: fault == .collection ? io : ProductionJSONLRecordLogIO())
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: photos, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -90,14 +96,24 @@ import Testing
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
       }
 
-      func show() {
+      func show(asSheet: Bool = false) {
+        if asSheet {
+          show(SheetHost(), style: [.titled])
+        } else {
+          show(ImportView(), style: [.borderless])
+        }
+      }
+
+      private func show<Content: View>(_ content: Content, style: NSWindow.StyleMask) {
         let hosted = NSHostingView(
-          rootView: ImportView()
-            .environmentObject(manager).environmentObject(timeline).environmentObject(collections)
-            .environmentObject(destinationManager).environment(\.bodyInvalidationCounter, counter))
+          rootView:
+            content
+            .environment(manager).environment(timeline).environment(collections)
+            .environment(\.accessibilityEnabled, true)
+            .environmentObject(destinationManager))
         let hostWindow = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 460, height: Self.hostHeight),
-          styleMask: [.borderless], backing: .buffered, defer: false)
+          styleMask: style, backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
         window = hostWindow
@@ -108,69 +124,86 @@ import Testing
       func close() {
         manager.cancelImport()
         window?.orderOut(nil)
+        if let sheet = window?.attachedSheet {
+          window?.endSheet(sheet)
+          sheet.close()
+        }
         window?.contentView = nil
         window?.close()
         window = nil
         hosted = nil
-        counter.reset()
         io.arm(false)
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         destination.cleanup()
         defaults.removePersistentDomain(forName: defaultsName)
         try? FileManager.default.removeItem(at: root)
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
-
     private func reached(_ gate: AsyncCheckpoint) async -> Bool {
       await gate.waitForEnter(count: 1)
     }
     private func shows(_ title: String, in f: Fixture) async -> Bool {
-      let shown = await observe { f.counter.renderedText["import-title"] == [title] }
+      let shown = await observe { contains(title, in: f) }
       #expect(shown)
       return shown
     }
 
-    /// The result lists album and Favorites files matched and album folders no current album
-    /// was matched to, and says when the album history couldn't be rebuilt.
-    @Test(.timeLimit(.minutes(2)))
-    func resultShowsAlbumAndFavoritesRows() async throws {
-      let f = Fixture()
+    private func contains(_ text: String, in f: Fixture) -> Bool {
+      guard let window = f.window else { return false }
+      return NativeViewAccess.containsText(text, in: window)
+    }
+
+    private func button(_ title: String, in f: Fixture) -> AnyObject? {
+      f.window.flatMap { NativeViewAccess.button(title, in: $0) }
+    }
+
+    private func press(_ title: String, in window: NSWindow) throws {
+      let button = try #require(NativeViewAccess.button(title, in: window))
+      let press: (() -> Bool)? = button.accessibilityPerformPress
+      let action = try #require(press)
+      _ = action()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func nativeCloseDismissesTheActualImportSheet() async throws {
+      let f = await Fixture()
       defer { f.close() }
-      f.show()
+      f.show(asSheet: true)
+      let parent = try #require(f.window)
+      try #require(await observe(in: parent) { parent.attachedSheet != nil })
+      let sheet = try #require(parent.attachedSheet)
+      try #require(await observe(in: sheet) { NativeViewAccess.button("Close", in: sheet) != nil })
+      try press("Close", in: sheet)
+      try #require(await observe(in: parent) { parent.attachedSheet == nil })
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func resultRendersCollectionRowsFromTheActualReport() async throws {
+      let f = await Fixture()
+      defer { f.close() }
       f.manager.importResult = ImportReport(
         matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1,
         collectionFilesScanned: 4, collectionMatchedCount: 3,
         unrecognizedCollectionFolders: ["Collections/Albums/Trips/Old/", "Collections/Favorites/"])
-      #expect(await observe { f.counter.renderedText["import-collection-matched"] == ["3"] })
-      #expect(f.counter.renderedText["import-collection-unrecognized"] == ["2"])
+      f.show()
+      try #require(await shows("Import Complete", in: f))
+      #expect(contains("Album and Favorites files matched", in: f))
+      #expect(contains("Album folders not linked to an album", in: f))
       #expect(
-        f.counter.renderedText["import-collection-unrecognized-caption"]?.first?.hasPrefix(
-          "\u{201C}Trips/Old\u{201D}, \u{201C}Favorites\u{201D}. These are usually albums renamed")
-          == true)
-      #expect(f.counter.renderedText["import-collections-skipped"] == nil)
-
-      f.counter.reset()
-      f.manager.importResult = ImportReport(
-        matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1,
-        collectionFilesScanned: 2, collectionsSkipped: true)
-      #expect(await observe { f.counter.renderedText["import-collections-skipped"] != nil })
-      #expect(f.counter.renderedText["import-collection-unrecognized"] == nil)
+        contains(
+          "“Trips/Old”, “Favorites”. These are usually albums renamed, moved or deleted in Photos since they were exported. Their files are left as they are.",
+          in: f))
     }
 
     @Test(.timeLimit(.minutes(2)))
     func rootFailureIsTerminalPreservesHistoryAndCanRetry() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       var started = false
       var terminal: (error: String?, stage: BackupScanner.ImportStage?, report: ImportReport?)?
-      let subscription = f.manager.$isImporting.sink { active in
+      let subscription = f.manager.isImportingFlagOnlyPublisher.sink { active in
         if active {
           started = true
         } else if started {
@@ -195,38 +228,38 @@ import Testing
         f.collections.exportInfo(assetId: "history", placement: f.favorites) == collectionBefore)
       let reopenedTimeline = ExportRecordStore(baseDirectoryURL: f.root)
       let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: f.root)
-      reopenedTimeline.configure(for: "A")
-      reopenedCollections.configure(for: "A")
+      await reopenedTimeline.configureAndWait(for: "A")
+      await reopenedCollections.configureAndWait(for: "A")
       #expect(reopenedTimeline.exportInfo(assetId: "history") == timelineBefore)
       #expect(
         reopenedCollections.exportInfo(assetId: "history", placement: f.favorites)
           == collectionBefore)
-      reopenedTimeline.flushForTesting()
-      reopenedCollections.flushForTesting()
+      reopenedTimeline.drainSynchronously()
+      reopenedCollections.drainSynchronously()
       guard await shows("Import Failed", in: f) else { return }
-      #expect(f.counter.renderedText["import-progress"] == ["false"])
+      #expect(button("Cancel", in: f) == nil)
       let importError = try #require(f.manager.importError)
-      #expect(f.counter.renderedText["import-message"] == [importError])
-      #expect(f.counter.renderedActions["import-close"] != nil)
+      #expect(contains(importError, in: f))
+      #expect(button("Close", in: f) != nil)
       let failure = f.manager.importError
-      f.timeline.configure(for: nil)
+      await f.timeline.configureAndWait(for: nil)
       f.manager.startImport()  // Rejected start must preserve the failure.
       #expect(f.manager.importError == failure)
-      let blocked = await observe { f.counter.renderedText["import-can-retry"] == ["false"] }
+      let blocked = await observe { button("Retry", in: f)?.isAccessibilityEnabled?() == false }
       try #require(blocked)
-      let rejectedRetry = try #require(f.counter.renderedActions["import-retry"])
-      rejectedRetry()
+      try press("Retry", in: try #require(f.window))
       #expect(!f.manager.isImporting && f.manager.importError == failure)
-      f.timeline.configure(for: "A")
+      await f.timeline.configureAndWait(for: "A")
       f.destinationManager.clearSelection()
-      let disconnected = await observe { f.counter.renderedText["import-can-retry"] == ["false"] }
+      let disconnected = await observe {
+        button("Retry", in: f)?.isAccessibilityEnabled?() == false
+      }
       try #require(disconnected)
       f.destinationManager.configureForScreenshotMode()
       f.destination.selectedFolderURL = f.destination.rootURL
-      let eligible = await observe { f.counter.renderedText["import-can-retry"] == ["true"] }
+      let eligible = await observe { button("Retry", in: f)?.isAccessibilityEnabled?() == true }
       try #require(eligible)
-      let retry = try #require(f.counter.renderedActions["import-retry"])
-      retry()
+      try press("Retry", in: try #require(f.window))
       #expect(f.manager.isImporting)
       #expect(f.manager.importError == nil, "An accepted retry clears failure synchronously")
       await f.manager.waitForImportCompletion()
@@ -242,7 +275,7 @@ import Testing
     /// A failure already showing at the first layout must render whole.
     @Test(.timeLimit(.minutes(1)))
     func failureViewRendersWhenItIsTheFirstLayout() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.destination.selectedFolderURL = f.destination.rootURL.appendingPathComponent("missing")
       f.manager.startImport()
@@ -257,15 +290,18 @@ import Testing
       let fitted = await observe { window.frame.height < Fixture.hostHeight }
       try #require(fitted)
       #expect(window.contentLayoutRect.height >= hosted.fittingSize.height)
-      #expect(f.counter.renderedText["import-message"] == [importError])
-      #expect(f.counter.renderedText["import-recovery"]?.first?.isEmpty == false)
-      #expect(f.counter.renderedText["import-progress"] == ["false"])
-      #expect(f.counter.renderedActions["import-close"] != nil)
+      #expect(contains(importError, in: f))
+      #expect(
+        contains(
+          "Check that your backup drive is connected. Close this sheet to reselect the export folder if access needs renewing, then try again.",
+          in: f))
+      #expect(button("Cancel", in: f) == nil)
+      #expect(button("Close", in: f) != nil)
     }
 
     @Test(.timeLimit(.minutes(1)))
     func deniedScopeStopsProgressWithoutClosingAnUnopenedScope() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.destination.scopedAccessAvailable = false
       f.show()
@@ -276,13 +312,16 @@ import Testing
       #expect(f.destination.beginScopedAccessCount == 1)
       #expect(f.destination.endScopedAccessCount == 0 && f.destination.openedScopeURLs.isEmpty)
       guard await shows("Import Failed", in: f) else { return }
-      #expect(f.counter.renderedText["import-progress"] == ["false"])
-      #expect(f.counter.renderedText["import-recovery"]?.first?.isEmpty == false)
+      #expect(button("Cancel", in: f) == nil)
+      #expect(
+        contains(
+          "Check that your backup drive is connected. Close this sheet to reselect the export folder if access needs renewing, then try again.",
+          in: f))
     }
 
     @Test(.timeLimit(.minutes(2)), arguments: History.allCases)
     func failedHistoryWriteRequiresRecoveryBeforeRetry(history: History) async throws {
-      let f = Fixture(fault: history)
+      let f = await Fixture(fault: history)
       defer { f.close() }
       try await f.seedHistory()
       try f.plantMatch()
@@ -294,23 +333,24 @@ import Testing
       #expect(f.manager.importError?.isEmpty == false)
       #expect((history == .timeline ? f.timeline.state : f.collections.state) == .persistenceFailed)
       guard await shows("Import Failed", in: f) else { return }
-      let blocked = await observe { f.counter.renderedText["import-can-retry"] == ["false"] }
+      let blocked = await observe { button("Retry", in: f)?.isAccessibilityEnabled?() == false }
       try #require(blocked)
-      #expect(f.counter.renderedText["import-recovery"]?.first?.contains("history") == true)
+      #expect(
+        contains(
+          "Close this sheet and resolve the export history alert before retrying. Keep the app open to preserve unsaved progress.",
+          in: f))
       let failure = f.manager.importError
-      let blockedRetry = try #require(f.counter.renderedActions["import-retry"])
-      blockedRetry()
+      try press("Retry", in: try #require(f.window))
       #expect(!f.manager.isImporting && f.manager.importError == failure)
       f.io.arm(false)
       if history == .timeline {
-        f.timeline.retryPersistence()
+        await f.timeline.retryHistoryPersistence()
       } else {
-        f.collections.retryPersistence()
+        await f.collections.retryHistoryPersistence()
       }
-      let eligible = await observe { f.counter.renderedText["import-can-retry"] == ["true"] }
+      let eligible = await observe { button("Retry", in: f)?.isAccessibilityEnabled?() == true }
       try #require(eligible)
-      let retry = try #require(f.counter.renderedActions["import-retry"])
-      retry()
+      try press("Retry", in: try #require(f.window))
       #expect(f.manager.isImporting && f.manager.importError == nil)
       await f.manager.waitForImportCompletion()
       #expect(f.manager.importResult?.matchedCount == 1)
@@ -323,7 +363,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func generationInvalidationBeforeTaskEntrySettlesActivity(unavailable: Bool) async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.manager.startImport()
       let old = try #require(f.manager.importTask)
@@ -342,7 +382,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func oldMatchingTaskCannotReplaceNewFailure() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var imports: [Task<Void, Never>] = []
       try await withCleanup {
@@ -383,7 +423,7 @@ import Testing
     func generationOnlyInterruptionDuringMatchingSettlesWithoutFailure(unavailable: Bool)
       async throws
     {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var imports: [Task<Void, Never>] = []
       try await withCleanup {
@@ -402,7 +442,7 @@ import Testing
         }
         #expect(!old.isCancelled)
         var lateStages: [BackupScanner.ImportStage?] = []
-        let subscription = f.manager.$importStage.dropFirst().sink { lateStages.append($0) }
+        let subscription = f.manager.importStagePublisher.dropFirst().sink { lateStages.append($0) }
         defer { subscription.cancel() }
         await gate.releaseAll()
         await old.value
@@ -425,18 +465,18 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func idleRejectedStartAndCancelStayCloseableWithoutFailure() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var imports: [Task<Void, Never>] = []
       try await withCleanup {
-        f.timeline.configure(for: nil)
+        await f.timeline.configureAndWait(for: nil)
         f.show()
         f.manager.startImport()
         #expect(!f.manager.isImporting && f.manager.importError == nil)
         guard await shows("Import Stopped", in: f) else { return }
-        #expect(f.counter.renderedText["import-progress"] == ["false"])
-        #expect(f.counter.renderedActions["import-close"] != nil)
-        f.timeline.configure(for: "A")
+        #expect(button("Cancel", in: f) == nil)
+        #expect(button("Close", in: f) != nil)
+        await f.timeline.configureAndWait(for: "A")
         try f.plantMatch()
         f.photos.fetchAssetsCheckpointByYear[2026] = gate
         f.manager.startImport()
@@ -446,8 +486,7 @@ import Testing
         try #require(matching)
         let shown = await shows("Importing Existing Backup", in: f)
         try #require(shown)
-        let cancel = try #require(f.counter.renderedActions["import-cancel"])
-        cancel()
+        try press("Cancel", in: try #require(f.window))
         #expect(
           !f.manager.isImporting && f.manager.importError == nil && f.manager.importResult == nil)
         await gate.releaseAll()

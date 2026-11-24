@@ -147,9 +147,6 @@ struct CollectionsSelectionBuckets: Equatable {
   var albumIds: [String]
   var sharedAlbumIds: [String]
 
-  static let empty = CollectionsSelectionBuckets(
-    includesFavorites: false, albumIds: [], sharedAlbumIds: [])
-
   /// Splits the selection set into the three collection-store buckets. `expandFolder`
   /// returns the descendant `albumLocalIdentifier` list for a `.folder(collectionId:)`
   /// value; the caller is responsible for tree lookup so this stays a pure helper.
@@ -185,7 +182,6 @@ struct CollectionsSelectionBuckets: Equatable {
     )
   }
 
-  var isEmpty: Bool { !includesFavorites && albumIds.isEmpty && sharedAlbumIds.isEmpty }
   var count: Int {
     (includesFavorites ? 1 : 0) + albumIds.count + sharedAlbumIds.count
   }

@@ -5,6 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct CollectionExportRecordStoreTests {
 
   // MARK: - Fixtures
@@ -60,15 +61,111 @@ struct CollectionExportRecordStoreTests {
     )
   }
 
+  @Test func legacySummariesMatchSeededIndependentScan() async throws {
+    let dir = TestScratch.directory("CollectionCounterGolden")
+    let store = CollectionExportRecordStore(baseDirectoryURL: dir, notificationClock: TestClock())
+    defer {
+      store.drainSynchronously()
+      try? FileManager.default.removeItem(at: dir)
+    }
+    let destination = dir.appendingPathComponent("golden")
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let snapshot = CollectionExportRecordStore.Snapshot(
+      version: CollectionExportRecordStore.Constants.snapshotVersion,
+      placements: [favoritesPlacement().id: favoritesPlacement()],
+      records: [
+        favoritesPlacement().id: [
+          "empty": .init(variants: [:]),
+          "future": .init(variants: [
+            "future-variant": ExportVariantRecord(
+              filename: "FUTURE.JPG", status: .done, exportDate: nil, lastError: nil)
+          ]),
+        ]
+      ])
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(snapshot).write(
+      to: destination.appendingPathComponent(
+        CollectionExportRecordStore.Constants.snapshotFileName))
+    await store.configureAndWait(for: "golden")
+    #expect(store.summary(for: favoritesPlacement()).totalCount == 2)
+    #expect(store.summary(for: favoritesPlacement()).exportedCount == 1)
+    let placements = [favoritesPlacement(), albumPlacement(), sharedAlbumPlacement()]
+    var seed: UInt64 = 0x450A
+    for step in 0..<240 {
+      seed = seed &* 6364136223846793005 &+ 1
+      let placement = placements[Int(seed >> 32) % placements.count]
+      let asset = "asset-\(Int(seed >> 16) % 13)"
+      switch seed % 7 {
+      case 0: store.remove(assetId: asset, placement: placement)
+      case 2: store.removeVariant(assetId: asset, placement: placement, variant: .original)
+      default:
+        store.upsertPlacement(placement)
+        store.upsert(
+          ScopedExportRecord(
+            placement: placement, assetId: asset,
+            variants: seed % 11 == 0
+              ? [:]
+              : [
+                .original: ExportVariantRecord(
+                  filename: "\(asset).JPG", status: seed % 3 == 0 ? .done : .inProgress,
+                  exportDate: nil, lastError: nil)
+              ]))
+      }
+      if step == 80 {
+        store.bulkImportRecords([
+          .init(
+            placement: placement,
+            records: [
+              "imported": [
+                .original: ExportVariantRecord(
+                  filename: "IMPORT.JPG", status: .done,
+                  exportDate: nil, lastError: nil),
+                .edited: ExportVariantRecord(
+                  filename: "IMPORT-E.JPG", status: .done,
+                  exportDate: nil, lastError: nil),
+              ]
+            ])
+        ])
+      }
+      if step == 160 {
+        let broken = dir.appendingPathComponent("broken")
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try Data("broken".utf8).write(
+          to: broken.appendingPathComponent(
+            CollectionExportRecordStore.Constants.snapshotFileName))
+        await store.configureAndWait(for: "broken")
+        try #require(store.state == .failed)
+        await store.resetHistory()
+        #expect(placements.allSatisfy { store.summary(for: $0).totalCount == 0 })
+        await store.configureAndWait(for: "golden")
+      }
+      if step == 120 {
+        store.drainSynchronously()
+        await store.configureAndWait(for: nil)
+        await store.configureAndWait(for: "golden")
+      }
+      for candidate in placements {
+        let bodies = store.recordBodies[candidate.id] ?? [:]
+        let done = bodies.values.filter { body in
+          body.variants.values.contains { $0.status == .done }
+        }.count
+        let summary = store.summary(for: candidate)
+        #expect(summary.totalCount == bodies.count, "seed 0x450A step \(step)")
+        #expect(summary.exportedCount == done, "seed 0x450A step \(step)")
+      }
+    }
+  }
+
   // MARK: - Empty / first-launch behavior
 
   /// Plan §"Phase 1 exit criteria": "Collection store loads empty on first launch and writes
   /// its first snapshot only when something is upserted."
-  @Test func emptyOnFirstLaunch() throws {
+  @Test func emptyOnFirstLaunch() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-empty")
+    await store.configureAndWait(for: "dest-empty")
     #expect(store.placements.isEmpty)
     #expect(store.recordBodies.isEmpty)
 
@@ -77,15 +174,15 @@ struct CollectionExportRecordStoreTests {
     #expect(!FileManager.default.fileExists(atPath: snapshotPath))
   }
 
-  @Test func nilDestinationClearsState() throws {
+  @Test func nilDestinationClearsState() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-x")
+    await store.configureAndWait(for: "dest-x")
     store.upsertPlacement(favoritesPlacement())
     #expect(!store.placements.isEmpty)
 
-    store.configure(for: nil)
+    await store.configureAndWait(for: nil)
     #expect(store.placements.isEmpty)
     #expect(store.recordBodies.isEmpty)
   }
@@ -105,20 +202,20 @@ struct CollectionExportRecordStoreTests {
       year: 2025, month: 6, createdAt: Date(timeIntervalSince1970: 1_700_000_000))
   }
 
-  @Test func upsertPlacementRejectsTimeline() throws {
+  @Test func upsertPlacementRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-1")
+    await store.configureAndWait(for: "dest-reject-1")
     let timeline = timelinePlacement()
     store.upsertPlacement(timeline)
     #expect(store.placements.isEmpty)
     #expect(store.placement(id: timeline.id) == nil)
   }
 
-  @Test func upsertScopedRecordRejectsTimeline() throws {
+  @Test func upsertScopedRecordRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-2")
+    await store.configureAndWait(for: "dest-reject-2")
     let timeline = timelinePlacement()
     let record = ScopedExportRecord(
       placement: timeline, assetId: "a",
@@ -131,39 +228,39 @@ struct CollectionExportRecordStoreTests {
     #expect(store.recordBodies.isEmpty)
   }
 
-  @Test func markVariantInProgressRejectsTimeline() throws {
+  @Test func markVariantInProgressRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-3")
+    await store.configureAndWait(for: "dest-reject-3")
     store.markVariantInProgress(
       assetId: "a", placement: timelinePlacement(), variant: .original, filename: nil)
     #expect(store.recordBodies.isEmpty)
   }
 
-  @Test func markVariantExportedRejectsTimeline() throws {
+  @Test func markVariantExportedRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-4")
+    await store.configureAndWait(for: "dest-reject-4")
     store.markVariantExported(
       assetId: "a", placement: timelinePlacement(), variant: .original,
       filename: "x.heic", exportedAt: Date())
     #expect(store.recordBodies.isEmpty)
   }
 
-  @Test func markVariantFailedRejectsTimeline() throws {
+  @Test func markVariantFailedRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-5")
+    await store.configureAndWait(for: "dest-reject-5")
     store.markVariantFailed(
       assetId: "a", placement: timelinePlacement(), variant: .original,
       error: "test", at: Date())
     #expect(store.recordBodies.isEmpty)
   }
 
-  @Test func removeVariantRejectsTimeline() throws {
+  @Test func removeVariantRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-6")
+    await store.configureAndWait(for: "dest-reject-6")
     // Pre-populate via favorites placement so we can prove the .timeline call doesn't
     // mutate state.
     let favorites = favoritesPlacement()
@@ -176,10 +273,10 @@ struct CollectionExportRecordStoreTests {
     #expect(store.recordBodies == beforeBodies)
   }
 
-  @Test func removeAssetRejectsTimeline() throws {
+  @Test func removeAssetRejectsTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-7")
+    await store.configureAndWait(for: "dest-reject-7")
     let favorites = favoritesPlacement()
     store.upsertPlacement(favorites)
     store.markVariantExported(
@@ -190,29 +287,10 @@ struct CollectionExportRecordStoreTests {
     #expect(store.recordBodies == beforeBodies)
   }
 
-  @Test func deletePlacementForUnknownIdIsAllowed() throws {
+  @Test func readApisRejectTimeline() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-9")
-    // No-op delete for an unknown id is harmless and emits a delete log line; verify the
-    // call doesn't crash and state stays empty.
-    store.deletePlacement(id: "collections:album:unknown")
-    #expect(store.placements.isEmpty)
-    #expect(store.recordBodies.isEmpty)
-  }
-
-  @Test func placementsMatchingTimelineReturnsEmpty() throws {
-    let (dir, store) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-10")
-    store.upsertPlacement(favoritesPlacement())
-    #expect(store.placements(matching: .timeline).isEmpty)
-  }
-
-  @Test func readApisRejectTimeline() throws {
-    let (dir, store) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-reject-11")
+    await store.configureAndWait(for: "dest-reject-11")
     let timeline = timelinePlacement()
     let asset = sampleAsset()
 
@@ -232,7 +310,7 @@ struct CollectionExportRecordStoreTests {
 
   /// Snapshot-decode defense: hand-craft a snapshot file containing a `.timeline`
   /// placement and verify it's dropped on load.
-  @Test func snapshotDecodeFiltersTimelinePlacements() throws {
+  @Test func snapshotDecodeFiltersTimelinePlacements() async throws {
     let (dir, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -269,7 +347,7 @@ struct CollectionExportRecordStoreTests {
     // Configure a fresh store against the tampered file and assert the .timeline
     // placement and its records are dropped while .favorites survives.
     let store = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: "dest-corrupt")
+    await store.configureAndWait(for: "dest-corrupt")
     #expect(store.state == .ready, "snapshot is structurally valid; load should succeed")
     #expect(store.placement(id: timeline.id) == nil)
     #expect(store.placement(id: favorites.id) == favorites)
@@ -279,7 +357,7 @@ struct CollectionExportRecordStoreTests {
 
   /// Log-replay defense: write an `upsertPlacement` log line for a `.timeline` placement
   /// and verify it's dropped on replay.
-  @Test func logReplayFiltersTimelinePlacements() throws {
+  @Test func logReplayFiltersTimelinePlacements() async throws {
     let (dir, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -297,18 +375,18 @@ struct CollectionExportRecordStoreTests {
     try data.write(to: logURL)
 
     let store = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: "dest-log-corrupt")
+    await store.configureAndWait(for: "dest-log-corrupt")
     #expect(store.state == .ready)
     #expect(store.placements.isEmpty, ".timeline placement must be dropped on log replay")
   }
 
   // MARK: - Placement metadata
 
-  @Test func upsertPlacementPersists() throws {
+  @Test func upsertPlacementPersists() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-1")
+    await store.configureAndWait(for: "dest-1")
     let p = favoritesPlacement()
     store.upsertPlacement(p)
     #expect(store.placement(id: p.id) == p)
@@ -316,31 +394,13 @@ struct CollectionExportRecordStoreTests {
     #expect(store.placements(matching: .album).isEmpty)
   }
 
-  @Test func deletePlacementRemovesPlacementAndRecords() throws {
-    let (dir, store) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    store.configure(for: "dest-2")
-    let album = albumPlacement()
-    store.upsertPlacement(album)
-    store.markVariantExported(
-      assetId: "a", placement: album, variant: .original,
-      filename: "IMG_0001.HEIC", exportedAt: Date())
-    #expect(store.placement(id: album.id) != nil)
-    #expect(store.recordBodies[album.id]?.count == 1)
-
-    store.deletePlacement(id: album.id)
-    #expect(store.placement(id: album.id) == nil)
-    #expect(store.recordBodies[album.id] == nil)
-  }
-
   // MARK: - Variant lifecycle
 
-  @Test func variantLifecycleInProgressDoneFailedRemove() throws {
+  @Test func variantLifecycleInProgressDoneFailedRemove() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-3")
+    await store.configureAndWait(for: "dest-3")
     let p = albumPlacement()
     store.upsertPlacement(p)
 
@@ -371,11 +431,11 @@ struct CollectionExportRecordStoreTests {
   }
 
   /// `removeVariant` removes the whole record once the last variant is gone.
-  @Test func removeVariantRemovesRecordWhenLastVariantGone() throws {
+  @Test func removeVariantRemovesRecordWhenLastVariantGone() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-4")
+    await store.configureAndWait(for: "dest-4")
     let p = albumPlacement()
     store.upsertPlacement(p)
     store.markVariantInProgress(
@@ -386,11 +446,11 @@ struct CollectionExportRecordStoreTests {
 
   // MARK: - isExported under selection
 
-  @Test func isExportedUnderSelectionEdited() throws {
+  @Test func isExportedUnderSelectionEdited() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-isexp")
+    await store.configureAndWait(for: "dest-isexp")
     let p = albumPlacement()
     store.upsertPlacement(p)
     let asset = sampleAsset()  // hasAdjustments: false → requires .original
@@ -408,21 +468,21 @@ struct CollectionExportRecordStoreTests {
 
   // MARK: - Persistence: load after restart
 
-  @Test func persistenceSurvivesRestart() throws {
+  @Test func persistenceSurvivesRestart() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-restart")
+    await store.configureAndWait(for: "dest-restart")
     let p = albumPlacement()
     store.upsertPlacement(p)
     store.markVariantExported(
       assetId: "asset-1", placement: p, variant: .original,
       filename: "IMG_0001.HEIC", exportedAt: Date(timeIntervalSince1970: 12345))
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // New store instance against the same baseDirectoryURL replays the log.
     let store2 = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store2.configure(for: "dest-restart")
+    await store2.configureAndWait(for: "dest-restart")
     #expect(store2.placement(id: p.id)?.id == p.id)
     let info = store2.exportInfo(assetId: "asset-1", placement: p)
     #expect(info?.variants[.original]?.status == .done)
@@ -431,11 +491,11 @@ struct CollectionExportRecordStoreTests {
 
   // MARK: - Summary
 
-  @Test func summaryPartialAndComplete() throws {
+  @Test func summaryPartialAndComplete() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-sum")
+    await store.configureAndWait(for: "dest-sum")
     let p = albumPlacement()
     store.upsertPlacement(p)
     store.markVariantExported(
@@ -463,20 +523,20 @@ struct CollectionExportRecordStoreTests {
   /// Plan §"In-flight recovery on load": collection store mirrors the timeline pass — any
   /// `.inProgress` becomes `.failed` with the recoverable-error message. In-memory only;
   /// no eager persistence.
-  @Test func inFlightRecoveryConvertsInProgressToFailed() throws {
+  @Test func inFlightRecoveryConvertsInProgressToFailed() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-recover")
+    await store.configureAndWait(for: "dest-recover")
     let p = albumPlacement()
     store.upsertPlacement(p)
     store.markVariantInProgress(
       assetId: "asset-1", placement: p, variant: .original, filename: nil)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Fresh store reloads from log — recovery pass converts the `.inProgress` to `.failed`.
     let store2 = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store2.configure(for: "dest-recover")
+    await store2.configureAndWait(for: "dest-recover")
     let info = store2.exportInfo(assetId: "asset-1", placement: p)
     #expect(info?.variants[.original]?.status == .failed)
     #expect(info?.variants[.original]?.lastError == ExportVariantRecovery.interruptedMessage)
@@ -486,11 +546,11 @@ struct CollectionExportRecordStoreTests {
 
   /// Records under different placements are independent: writes to one placement don't
   /// touch the other, even for the same asset id.
-  @Test func recordsUnderDifferentPlacementsAreIndependent() throws {
+  @Test func recordsUnderDifferentPlacementsAreIndependent() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-iso")
+    await store.configureAndWait(for: "dest-iso")
     let fav = favoritesPlacement()
     let alb = albumPlacement()
     store.upsertPlacement(fav)
@@ -516,7 +576,7 @@ struct CollectionExportRecordStoreTests {
   /// Plan §"Recovery on Corruption": a corrupt snapshot transitions the store to `.failed`
   /// and leaves the corrupt file in place on disk so Quit-and-relaunch reproduces `.failed`.
   /// Only `resetToEmpty()` renames the file out of the way.
-  @Test func corruptSnapshotEntersFailedStateWithFilePreserved() throws {
+  @Test func corruptSnapshotEntersFailedStateWithFilePreserved() async throws {
     let (dir, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -528,7 +588,7 @@ struct CollectionExportRecordStoreTests {
     try Data("not valid json".utf8).write(to: snapshotURL)
 
     let store = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: "dest-corrupt")
+    await store.configureAndWait(for: "dest-corrupt")
     #expect(store.state == .failed)
     #expect(store.placements.isEmpty)
     #expect(store.recordBodies.isEmpty)
@@ -536,7 +596,7 @@ struct CollectionExportRecordStoreTests {
 
     // resetToEmpty renames the corrupt file out of the way and writes a fresh empty
     // snapshot at the canonical path. Both files exist after the call.
-    store.resetToEmpty()
+    await store.resetHistory()
     #expect(store.state == .ready)
     let contents = try FileManager.default.contentsOfDirectory(atPath: destDir.path)
     let brokenFiles = contents.filter { $0.contains(".broken-") }
@@ -550,17 +610,17 @@ struct CollectionExportRecordStoreTests {
 
   /// `resetToEmpty()` on a `.ready` store is a no-op (defensive — a generic alert handler
   /// can call it without first checking state).
-  @Test func resetToEmptyOnReadyStoreIsNoop() throws {
+  @Test func resetToEmptyOnReadyStoreIsNoop() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    store.configure(for: "dest-noop")
+    await store.configureAndWait(for: "dest-noop")
     #expect(store.state == .ready)
     let p = albumPlacement()
     store.upsertPlacement(p)
     #expect(store.placement(id: p.id) != nil)
 
-    store.resetToEmpty()
+    await store.resetHistory()
     // State unchanged; in-memory state preserved.
     #expect(store.state == .ready)
     #expect(store.placement(id: p.id) != nil)
@@ -568,7 +628,7 @@ struct CollectionExportRecordStoreTests {
 
   /// Quit-and-relaunch path: a `.failed` store re-loads the same corrupt file on the next
   /// configure and stays `.failed`. There is no silent reset.
-  @Test func relaunchOnCorruptSnapshotStaysFailed() throws {
+  @Test func relaunchOnCorruptSnapshotStaysFailed() async throws {
     let (dir, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -579,12 +639,12 @@ struct CollectionExportRecordStoreTests {
     try Data("garbage".utf8).write(to: snapshotURL)
 
     let store1 = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store1.configure(for: "dest-relaunch")
+    await store1.configureAndWait(for: "dest-relaunch")
     #expect(store1.state == .failed)
 
     // "Relaunch" by constructing a fresh store against the same dir.
     let store2 = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store2.configure(for: "dest-relaunch")
+    await store2.configureAndWait(for: "dest-relaunch")
     #expect(store2.state == .failed)
     #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
   }
@@ -597,7 +657,7 @@ struct CollectionExportRecordStoreTests {
   /// preserves a later `upsertRecord` line would replay an orphan record under a placement
   /// id with no metadata — and the next compaction would freeze the orphan into the
   /// snapshot.
-  @Test func replaySkipsRecordsForUnknownPlacements() throws {
+  @Test func replaySkipsRecordsForUnknownPlacements() async throws {
     let (dir, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -624,7 +684,7 @@ struct CollectionExportRecordStoreTests {
     try logBytes.write(to: logURL)
 
     let store = CollectionExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: "dest-orphan")
+    await store.configureAndWait(for: "dest-orphan")
 
     // The orphan record was skipped — no placement, no record.
     #expect(store.placement(id: "collections:album:missing") == nil)
@@ -702,29 +762,26 @@ struct CollectionExportRecordStoreTests {
   /// Shared-album placements pass `accept(_:)` and survive snapshot persistence.
   /// Pins the gate against a regression that re-narrowed it to user-album +
   /// favorites (which `.timeline` was originally the sole exclusion against).
-  @Test func sharedAlbumPlacementSurvivesAcceptAndPersistence() throws {
+  @Test func sharedAlbumPlacementSurvivesAcceptAndPersistence() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-shared")
+    await store.configureAndWait(for: "dest-shared")
     let placement = sharedAlbumPlacement()
     store.upsertPlacement(placement)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.placement(id: placement.id)?.kind == .sharedAlbum)
     #expect(store.placements(matching: .sharedAlbum).count == 1)
   }
 
-  /// `recordCount(in:)` discriminates user albums from shared albums even when
-  /// the underlying `collectionLocalIdentifier` is identical. The matching is
-  /// `(kind, collectionLocalIdentifier)` — `.album(id:)` must not pick up a
-  /// `.sharedAlbum` placement and vice versa. Same id across both kinds is
-  /// unlikely in production (PhotoKit hands out distinct identifiers per
-  /// collection class), but the invariant is what guards us against a future
-  /// kind-collapse refactor.
-  @Test func recordCountDiscriminatesUserAndSharedByKindNotJustId() throws {
+  /// A user album and a shared album keep separate records even when the underlying
+  /// `collectionLocalIdentifier` is identical. Same id across both kinds is unlikely in
+  /// production (PhotoKit hands out distinct identifiers per collection class), but the
+  /// invariant is what guards us against a future kind-collapse refactor.
+  @Test func userAndSharedAlbumsWithOneIdentifierKeepSeparateRecords() async throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    store.configure(for: "dest-count")
+    await store.configureAndWait(for: "dest-count")
 
     let sharedId = "shared-1"
     let userAlbum = albumPlacement(
@@ -740,10 +797,9 @@ struct CollectionExportRecordStoreTests {
       assetId: "asset-shared", placement: sharedAlbum, variant: .original,
       filename: "asset-shared.jpg",
       exportedAt: Date(timeIntervalSince1970: 1_700_000_011))
-    store.flushForTesting()
+    store.drainSynchronously()
 
-    #expect(store.recordCount(in: .album(collectionLocalId: sharedId)) == 1)
-    #expect(store.recordCount(in: .sharedAlbum(collectionLocalId: sharedId)) == 1)
-    #expect(store.recordCount(in: .any) == 2)
+    #expect(store.summary(for: userAlbum).totalCount == 1)
+    #expect(store.summary(for: sharedAlbum).totalCount == 1)
   }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Observation
 import SwiftUI
 import Testing
 
@@ -9,12 +10,26 @@ import Testing
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct ManualExportFeedbackViewTests {
+    @Observable
+    final class RenderTick { var value = 0 }
+
+    private struct RenderBarrier: View {
+      let tick: RenderTick
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("progress-barrier:\(tick.value)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
     @MainActor
     private final class LoginService: LoginItemService {
-      var status: LoginItemController.Status { .notRegistered }
+      var status: LoginItemController.Status = .notRegistered
       func register() throws {}
       func unregister() throws {}
-      func openSystemLoginItems() {}
+      var opened = 0
+      func openSystemLoginItems() { opened += 1 }
     }
 
     @MainActor
@@ -22,53 +37,39 @@ import Testing
       let root = TestScratch.directory("ManualExportFeedbackView")
       let suite = TestScratch.suiteName("ManualFeedbackView")
       let defaults: UserDefaults
-      let timeline: ExportRecordStore
-      let collections: CollectionExportRecordStore
-      let manager: ExportManager
-      let destination = FakeExportDestination()
-      let destinationManager: ExportDestinationManager
-      let autoSync = AutoSyncManager()
-      let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
-      let lifecycle = AppLifecycleCoordinator(
-        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-        configureRecordStores: { _ in .success })
-      let scopeStore: UserDefaultsAutoExportScopeStore
-      let loginItem = LoginItemController(service: LoginService())
-      let safetyMonitor: DestinationSafetyMonitor
-      let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+      let core: AppCore
+      var timeline: ExportRecordStore { core.exportRecordStore }
+      var collections: CollectionExportRecordStore { core.collectionExportRecordStore }
+      var manager: ExportManager { core.exportManager }
+      let loginService = LoginService()
+      var loginItem: LoginItemController { core.loginItemController }
       let counter = BodyInvalidationCounter()
+      let tick = RenderTick()
       var window: NSWindow?
+      var hosted: NSView?
       var settingsWindow: NSWindow?
       var selectedAtOpen: String?
 
-      init() {
+      init() async {
         defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
-        timeline = ExportRecordStore(baseDirectoryURL: root)
-        collections = CollectionExportRecordStore(baseDirectoryURL: root)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
-        manager = ExportManager(
-          photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
-          exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-          userDefaults: defaults)
-        destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
-        destinationManager.configureForScreenshotMode()
-        scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: defaults)
-        safetyMonitor = DestinationSafetyMonitor(
-          identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
-          exportRecordStore: timeline, collectionExportRecordStore: collections,
-          confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { false })
-        photoChangeAdapter = PhotoLibraryPersistentChangeAdapter(
-          tokenStore: GlobalPhotoChangeTokenStore(
-            fileURL: root.appendingPathComponent("token.data")),
-          clock: TestClock())
+        var composition = AppCoreTestHarness.makeTestComposition(label: "ManualFeedbackCore")
+        composition.defaults = defaults
+        composition.appStateRoot = root
+        composition.loginItemService = loginService
+        core = AppCoreTestHarness.makeCore(composition)
+        core.exportDestinationManager.configureForScreenshotMode()
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager.progressState.totalJobsEnqueued = 3
         manager.progressState.totalJobsCompleted = 3
       }
 
-      func show(successDelay: @escaping @Sendable () async throws -> Void = {}) {
+      func show(
+        initialSize: CGSize = CGSize(width: 800, height: 120),
+        progress: ExportProgressState? = nil,
+        successDelay: @escaping @Sendable () async throws -> Void = {}
+      ) {
         let hosted = NSHostingView(
           rootView: ExportProgressBar(
             successDelay: successDelay,
@@ -77,138 +78,285 @@ import Testing
               selectedAtOpen = defaults.string(forKey: SettingsTab.storageKey)
             }
           )
-          .environmentObject(manager).environmentObject(manager.progressState)
+          .environment(manager).environment(progress ?? manager.progressState)
+          .environment(\.accessibilityEnabled, true)
+          .overlay { RenderBarrier(tick: tick, counter: counter) }
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
-        let owned = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 800, height: 120),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        owned.isReleasedWhenClosed = false
+        let owned = HostedViewHarness.makeWindow(
+          contentRect: NSRect(origin: CGPoint(x: -10000, y: -10000), size: initialSize),
+          styleMask: [.borderless])
+
         owned.contentView = hosted
+        self.hosted = hosted
         window = owned
         owned.orderFront(nil)
+      }
+
+      func renderBarrier() async throws {
+        tick.value += 1
+        let key = "progress-barrier:\(tick.value)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
+        window?.contentView?.layoutSubtreeIfNeeded()
       }
 
       func showSettings() {
         let hosted = NSHostingView(
           rootView: SettingsRootView()
-            .environmentObject(library)
-            .environmentObject(manager).environmentObject(autoSync).environmentObject(
-              destinationManager
-            )
-            .environmentObject(timeline).environmentObject(collections)
-            .environmentObject(lifecycle).environmentObject(scopeStore).environmentObject(loginItem)
-            .environmentObject(safetyMonitor).environmentObject(photoChangeAdapter)
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
-            .onAppear { [counter] in counter.record("settings-root-visible") })
-        let owned = NSWindow(
+            .photoExportEnvironment(core)
+            .environment(\.accessibilityEnabled, true))
+        let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 620),
-          styleMask: [.borderless], backing: .buffered, defer: false)
-        owned.isReleasedWhenClosed = false
+          styleMask: [.borderless])
+
         owned.contentView = hosted
         settingsWindow = owned
         owned.orderFront(nil)
       }
 
       func close() {
-        photoChangeAdapter.stop()
+        core.autoSyncPhotoChangeAdapter.stop()
         window?.contentView = nil
         window?.close()
+        hosted = nil
         settingsWindow?.contentView = nil
         settingsWindow?.close()
         counter.reset()
         manager.cancelAndClear()
-        timeline.flushForTesting()
-        collections.flushForTesting()
-        destination.cleanup()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
+    private func contains(_ text: String, in f: Fixture) -> Bool {
+      f.window.map { NativeViewAccess.containsText(text, in: $0) } == true
     }
 
     private func reached(_ gate: AsyncCheckpoint) async -> Bool {
       await gate.waitForEnter(count: 1)
     }
 
+    private func settledContentSize(in f: Fixture) async throws -> CGSize {
+      let window = try #require(f.window)
+      let hosted = try #require(f.hosted)
+      var previous = CGSize.zero
+      var stablePasses = 0
+      let settled = await observe {
+        hosted.layoutSubtreeIfNeeded()
+        let size = window.contentLayoutRect.size
+        guard size.width > 0, size.height > 0 else { return false }
+        stablePasses = size == previous ? stablePasses + 1 : 0
+        previous = size
+        return stablePasses >= 3
+      }
+      try #require(settled, "The fitted summary window did not settle")
+      #expect(window.contentLayoutRect.height >= hosted.fittingSize.height)
+      return window.contentLayoutRect.size
+    }
+
+    @Test
+    func progressContentWaitsForClockTicksAndShowsLatestValues() async throws {
+      let f = await Fixture()
+      defer { f.close() }
+      let clock = TestClock()
+      let progress = ExportProgressState(clock: clock)
+      progress.totalJobsEnqueued = 4
+      progress.currentAssetFilename = "first.JPG"
+      clock.advance(by: 0.2)
+      f.show(progress: progress)
+      try #require(
+        await observe(in: f.window) {
+          contains("0/4 assets", in: f)
+            && contains("Currently exporting first.JPG", in: f)
+        })
+      try await f.renderBarrier()
+      let bodies = f.counter.count(for: "export-progress-body")
+      progress.totalJobsCompleted = 1
+      progress.currentAssetFilename = "intermediate.JPG"
+      progress.totalJobsCompleted = 2
+      progress.totalJobsEnqueued = 5
+      progress.currentAssetFilename = "latest.JPG"
+      progress.renderActivity = .rendering
+      try await f.renderBarrier()
+      #expect(progress.totalJobsCompleted == 2)
+      #expect(progress.totalJobsEnqueued == 5)
+      #expect(f.counter.count(for: "export-progress-body") - bodies == 0)
+      #expect(contains("0/4 assets", in: f))
+      clock.advance(by: 0.2)
+      try #require(
+        await observe(in: f.window) {
+          contains("2/5 assets", in: f)
+            && contains("Rendering edited latest.JPG", in: f)
+        })
+      #expect(f.counter.count(for: "export-progress-body") > bodies)
+    }
+
+    @Test(arguments: [120.0, 600.0])
+    func multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight: Double) async throws {
+      let f = await Fixture()
+      defer { f.close() }
+      let path =
+        "/Volumes/Family Photo Backup/Collections/Albums/"
+        + "Summer trips with family and friends/Coastal walks and mountain holidays/"
+        + "Original photos and edited copies/2026/09/IMG_20260914_123456_original.HEIC"
+      let detail =
+        "The export could not finish writing its history for \(path). "
+        + "The backup drive disconnected before the history could be saved. "
+        + "Reconnect the drive, keep Photo Export open to preserve unsaved progress, "
+        + "and retry saving export history before starting another export."
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: detail)
+      f.show(initialSize: CGSize(width: 480, height: initialHeight))
+      let rendered = await observe {
+        contains("2 exported · 1 failed", in: f)
+      }
+      try #require(rendered)
+      let narrow = try await settledContentSize(in: f)
+      #expect(narrow.width == 480)
+
+      let window = try #require(f.window)
+      window.setContentSize(CGSize(width: 800, height: narrow.height))
+      let wide = try await settledContentSize(in: f)
+      #expect(wide.width == 800)
+      // On measured macOS 15.8.2, this root hosting view takes its window minimum
+      // from the content's zero-width height. Width-dependent wrapping is checked on
+      // macOS 26+, while all replacement/layout/action assertions still run on 15.
+      if #available(macOS 26, *) {
+        #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
+      }
+
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: nil)
+      let shortened = await observe { window.contentLayoutRect.height < wide.height }
+      try #require(shortened)
+      let short = try await settledContentSize(in: f)
+
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: detail)
+      let expanded = await observe { window.contentLayoutRect.height > short.height }
+      try #require(expanded)
+      let replaced = try await settledContentSize(in: f)
+      #expect(replaced.width == 800)
+      #expect(replaced.height == wide.height)
+      let issues = try #require(f.window.flatMap { NativeViewAccess.button("View Issues", in: $0) })
+      #expect(issues.isAccessibilityEnabled?() == true)
+      #expect(issues.accessibilityPerformPress?() == true)
+      #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
+      let dismiss = try #require(f.window.flatMap { NativeViewAccess.button("Dismiss", in: $0) })
+      #expect(dismiss.isAccessibilityEnabled?() == true)
+      #expect(dismiss.accessibilityPerformPress?() == true)
+      #expect(f.manager.progressState.manualSummary?.isDismissed == true)
+      let hidden = await observe {
+        f.window.map { NativeViewAccess.button("Dismiss", in: $0) == nil } == true
+      }
+      #expect(hidden)
+    }
+
     @Test(arguments: [false, true])
     func failureShowsOutcomeAndSelectsIssuesBeforeOpeningSettings(settingsAlreadyOpen: Bool)
       async throws
     {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
       f.show()
-      let rendered = await observe { f.counter.renderedText["progress-message"] != nil }
+      let rendered = await observe { contains("2 exported · 1 failed", in: f) }
       try #require(rendered)
-      #expect(f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"])
-      let issues = try #require(f.counter.renderedActions["progress-view-issues"])
+      #expect(contains("2 exported · 1 failed", in: f))
+      let issues = try #require(f.window.flatMap { NativeViewAccess.button("View Issues", in: $0) })
       if settingsAlreadyOpen {
         f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
         f.showSettings()
-        let mounted = await observe { f.counter.count(for: "settings-root-visible") > 0 }
+        let mounted = await observe {
+          f.settingsWindow.map { NativeViewAccess.selectedTab("Auto Export", in: $0) } == true
+        }
         try #require(mounted)
       }
-      issues()
+      #expect(issues.accessibilityPerformPress?() == true)
       #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
       if !settingsAlreadyOpen { f.showSettings() }
       let issuesShown = await observe {
-        f.counter.renderedText["settings-visible-tab"] == ["Export Issues"]
+        f.settingsWindow.map { NativeViewAccess.selectedTab("Export Issues", in: $0) } == true
       }
-      #expect(issuesShown, "The shared Settings binding must show the actual issues tab")
-      let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      dismiss()
-      f.selectedAtOpen = nil
-      issues()
-      #expect(f.selectedAtOpen == nil, "A retained action must not reopen a dismissed summary")
+      #expect(
+        issuesShown,
+        "The shared Settings binding must show the actual issues tab. Native tabs: \(f.settingsWindow.map { NativeViewAccess.tabDescriptions(in: $0) } ?? "window missing")"
+      )
+      let dismiss = try #require(f.window.flatMap { NativeViewAccess.button("Dismiss", in: $0) })
+      #expect(dismiss.accessibilityPerformPress?() == true)
+
     }
-    @Test func dismissRetiresOldCountersAndCannotDismissReplacement() async throws {
-      let f = Fixture()
+    @Test func settingsSharedEnvironmentSupportsAllTabs() async throws {
+      let f = await Fixture()
       defer { f.close() }
-      f.manager.progressState.manualSummary = ManualExportSummary(
-        completedCount: 3, failedCount: 1, failureMessage: nil)
-      f.show()
-      let ready = await observe { f.counter.renderedActions["progress-dismiss"] != nil }
-      try #require(ready)
-      let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      let replacement = ManualExportSummary(completedCount: 4, failedCount: 2, failureMessage: nil)
-      f.manager.progressState.manualSummary = replacement
-      oldDismiss()
-      #expect(f.manager.progressState.manualSummary?.isDismissed == false)
-      let changed = await observe {
-        f.counter.renderedText["progress-message"] == ["2 exported · 2 failed"]
+      f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
+      f.showSettings()
+      for title in ["Auto Export", "Export Issues", "Advanced"] {
+        let tab: SettingsTab =
+          title == "Auto Export"
+          ? .autoExport : title == "Export Issues" ? .exportIssues : .advanced
+        f.defaults.set(tab.rawValue, forKey: SettingsTab.storageKey)
+        try #require(
+          await observe(in: f.settingsWindow) {
+            f.settingsWindow.map { NativeViewAccess.selectedTab(title, in: $0) } == true
+          },
+          "Expected \(title). Native tabs: \(f.settingsWindow.map { NativeViewAccess.tabDescriptions(in: $0) } ?? "window missing")"
+        )
       }
-      try #require(changed)
-      let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
-      dismiss()
-      let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
-      #expect(hidden)
-      #expect(f.counter.renderedText["progress-message"] == [])
-      #expect(f.manager.progressState.totalJobsEnqueued == 3)
-      #expect(f.manager.progressState.totalJobsCompleted == 3)
     }
 
-    @Test func successExpiryRetiresCounters() async throws {
-      let f = Fixture()
+    /// The real conditional button follows the observed controller, then opens Settings.
+    /// Full footer wording is pinned by LoginItemControllerTests.
+    @Test func autoExportTabFollowsLoginItemStatus() async throws {
+      let f = await Fixture()
+      defer { f.close() }
+      let window = HostedViewHarness.makeWindow(
+        contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 220),
+        styleMask: [.borderless])
+      window.contentView = NSHostingView(
+        rootView: VStack { LoginItemSettingsControls() }
+          .environment(f.loginItem).environment(\.accessibilityEnabled, true))
+      f.settingsWindow = window
+      window.orderFront(nil)
+      try #require(
+        await observe(in: window) {
+          NativeViewAccess.elements(in: window).contains { $0.accessibilityRole?() == .checkBox }
+        })
+      #expect(NativeViewAccess.element("login-item-open-settings", in: window) == nil)
+      #expect(f.loginService.opened == 0)
+      f.loginService.status = .requiresApproval
+      f.loginItem.refresh()
+      try #require(
+        await observe(in: window) {
+          NativeViewAccess.element("login-item-open-settings", in: window) != nil
+        })
+      let button = try #require(NativeViewAccess.element("login-item-open-settings", in: window))
+      #expect(button.isAccessibilityEnabled?() == true)
+      let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+      _ = press()
+      #expect(f.loginService.opened == 1)
+    }
+
+    @Test func successExpiryHidesCompletedSummary() async throws {
+      let f = await Fixture()
       let expiry = AsyncCheckpoint()
       try await withCleanup {
         f.manager.progressState.manualSummary = ManualExportSummary(
           completedCount: 3, failedCount: 0, failureMessage: nil)
         f.show(successDelay: { await expiry.enter() })
         let shown = await observe {
-          f.counter.renderedText["progress-message"] == ["Export complete"]
+          contains("Export complete", in: f)
         }
         try #require(shown)
         try #require(await reached(expiry))
         await expiry.releaseAll()
-        let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
+        let hidden = await observe {
+          f.window.map { NativeViewAccess.button("Dismiss", in: $0) == nil } == true
+        }
         #expect(hidden)
-        #expect(f.counter.renderedText["progress-message"] == [])
+        #expect(!contains("3/3 assets", in: f))
         #expect(f.manager.progressState.totalJobsCompleted == 3)
       } cleanup: {
         await expiry.releaseAll()
@@ -217,7 +365,7 @@ import Testing
     }
 
     @Test func oldSuccessExpiryCannotDismissNewFailure() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let expiry = AsyncCheckpoint()
       try await withCleanup {
         let success = ManualExportSummary(completedCount: 3, failedCount: 0, failureMessage: nil)
@@ -234,7 +382,7 @@ import Testing
         #expect(f.manager.progressState.manualSummary?.id == failure.id)
         #expect(f.manager.progressState.manualSummary?.isDismissed == false)
         let shown = await observe {
-          f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
+          contains("2 exported · 1 failed", in: f)
         }
         #expect(shown)
       } cleanup: {

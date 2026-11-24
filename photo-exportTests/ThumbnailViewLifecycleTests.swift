@@ -36,7 +36,7 @@ struct ThumbnailViewLifecycleTests {
           isSelected: false, isExported: true
         )
         .frame(width: 100, height: 100)
-        .environmentObject(manager))
+        .environment(manager))
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 100, height: 100),
         styleMask: [.borderless], backing: .buffered, defer: false)
@@ -54,33 +54,14 @@ struct ThumbnailViewLifecycleTests {
     }
 
     func shows(_ color: NSColor) -> Bool {
-      guard let view = window.contentView else { return false }
-      view.layoutSubtreeIfNeeded()
-      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-      view.cacheDisplay(in: view.bounds, to: bitmap)
-      guard
-        let actual = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
-          .usingColorSpace(.sRGB),
-        let expected = color.usingColorSpace(.sRGB)
-      else { return false }
-      lastColorDescription = "actual \(actual), expected \(expected)"
-      // AppKit tone-maps HDR snapshots even for solid sRGB fixtures. Compare
-      // their clearly distinct red/blue channels rather than exact RGB values.
-      if expected.redComponent > expected.blueComponent {
-        return actual.redComponent > actual.blueComponent + 0.4
-      }
-      return actual.blueComponent > actual.redComponent + 0.4
+      let actual = HostedViewHarness.centerColor(of: window)
+      lastColorDescription = "actual \(String(describing: actual))"
+      return HostedViewHarness.sample(actual, shows: color)
     }
   }
 
   /// This is only a bound on SwiftUI render scheduling, not a delay used to
   /// arrange a race. Provider checkpoints control in-flight completion order.
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func libraryInvalidationRefreshesMountedSameIDThumbnail(knownChangedID: Bool) async throws {
     let fixture = Fixture()
@@ -152,9 +133,12 @@ struct ThumbnailViewLifecycleTests {
         await oldObserver.value == nil,
         "An obsolete decode must not return image bytes to its waiters")
       #expect(fixture.shows(.blue))
+      let cached = fixture.manager.cachedDecodedThumbnail(
+        for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery)
+      #expect(oldDelivery == .fast ? cached == nil : cached === blue)
       #expect(
         fixture.manager.cachedDecodedThumbnail(
-          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery) === blue)
+          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .highQuality) === blue)
     } cleanup: {
       fixture.close()
       await oldDecode.releaseAll()
@@ -237,9 +221,9 @@ struct ThumbnailViewLifecycleTests {
     fixture.manager.invalidateCache(changedThumbnailAssetIDs: ["asset-B"])
     #expect(fixture.manager.thumbnailContentRevision(for: "asset-A") == oldRevision)
     for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
-      #expect(
-        fixture.manager.cachedDecodedThumbnail(
-          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: delivery) === red)
+      let cached = fixture.manager.cachedDecodedThumbnail(
+        for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: delivery)
+      #expect(delivery == .fast ? cached == nil : cached === red)
       let warm = await fixture.manager.decodedThumbnail(
         for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: delivery)
       #expect(warm === red)

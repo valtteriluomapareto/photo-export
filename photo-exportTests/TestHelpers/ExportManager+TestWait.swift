@@ -38,7 +38,11 @@ extension ExportManager {
     while clock.now < deadline {
       let preparations = currentPreparationTasks
       if preparations.isEmpty, pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
-        return
+        await waitForRecordMaintenance()
+        if currentPreparationTasks.isEmpty, pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
+          return
+        }
+        continue
       }
       if Task.isCancelled { break }
       if !preparations.isEmpty {
@@ -62,6 +66,19 @@ extension ExportManager {
     }
   }
 
+  /// A logically drained queue can still own its terminal physical history checkpoint.
+  private func waitForRecordMaintenance() async {
+    while !Task.isCancelled {
+      try? await exportRecordStore.mutationAdmission.waitUntilOpen()
+      try? await collectionExportRecordStore.mutationAdmission.waitUntilOpen()
+      if !exportRecordStore.mutationAdmission.isClosed,
+        !collectionExportRecordStore.mutationAdmission.isClosed
+      {
+        return
+      }
+    }
+  }
+
   /// Blocks until the current import (if any) has finished. `importTask` is
   /// assigned synchronously inside `startImport()` (after `isImporting = true`)
   /// and the import body sets `isImporting = false` before returning, so once
@@ -71,5 +88,6 @@ extension ExportManager {
       Issue.record(
         "Cancelled while waiting for the import to complete", sourceLocation: sourceLocation)
     }
+    await waitForRecordMaintenance()
   }
 }

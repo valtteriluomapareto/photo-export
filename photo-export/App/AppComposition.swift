@@ -9,7 +9,7 @@ struct AppComposition {
   /// Preferences for every manager and store, and each scene's default `@AppStorage` suite.
   var defaults: UserDefaults
   /// `<Application Support>/<bundle id>/` in the shipping app. The record stores, AutoSync's
-  /// stores, the current-run journal, destination-safety confirmations and the photo-change
+  /// stores, destination-safety confirmations and the photo-change
   /// token all live under it.
   var appStateRoot: URL
   /// Replaces PhotoKit behind `PhotoLibraryManager` when set; `nil` uses PhotoKit.
@@ -18,6 +18,8 @@ struct AppComposition {
   /// the PhotoKit-backed `PhotoLibraryPersistentChangeAdapter`.
   var persistentChangeSource: (any StartablePhotoLibraryChangeProviding)?
   var assetResourceWriter: any AssetResourceWriter
+  /// Export-only metadata reader; UI queries remain on the library service.
+  var photoKitReader: any PhotoKitReading
   /// What `ExportManager` calls to drop cached PHAssets during bulk exports, given the
   /// library manager the core built.
   var phAssetCacheControl: @MainActor (PhotoLibraryManager) -> any PHAssetCacheControlling
@@ -47,6 +49,7 @@ struct AppComposition {
       photoLibraryServiceOverride: nil,
       persistentChangeSource: nil,
       assetResourceWriter: ProductionAssetResourceWriter(),
+      photoKitReader: ProductionPhotoKitReader(),
       phAssetCacheControl: { $0 },
       fileSystem: FileIOService(),
       clock: SystemAutoSyncClock(),
@@ -62,7 +65,9 @@ struct AppComposition {
   /// would raise the Photos permission prompt.
   static func screenshot(windowSize: CGSize?) -> AppComposition {
     var composition = production()
-    composition.photoLibraryServiceOverride = ScreenshotPhotoLibraryService()
+    let service = ScreenshotPhotoLibraryService()
+    composition.photoLibraryServiceOverride = service
+    composition.photoKitReader = PhotoLibraryServiceReader(service: service)
     composition.wiresAutoSync = false
     composition.isScreenshotMode = true
     composition.screenshotWindowSize = windowSize
@@ -117,7 +122,7 @@ struct AppComposition {
     appStateRoot.appendingPathComponent("AutoSync", isDirectory: true)
   }
 
-  /// Parent of the per-destination AutoSync stores, the current-run journal and the
+  /// Parent of the per-destination AutoSync stores and the
   /// destination-safety confirmations.
   var autoSyncDestinationsRoot: URL {
     autoSyncRoot.appendingPathComponent("destinations", isDirectory: true)

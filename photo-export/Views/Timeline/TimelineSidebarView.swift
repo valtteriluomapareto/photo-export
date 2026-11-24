@@ -12,7 +12,7 @@ struct TimelineSidebarView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   /// Multi-select state bound from `LibraryRootView`. The binding filter below
   /// strips non-timeline values defensively so the sidebar can never persist a
@@ -22,23 +22,19 @@ struct TimelineSidebarView: View {
   @State private var years: [Int] = []
   @State private var expandedYears: Set<Int> = []
   @State private var assetCountsByYear: [Int: Int] = [:]
-  @StateObject private var counts: TimelineSidebarCounts
+  @State private var counts: TimelineSidebarCounts
 
   init(
     selectionSet: Binding<Set<LibrarySelection>>, photoLibraryService: any PhotoLibraryService
   ) {
     self._selectionSet = selectionSet
-    _counts = StateObject(
-      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
+    _counts = State(wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
   var body: some View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("timeline-sidebar-body")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(
-        years.map { "\($0):\(assetCountsByYear[$0] ?? 0)" }, for: "timeline-sidebar-years")
     #endif
     List(selection: timelineSelection) {
       Section("Photos by Year") {
@@ -80,10 +76,10 @@ struct TimelineSidebarView: View {
       }
     }
     .navigationTitle("Photo Export")
-    .onAppear { handleAppear() }
-    .onChange(of: photoLibraryManager.isAuthorized) { _, new in
-      if new {
-        handleAppear()
+    .task(id: "\(photoLibraryManager.isAuthorized)|\(photoLibraryManager.libraryRefresh.revision)")
+    {
+      if photoLibraryManager.isAuthorized {
+        await handleAppear()
       } else {
         years = []
         expandedYears.removeAll()
@@ -91,16 +87,6 @@ struct TimelineSidebarView: View {
         counts.reset()
       }
     }
-    // Self-heal after Photos.app mutations. `libraryRevision` bumps in
-    // `PhotoLibraryManager.invalidateCache()` after every `photoLibraryDidChange`;
-    // the underlying `CollectionCountCache` is invalidated at the same time, so
-    // re-running `handleAppear` triggers fresh fetches that bypass stale cache
-    // entries. Without this, a user adding/removing photos in Photos.app while
-    // the sidebar is open would see stale badges until the next app launch.
-    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
-      handleAppear()
-    }
-    .measureBodyInvalidations("TimelineSidebarView")
   }
 
   // MARK: - Selection bridging
@@ -128,9 +114,18 @@ struct TimelineSidebarView: View {
 
   // MARK: - Helpers
 
-  private func handleAppear() {
+  private func handleAppear() async {
     guard photoLibraryManager.isAuthorized else { return }
-    loadYears()
+    let source = photoLibraryManager.libraryRevision
+    await photoLibraryManager.libraryRefresh.loadYears()
+    guard source == photoLibraryManager.libraryRevision, !Task.isCancelled,
+      photoLibraryManager.isAuthorized
+    else { return }
+    let inventory = photoLibraryManager.libraryRefresh.years
+    let freshYears = inventory.map(\.year)
+    let freshCounts = Dictionary(uniqueKeysWithValues: inventory.map { ($0.year, $0.count) })
+    if years != freshYears { years = freshYears }
+    if assetCountsByYear != freshCounts { assetCountsByYear = freshCounts }
     var preferredYear: Int?
     if let monthSel = selectionSet.first(where: {
       if case .timelineMonth = $0 { return true } else { return false }
@@ -139,7 +134,7 @@ struct TimelineSidebarView: View {
       preferredYear = year
     }
     // Fan out per-month total + adjusted count fetches for every year. Lands
-    // progressively via `@Published` updates on `counts` — collapsed years'
+    // progressively via observed updates on `counts` — collapsed years'
     // badges populate as their data arrives. The current year (if selected)
     // goes first so its data is ready by the time the user might expand it.
     let yearsCopy = years
@@ -152,14 +147,6 @@ struct TimelineSidebarView: View {
     #if DEBUG
       bodyCounter?.recordTask(task)
     #endif
-  }
-
-  private func loadYears() {
-    let yearCounts = (try? photoLibraryManager.availableYearsWithCounts()) ?? []
-    years = yearCounts.map(\.year)
-    for (year, count) in yearCounts {
-      assetCountsByYear[year] = count
-    }
   }
 
   private func monthTotals(for year: Int) -> [Int: Int] {

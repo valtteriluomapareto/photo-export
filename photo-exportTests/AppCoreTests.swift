@@ -12,33 +12,13 @@ import Testing
 /// are only inspected, never built into a core.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct AppCoreTests {
-  private final class FakeLoginItemService: LoginItemService {
-    var status: LoginItemController.Status = .notRegistered
-    func register() throws {}
-    func unregister() throws {}
-    func openSystemLoginItems() {}
-  }
-
   private func makeTestComposition(label: String) -> AppComposition {
-    AppComposition(
-      defaults: TestScratch.defaults(label),
-      appStateRoot: TestScratch.directory(label),
-      photoLibraryServiceOverride: FakePhotoLibraryService(),
-      persistentChangeSource: FakePersistentChangeSource(),
-      assetResourceWriter: FakeAssetResourceWriter(),
-      phAssetCacheControl: { $0 },
-      fileSystem: FakeFileSystem(),
-      clock: TestClock(),
-      loginItemService: FakeLoginItemService(),
-      wiresAutoSync: false,
-      isScreenshotMode: false,
-      screenshotWindowSize: nil,
-      screenshotSurfaceKey: nil)
+    AppCoreTestHarness.makeTestComposition(label: label)
   }
 
-  /// The one place these tests build a core. Call it inside `withAppDomainUntouched`.
+  /// Builds the shared scratch composition inside the existing domain guard.
   private func makeCore(_ composition: AppComposition) -> AppCore {
-    AppCore(composition: composition)
+    AppCoreTestHarness.makeCore(composition)
   }
 
   private func makeDestinationFolder(_ label: String) throws -> URL {
@@ -72,6 +52,24 @@ import Testing
     try await body()
   }
 
+  @Test func libraryThumbnailsUseTheComposedReader() async throws {
+    var composition = makeTestComposition(label: "app-core-thumbnail-reader")
+    defer { try? FileManager.default.removeItem(at: composition.appStateRoot) }
+    let asset = TestAssetFactory.makeAsset(id: "composed-thumbnail")
+    let backend = FakeThumbnailBackend(assets: [asset])
+    let service = try #require(composition.photoLibraryServiceOverride as? FakePhotoLibraryService)
+    service.thumbnailReaderOverride = ProductionThumbnailReader(backend: backend)
+    let core = makeCore(composition)
+    let handle = try #require(
+      await core.photoLibraryManager.resolveThumbnailAssets(ids: [asset.id]).first)
+    #expect(
+      await core.photoLibraryManager.decodedThumbnail(
+        for: handle, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+        != nil)
+    #expect(backend.resolveCalls.value == [[asset.id]])
+    #expect(backend.calls.value.contains { $0.action == "request" && !$0.onMain })
+  }
+
   // MARK: - Startup
 
   @Test func startAttachesEachServiceOnceInLaunchOrder() async throws {
@@ -82,7 +80,7 @@ import Testing
       composition.wiresAutoSync = true
       let core = makeCore(composition)
       let destination = core.exportDestinationManager
-      destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-first"))
+      await destination.persistSelectionAndWait(try makeDestinationFolder("app-core-first"))
       let firstId = try #require(destination.destinationId)
 
       struct Probe: Equatable {
@@ -96,7 +94,7 @@ import Testing
         probes.append(
           Probe(
             event: event,
-            storesConfigured: core.lifecycleCoordinator.lastConfiguredDestinationId == firstId,
+            storesConfigured: core.lifecycleCoordinator.currentDestination.id == firstId,
             safetyAttached: core.destinationSafetyMonitor.isAttached,
             launchInProgress: AppDiagnostics.isLaunchInProgress))
       }
@@ -109,7 +107,7 @@ import Testing
       }
 
       AppDiagnostics.beginLaunch()
-      #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == nil)
+      #expect(core.lifecycleCoordinator.currentDestination.id == nil)
       #expect(!core.destinationSafetyMonitor.isAttached)
 
       core.start()
@@ -137,11 +135,10 @@ import Testing
       #expect(source.startCount == 1)
 
       // The coordinator stays subscribed: a new destination reaches the record stores.
-      destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-second"))
+      await destination.persistSelectionAndWait(try makeDestinationFolder("app-core-second"))
       let secondId = try #require(destination.destinationId)
       #expect(secondId != firstId)
-      #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
-      #expect(!PhotoExportApp.wasComposed, "an AppCore alone must not compose the app")
+      #expect(core.lifecycleCoordinator.currentDestination.id == secondId)
     }
   }
 
@@ -179,6 +176,13 @@ import Testing
     var isScreenshotMode: Bool?
     var surfaceKey: String?
     var storedValue: String?
+    var whatsNewState: WhatsNewState?
+    var progressState: ExportProgressState?
+    var exportManager: ExportManager?
+    var photoLibraryManager: PhotoLibraryManager?
+    var loginItemController: LoginItemController?
+    var exportRecordStore: ExportRecordStore?
+    var collectionExportRecordStore: CollectionExportRecordStore?
   }
 
   private struct EnvironmentProbe: View {
@@ -187,6 +191,16 @@ import Testing
     @Environment(\.isScreenshotMode) private var isScreenshotMode
     @Environment(\.screenshotSurfaceKey) private var surfaceKey
     @AppStorage(Self.storageKey) private var storedValue = "default"
+    // Optional, so a missing injection reads as nil and fails the test; the app's views read
+    // these non-optionally, where a missing injection compiles but traps at runtime.
+    @Environment(WhatsNewState.self) private var whatsNewState: WhatsNewState?
+    @Environment(ExportProgressState.self) private var progressState: ExportProgressState?
+    @Environment(ExportManager.self) private var exportManager: ExportManager?
+    @Environment(PhotoLibraryManager.self) private var photoLibraryManager: PhotoLibraryManager?
+    @Environment(LoginItemController.self) private var loginItemController: LoginItemController?
+    @Environment(ExportRecordStore.self) private var exportRecordStore: ExportRecordStore?
+    @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore:
+      CollectionExportRecordStore?
 
     var body: some View {
       // swiftlint:disable:next redundant_discardable_let
@@ -198,6 +212,13 @@ import Testing
       reading.isScreenshotMode = isScreenshotMode
       reading.surfaceKey = surfaceKey
       reading.storedValue = storedValue
+      reading.whatsNewState = whatsNewState
+      reading.progressState = progressState
+      reading.exportManager = exportManager
+      reading.photoLibraryManager = photoLibraryManager
+      reading.loginItemController = loginItemController
+      reading.exportRecordStore = exportRecordStore
+      reading.collectionExportRecordStore = collectionExportRecordStore
     }
   }
 
@@ -223,8 +244,56 @@ import Testing
       #expect(reading.isScreenshotMode == true)
       #expect(reading.surfaceKey == "collections-favorites")
       #expect(reading.storedValue == "from the suite")
+      // The `@Observable` objects arrive through `.environment(_:)`, as the core's own instances.
+      #expect(reading.whatsNewState === core.whatsNewState)
+      #expect(reading.progressState === core.exportManager.progressState)
+      #expect(reading.exportManager === core.exportManager)
+      #expect(reading.photoLibraryManager === core.photoLibraryManager)
+      #expect(reading.loginItemController === core.loginItemController)
+      #expect(reading.exportRecordStore === core.exportRecordStore)
+      #expect(reading.collectionExportRecordStore === core.collectionExportRecordStore)
     }
   }
+
+  #if DEBUG
+    /// Already passes: scene composition renders the curated service without starting the core.
+    @Test func screenshotCompositionRendersTheCuratedLibrary() async throws {
+      var composition = makeTestComposition(label: "app-core-curated-library")
+      let curated = ScreenshotPhotoLibraryService()
+      composition.photoLibraryServiceOverride = curated
+      composition.isScreenshotMode = true
+      let core = AppCore(composition: composition)
+      let counter = BodyInvalidationCounter()
+      let window = HostedViewHarness.makeWindow(
+        contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
+        styleMask: [.titled, .closable])
+      defer {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+        core.exportManager.cancelAndClear()
+        core.exportRecordStore.drainSynchronously()
+        core.collectionExportRecordStore.drainSynchronously()
+        try? FileManager.default.removeItem(at: composition.appStateRoot)
+      }
+      window.contentView = NSHostingView(
+        rootView: ContentView(
+          destinationManager: core.exportDestinationManager, recordStore: core.exportRecordStore,
+          timelineHistoryState: .ready
+        ).equatable().photoExportEnvironment(core)
+          .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true))
+      window.orderFront(nil)
+      let expectedYears = try curated.availableYearsWithCounts().map(\.year)
+      #expect(
+        await observe(in: window) {
+          counter.count(for: "library-root") > 0
+            && expectedYears.allSatisfy {
+              NativeViewAccess.element("timeline-year:\($0)", in: window) != nil
+            }
+        })
+    }
+  #endif
 
   // MARK: - Compositions
 
@@ -260,6 +329,7 @@ import Testing
     #expect(production.photoLibraryServiceOverride == nil)
     #expect(production.persistentChangeSource == nil)
     #expect(production.assetResourceWriter is ProductionAssetResourceWriter)
+    #expect(production.photoKitReader is ProductionPhotoKitReader)
     #expect(production.fileSystem is FileIOService)
     #expect(production.clock is SystemAutoSyncClock)
     #expect(production.loginItemService is SystemLoginItemService)
@@ -280,6 +350,7 @@ import Testing
     #expect(screenshot.photoLibraryServiceOverride is ScreenshotPhotoLibraryService)
     #expect(screenshot.persistentChangeSource == nil)
     #expect(screenshot.assetResourceWriter is ProductionAssetResourceWriter)
+    #expect(screenshot.photoKitReader is PhotoLibraryServiceReader)
     #expect(screenshot.fileSystem is FileIOService)
     #expect(screenshot.clock is SystemAutoSyncClock)
     #expect(screenshot.loginItemService is SystemLoginItemService)
@@ -328,6 +399,33 @@ import Testing
     #expect(screenshot.screenshotSurfaceKey == "timeline-multi-select")
   }
 
+  @Test func autoExportMissingAccessFooterNamesThePhotosPrivacyPath() async throws {
+    try await withAppDomainUntouched {
+      var composition = makeTestComposition(label: "photos-access-footer")
+      let service = FakePhotoLibraryService()
+      service.authorizationStatus = .denied
+      service.isAuthorized = false
+      composition.photoLibraryServiceOverride = service
+      composition.wiresAutoSync = true
+      composition.defaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      let core = makeCore(composition)
+      core.start()
+      #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
+      defer {
+        core.autoSyncManager.setEnabled(false)
+        core.autoSyncPhotoChangeAdapter.stop()
+        core.exportManager.cancelAndClear()
+        try? FileManager.default.removeItem(at: composition.appStateRoot)
+      }
+      #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
+      #expect(
+        AutoExportPresentation.exportNowFooter(core.autoSyncManager.state)
+          == "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+      )
+      #expect(AutoSyncBlockedReason.photosAccessMissing.userFacingLabel == "Photos access needed")
+    }
+  }
+
   // MARK: - Isolation
 
   @Test func testCompositionKeepsAllStateUnderItsRootAndSuite() async throws {
@@ -335,7 +433,7 @@ import Testing
       var composition = makeTestComposition(label: "app-core-isolation")
       composition.wiresAutoSync = true
       let core = makeCore(composition)
-      core.exportDestinationManager.persistSelectedFolderForTesting(
+      await core.exportDestinationManager.persistSelectionAndWait(
         try makeDestinationFolder("app-core-isolation-destination"))
       core.start()
       core.exportManager.versionSelection = .editedWithOriginals

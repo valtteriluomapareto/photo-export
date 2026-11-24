@@ -30,8 +30,8 @@ struct AssetDetailViewLifecycleTests {
       Group {
         if selection.showsDetail {
           AssetDetailView(asset: selection.asset, placement: .timeline(year: 2025, month: 1))
-            .environmentObject(photoLibraryManager)
-            .environmentObject(exportRecordStore).environmentObject(collectionStore)
+            .environment(photoLibraryManager)
+            .environment(exportRecordStore).environment(collectionStore)
         } else {
           Color.clear
         }
@@ -80,9 +80,9 @@ struct AssetDetailViewLifecycleTests {
     let photoLibraryManager = PhotoLibraryManager(overrideService: service)
     let storeRoot = TestScratch.directory("AssetDetailLifecycle")
     let exportRecordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    exportRecordStore.configure(for: "detail-test")
+    await exportRecordStore.configureAndWait(for: "detail-test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "detail-test")
+    await collectionStore.configureAndWait(for: "detail-test")
     let selection = Selection(asset: first)
     let hostingView = NSHostingView(
       rootView: HostedDetail(
@@ -109,8 +109,8 @@ struct AssetDetailViewLifecycleTests {
       window.orderOut(nil)
       window.contentView = nil
       window.close()
-      exportRecordStore.flushForTesting()
-      collectionStore.flushForTesting()
+      exportRecordStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       await firstGate.releaseAll()
       await secondGate.releaseAll()

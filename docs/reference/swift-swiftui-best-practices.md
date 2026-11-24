@@ -189,8 +189,10 @@ work, acknowledgement and reconciliation rules.
 ## 11) Testing Matrix (Must-Haves)
 
 Use injected fakes for platform operations, isolated `TestScratch` preferences and
-folders, pure policy tests for combinatorial behavior, and hosted SwiftUI tests
-for bindings and rendered actions. See the
+folders, production value-policy tests for combinatorial captions and eligibility, and
+hosted SwiftUI tests that press actual native controls and observe injected effects.
+Keep real store dependencies and body/summary-scan budgets at their existing view boundaries;
+do not replace them with parent snapshots or captured text/actions. See the
 [contributor test strategy](../../CONTRIBUTING.md#ui-behavior-test-strategy) and
 [release validation guide](../project/release-validation.md) for the automated/manual
 boundary.

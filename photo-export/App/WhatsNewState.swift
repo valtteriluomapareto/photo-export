@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Tracks whether the user has seen the "What's New" sheet for the current
 /// app version. Stores the last-seen `CFBundleShortVersionString` in
@@ -14,13 +15,13 @@ import Foundation
 ///   "What's new in this version" summary, with pointers to the Auto
 ///   Export guide and reassurance about file safety on upgrade.
 ///
-/// `shouldShow` is `@Published` so the sheet's `isPresented` binding flips
-/// to false synchronously on `markAsSeen()`, avoiding any flash of stale
-/// state if the same `WhatsNewState` instance is observed by multiple
-/// views.
+/// `shouldShow` is observed so the sheet's `isPresented` binding flips to
+/// false synchronously on `markAsSeen()`, avoiding any flash of stale state
+/// if the same `WhatsNewState` instance is observed by multiple views.
+@Observable
 @MainActor
-final class WhatsNewState: ObservableObject {
-  @Published private(set) var shouldShow: Bool
+final class WhatsNewState {
+  private(set) var shouldShow: Bool
 
   let currentVersion: String
   /// Mutable so `markAsSeen()` can refresh the in-memory snapshot to
@@ -37,8 +38,8 @@ final class WhatsNewState: ObservableObject {
   /// "Photo Export has been updated" message.
   private(set) var upgradeNotes: [ReleaseNote]
 
-  private let catalog: [ReleaseNote]
-  private let userDefaults: UserDefaults
+  @ObservationIgnored private let catalog: [ReleaseNote]
+  @ObservationIgnored private let userDefaults: UserDefaults
 
   /// `UserDefaults` key under which the most recently dismissed version is
   /// stored. Stable across launches; resetting it via

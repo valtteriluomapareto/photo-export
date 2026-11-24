@@ -21,44 +21,26 @@ struct ExportPipelineTests {
   private func makeTestHarness(
     storeRootURL: URL? = nil, userDefaults: UserDefaults? = nil,
     fileSystem: FakeFileSystem = FakeFileSystem()
-  ) -> (
+  ) async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let tempDir =
-      storeRootURL ?? TestScratch.directory("ExportPipelineTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    // Clear the persisted version selection so ExportManager starts at its default
-    // regardless of what a sibling test suite may have written.
-    let defaults = userDefaults ?? TestScratch.defaults("ExportPipeline")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, writer, fileSystem, store)
+    let h = await ExportManagerHarness(
+      label: "ExportPipelineTest", storeRootURL: storeRootURL,
+      userDefaults: userDefaults ?? TestScratch.defaults("ExportPipeline"), fileSystem: fileSystem)
+    return (h.manager, h.photoLib, h.dest, h.writer, h.fileSystem, h.store)
   }
 
   // MARK: - Export happy path
 
   @Test func exportHappyPath() async throws {
-    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, fileSystem, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
-      id: "asset-1", creationDate: Date(), mediaType: .image)
+      id: "asset-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      mediaType: .image)
     let resource = TestAssetFactory.makeResource(
       type: .photo, originalFilename: "IMG_0001.JPG")
 
@@ -96,14 +78,16 @@ struct ExportPipelineTests {
   // MARK: - Missing asset descriptor
 
   @Test func missingAssetDescriptorRecordsFailure() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Simulate an asset that exists at enqueue time but disappears before
     // the export job runs — e.g. the user deleted it from Photos in between.
     // fetchAssets (used during enqueue) still returns the asset, but
     // fetchAssetDescriptor (called when the export job runs) returns nil.
-    let asset = TestAssetFactory.makeAsset(id: "vanishing-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "vanishing-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["vanishing-asset"] = [resource]
@@ -124,10 +108,12 @@ struct ExportPipelineTests {
   // MARK: - No exportable resource
 
   @Test func noExportableResourceMarkedFailed() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "no-resource-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "no-resource-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId["no-resource-asset"] = []  // No resources
 
@@ -143,10 +129,12 @@ struct ExportPipelineTests {
   // MARK: - Write failure
 
   @Test func writeFailureCleansUpAndMarksFailure() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "write-fail-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "write-fail-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["write-fail-asset"] = [resource]
@@ -175,10 +163,12 @@ struct ExportPipelineTests {
   // MARK: - Atomic move failure
 
   @Test func moveFailureMarksFailureAndCleansUpTempFile() async throws {
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "move-fail-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "move-fail-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 5, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["move-fail-asset"] = [resource]
@@ -208,7 +198,8 @@ struct ExportPipelineTests {
   /// and commits to ` (1)`. The variant is re-marked in progress under the new name first.
   @Test func lateCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
     let storeRoot = TestScratch.directory("ExportPipelineTest")
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(storeRootURL: storeRoot)
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness(
+      storeRootURL: storeRoot)
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -235,7 +226,7 @@ struct ExportPipelineTests {
     #expect(
       fileSystem.moveCalls.map(\.to.lastPathComponent) == ["IMG_0001.JPG", "IMG_0001 (1).JPG"])
     // The history log shows the variant re-marked under the new name before it committed.
-    store.flushForTesting()
+    store.drainSynchronously()
     let log = try String(
       contentsOf: storeRoot.appendingPathComponent("test")
         .appendingPathComponent(ExportRecordStore.Constants.logFileName),
@@ -280,7 +271,7 @@ struct ExportPipelineTests {
         return EEXIST
       },
       capability: { _ in true })
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness(
       fileSystem: FakeFileSystem(real: commit))
     defer { dest.cleanup() }
 
@@ -325,7 +316,7 @@ struct ExportPipelineTests {
         return EEXIST
       },
       capability: { _ in true })
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness(
       fileSystem: FakeFileSystem(real: commit))
     defer { dest.cleanup() }
 
@@ -363,7 +354,7 @@ struct ExportPipelineTests {
   /// A paired original-side slot has one fixed name, so a file that takes it before the
   /// commit fails that variant with `Export:2` instead of moving the pair to ` (1)`.
   @Test func lateCollisionAtAPairedSlotStillFails() async throws {
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -408,11 +399,15 @@ struct ExportPipelineTests {
   // MARK: - Pause/resume cycle
 
   @Test func pauseAndResumeBehavior() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset1 = TestAssetFactory.makeAsset(id: "pause-1")
-    let asset2 = TestAssetFactory.makeAsset(id: "pause-2")
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "pause-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "pause-2",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     photoLib.assetsByYearMonth["2025-7"] = [asset1, asset2]
     photoLib.resourcesByAssetId["pause-1"] = [
       TestAssetFactory.makeResource(originalFilename: "IMG_1.JPG")
@@ -438,12 +433,16 @@ struct ExportPipelineTests {
   // MARK: - Queue draining
 
   @Test func queueDrainsAllJobsInOrder() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Enqueue assets across two months
-    let asset1 = TestAssetFactory.makeAsset(id: "jan-1")
-    let asset2 = TestAssetFactory.makeAsset(id: "feb-1")
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "jan-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "feb-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!)
     photoLib.assetsByYearMonth["2025-1"] = [asset1]
     photoLib.assetsByYearMonth["2025-2"] = [asset2]
     photoLib.resourcesByAssetId["jan-1"] = [
@@ -466,10 +465,12 @@ struct ExportPipelineTests {
   // MARK: - Duplicate skipping
 
   @Test func alreadyExportedAssetNotReEnqueued() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "already-done")
+    let asset = TestAssetFactory.makeAsset(
+      id: "already-done",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 8, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["already-done"] = [resource]
@@ -492,7 +493,7 @@ struct ExportPipelineTests {
   @Test(.timeLimit(.minutes(2))) func cancelAndClearResetsAllState() async throws {
     let root = TestScratch.directory("ExportPipeline")
     let suite = TestScratch.suiteName("cancel-reset")
-    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, writer, fileSystem, store) = await makeTestHarness(
       storeRootURL: root, userDefaults: TestScratch.defaults(suiteName: suite))
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
@@ -503,7 +504,7 @@ struct ExportPipelineTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      store.flushForTesting()
+      store.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       dest.cleanup()
     }
@@ -513,7 +514,9 @@ struct ExportPipelineTests {
         photoLib.resourcesByAssetId[id] = [
           TestAssetFactory.makeResource(originalFilename: "IMG_\(index).JPG")
         ]
-        return TestAssetFactory.makeAsset(id: id)
+        return TestAssetFactory.makeAsset(
+          id: id,
+          creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 9, day: 15))!)
       }
       manager.startExportMonth(year: 2025, month: 9)
       try #require(await gate.waitForEnter(count: 1))
@@ -560,7 +563,7 @@ struct ExportPipelineTests {
   @Test(.timeLimit(.minutes(2))) func oldGenerationTasksExitCleanly() async throws {
     let root = TestScratch.directory("ExportPipeline")
     let suite = TestScratch.suiteName("cancel-generation")
-    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, writer, fileSystem, store) = await makeTestHarness(
       storeRootURL: root, userDefaults: TestScratch.defaults(suiteName: suite))
     let oldGate = AsyncCheckpoint()
     let newGate = AsyncCheckpoint()
@@ -572,7 +575,7 @@ struct ExportPipelineTests {
       await oldGate.releaseAll()
       await newGate.releaseAll()
       for task in tasks { await task.value }
-      store.flushForTesting()
+      store.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       dest.cleanup()
     }
@@ -582,7 +585,10 @@ struct ExportPipelineTests {
         photoLib.resourcesByAssetId[id] = [
           TestAssetFactory.makeResource(originalFilename: "OLD_\(index).JPG")
         ]
-        return TestAssetFactory.makeAsset(id: id)
+        return TestAssetFactory.makeAsset(
+          id: id,
+          creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 10, day: 15))!
+        )
       }
       writer.checkpoint = oldGate
       manager.startExportMonth(year: 2025, month: 10)
@@ -593,7 +599,12 @@ struct ExportPipelineTests {
       try #require(store.exportInfo(assetId: "gen-1")?.variants[.original]?.status == .inProgress)
       manager.cancelAndClear()
 
-      photoLib.assetsByYearMonth["2025-11"] = [TestAssetFactory.makeAsset(id: "new-gen-1")]
+      photoLib.assetsByYearMonth["2025-11"] = [
+        TestAssetFactory.makeAsset(
+          id: "new-gen-1",
+          creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!
+        )
+      ]
       photoLib.resourcesByAssetId["new-gen-1"] = [
         TestAssetFactory.makeResource(originalFilename: "NEW.JPG")
       ]
@@ -632,10 +643,12 @@ struct ExportPipelineTests {
   // MARK: - Scoped access pairing
 
   @Test func scopedAccessAlwaysPaired() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "scope-test")
+    let asset = TestAssetFactory.makeAsset(
+      id: "scope-test",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 12, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-12"] = [asset]
     photoLib.resourcesByAssetId["scope-test"] = [resource]
@@ -651,10 +664,12 @@ struct ExportPipelineTests {
   // MARK: - Resource type selection priority
 
   @Test func selectsPrimaryResourceInPriorityOrder() async throws {
-    let (manager, photoLib, dest, writer, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "priority-test")
+    let asset = TestAssetFactory.makeAsset(
+      id: "priority-test",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
     // Provide multiple resource types — photo should be preferred
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["priority-test"] = [
@@ -675,11 +690,15 @@ struct ExportPipelineTests {
   // MARK: - Multiple assets exported with correct filenames
 
   @Test func multipleAssetsGetCorrectFilenames() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset1 = TestAssetFactory.makeAsset(id: "multi-1")
-    let asset2 = TestAssetFactory.makeAsset(id: "multi-2")
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "multi-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "multi-2",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
     photoLib.assetsByYearMonth["2025-3"] = [asset1, asset2]
     photoLib.resourcesByAssetId["multi-1"] = [
       TestAssetFactory.makeResource(originalFilename: "IMG_001.JPG")

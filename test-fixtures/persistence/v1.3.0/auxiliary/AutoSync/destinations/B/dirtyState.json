@@ -1,0 +1,12 @@
+{
+  "lastUpdatedAt" : 700000100,
+  "scopes" : {
+    "timeline" : {
+      "pendingAssetIds" : [
+        "asset-other"
+      ],
+      "pendingFullReconciliation" : false,
+      "pendingPlacementReconciliation" : false
+    }
+  }
+}

@@ -111,9 +111,11 @@ echo "Installed profiles (Xcode UserData):"
 ls -la "${XCODE_PROFILES_DIR}/"
 
 # Export for later steps
-echo "PROFILE_UUID=${PROFILE_UUID}" >> "$GITHUB_ENV"
-echo "PROFILE_NAME=${PROFILE_NAME}" >> "$GITHUB_ENV"
-echo "PROFILES_DIR=${XCODE_PROFILES_DIR}" >> "$GITHUB_ENV"
+{
+  echo "PROFILE_UUID=${PROFILE_UUID}"
+  echo "PROFILE_NAME=${PROFILE_NAME}"
+  echo "PROFILES_DIR=${XCODE_PROFILES_DIR}"
+} >> "$GITHUB_ENV"
 
 echo ""
 echo "=== Provisioning profile installation complete ==="

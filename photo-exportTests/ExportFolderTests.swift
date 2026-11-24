@@ -297,49 +297,24 @@ struct ExportFolderTests {
 
   // MARK: - Test harness (parallel to ExportAllAlbumsTests.Harness)
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let timelineStore: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() {
-      manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let timelineStore = h.timelineStore
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    timelineStore.drainSynchronously()
+    collectionStore.drainSynchronously()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportFolder")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportFolder")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+  private func makeHarness() async -> Harness {
+    await Harness(label: "ExportFolder")
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -377,8 +352,8 @@ struct ExportFolderTests {
   /// subfolders) and *only* those — albums that live outside the chosen folder must
   /// not be touched.
   @Test func enqueuesOnlyDescendantAlbumsAcrossSubfolders() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     // Inside the target folder: one direct album + one nested under a subfolder.
     let directAlbum = seedAlbum(
@@ -435,8 +410,8 @@ struct ExportFolderTests {
   /// any storage-format change: the on-disk path comes from `pathComponents` on each
   /// album, so folder-walk and per-album walk are interchangeable.
   @Test func descendantAlbumPlacementIsIdenticalToDirectExport() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let nested = seedAlbum(
       h.photoLib, localId: "summer", ids: ["s1"], pathComponents: ["2025"])
@@ -470,8 +445,8 @@ struct ExportFolderTests {
   }
 
   @Test func emptyFolderSetsNoAlbumsMessage() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let empty = PhotoCollectionDescriptor(
       id: "folder:empty", localIdentifier: "empty", title: "Empty",
@@ -489,8 +464,8 @@ struct ExportFolderTests {
   /// and enqueues the deeply-nested albums. Catches a regression where a future
   /// refactor switches from `albumLocalIds(under:)` (recursive) to a one-level lookup.
   @Test func folderWithOnlySubfoldersStillEnqueuesNestedAlbums() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let leafAlbum = seedAlbum(
       h.photoLib, localId: "leaf", ids: ["l1"],
@@ -521,8 +496,8 @@ struct ExportFolderTests {
   }
 
   @Test func missingFolderSetsExplanatoryMessage() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     h.photoLib.collectionTree = []
 
@@ -542,7 +517,7 @@ struct ExportFolderTests {
     // `ExportManagerRunExportTests.allAlbumsFullEmptyResolvesCompleted`.
     await waitUntil(!h.manager.hasActiveExportWork)
     #expect(!h.manager.hasActiveExportWork)
-    #expect(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isPreparingExport)
   }
 
   /// All albums under a folder already fully exported → the user-visible message
@@ -550,8 +525,8 @@ struct ExportFolderTests {
   @Test(.timeLimit(.minutes(1))) func allDescendantsAlreadyExportedSetsAlreadyDoneMessage()
     async throws
   {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(
       h.photoLib, localId: "done", ids: ["d1"], pathComponents: ["F"])
@@ -570,17 +545,15 @@ struct ExportFolderTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
-    var messages: [String] = []
-    let observation = h.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
-      messages.append($0)
-    }
+    let observation = ObservedValues { h.manager.progressState.emptyRunMessage }
     h.manager.startExportFolder(folderId: "F")
     let preparations = h.manager.currentPreparationTasks
     try #require(!preparations.isEmpty)
     for task in preparations { await task.value }
 
     withExtendedLifetime(observation) {
-      #expect(messages == ["All albums in this folder are already exported."])
+      #expect(
+        observation.values.compactMap { $0 } == ["All albums in this folder are already exported."])
     }
     #expect(h.manager.totalJobsEnqueued == 0)
   }
@@ -591,8 +564,8 @@ struct ExportFolderTests {
   /// This is the entry point the folder content pane's multi-select uses after
   /// expanding subfolder tiles to their descendant album ids.
   @Test func startExportAlbumsEnqueuesSuppliedAlbumsOnly() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
     let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1", "b2"])
@@ -621,8 +594,8 @@ struct ExportFolderTests {
   /// ids of selected subfolders, which can produce duplicates if a subfolder and one
   /// of its child albums are both selected.
   @Test(.timeLimit(.minutes(1))) func startExportAlbumsDeduplicatesInput() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "dup", ids: ["x1", "x2"])
     h.photoLib.collectionTree = [album]
@@ -645,8 +618,8 @@ struct ExportFolderTests {
   }
 
   @Test func startExportAlbumsWithEmptyListSetsEmptyMessage() async throws {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     h.manager.startExportAlbums(collectionIds: [])
     await waitUntil(h.manager.emptyRunMessage != nil)
@@ -658,8 +631,8 @@ struct ExportFolderTests {
   @Test(.timeLimit(.minutes(1))) func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage()
     async throws
   {
-    let h = makeHarness()
-    defer { h.cleanup() }
+    let h = await makeHarness()
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "done", ids: ["d1"])
     h.photoLib.collectionTree = [album]
@@ -673,17 +646,14 @@ struct ExportFolderTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
-    var messages: [String] = []
-    let observation = h.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
-      messages.append($0)
-    }
+    let observation = ObservedValues { h.manager.progressState.emptyRunMessage }
     h.manager.startExportAlbums(collectionIds: ["done"])
     let preparations = h.manager.currentPreparationTasks
     try #require(!preparations.isEmpty)
     for task in preparations { await task.value }
 
     withExtendedLifetime(observation) {
-      #expect(messages == ["All selected albums are already exported."])
+      #expect(observation.values.compactMap { $0 } == ["All selected albums are already exported."])
     }
     #expect(h.manager.totalJobsEnqueued == 0)
   }

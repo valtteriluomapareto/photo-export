@@ -43,29 +43,31 @@ owns cancellation, actor isolation and AutoSync seam rules, plus the Host and fo
 patterns. Follow its extension recipes rather than copying orchestration into views
 or adding method bodies to `ExportManager+AutoSyncConformance.swift`.
 
-The behavioral regression gates are the same in this guide, `CONTRIBUTING.md`, and the canonical
-reference:
+The [regression gates](docs/reference/architecture-conventions.md#regression-gates) must pass
+without re-recording unless the new behavior has been explicitly audited:
 
 - `AutoSyncSeamCharacterizationTests`
-- `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence`
-- `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence`
 - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`
 - `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions`
 - `ScreenshotPhotoLibraryServiceOverridesTests`
 - `ImportIdempotencyTests`
 - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck`
 - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds`
+- `PublisherParityTests`
 - `CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing`
 - `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements`
 - `FileIOServiceTests.existingFileAtCommitIsNeverReplaced`
 - `IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`
 - `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss`
 - `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile`
-
-Run these without re-recording unless the new behavior has been explicitly audited. They are listed
-once in `scripts/ci/regression-gates.txt`, which also pins containing-suite declarations to support
-method-level gates; those pins are not additional behavioral gates. CI checks that this list names
-every gate in the file and that every gate ran and passed.
+- `DestinationIdentityIntegrationTests.remountDriftKeepsEveryKeyOnStableId`
+- `StableDestinationIdentityTests.differentFolderReSelectionViaRealEvidenceMintsNewId`
+- `ExportDestinationEscapeProtectionTests`
+- `JSONLRecordFileIOFailureTests`
+- `RecordStorePersistenceHealthTests`
+- `HistoricalPersistenceFixtureTests`
+- `HistoricalAuxiliaryStoreFixtureTests.dirtyRetrySummaryTokenAndSafetyLoadReleasedStateTwice`
+- `HistoryWriteFailureTests.importReportsMidAppendFailureWithSuccessfulControl`
 
 ## Documentation Layout
 
@@ -80,8 +82,20 @@ the user explicitly requests a different flow. It covers the issue plan, the thr
 reviewer roles, tests before production changes, the same reviewers' implementation
 review, and merging only after CI passes for the current head. That workflow authorizes
 the merge; do not ask for another confirmation unless an applicable approval rule
-requires it. If reviewer agents are unavailable, report that limitation instead of
-presenting self-review as the requested three-agent review.
+requires it.
+
+A size-S PR whose sole purpose is performance, with behavior otherwise unchanged,
+may use one Pragmatic Developer reviewer if count tests and existing regression gates
+guard it and it changes no regression gate, existing parity row, persisted format,
+never-overwrite rule, or filename-claim rule. That reviewer checks whether it works,
+whether the gates and stated budgets pass, and whether it adds unnecessary complexity
+or scope. The issue's recorded decisions serve as the plan; no separate plan review
+is needed. Meaningful tests before production changes, resolved findings, recorded
+review outcomes, and current-head green CI still apply. Explicit issue-level reviewer
+or plan-first requirements take precedence. All other PRs retain the three-role flow.
+
+If reviewer agents are unavailable, report that limitation instead of presenting
+self-review as the requested independent review.
 
 For releases, follow the [release process](docs/project/release-process.md) and its
 candidate Photos validation requirements before creating and pushing a tag.

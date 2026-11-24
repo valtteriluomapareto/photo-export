@@ -90,14 +90,17 @@ struct FinalCommitCancellationTests {
     init(
       collection: Bool, phase: Phase, fallback: Bool = false,
       logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
-    ) throws {
+    ) async throws {
       defaults = TestScratch.defaults(suiteName: defaultsName)
       placement = collection ? .favorites() : .timeline(year: 2025, month: 1)
-      asset = TestAssetFactory.makeAsset(id: "asset", hasAdjustments: fallback)
+      asset = TestAssetFactory.makeAsset(
+        id: "asset",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+        hasAdjustments: fallback)
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -127,20 +130,26 @@ struct FinalCommitCancellationTests {
       return timeline.exportInfo(assetId: id)?.variants ?? [:]
     }
 
-    func sentinel(_ id: String) {
-      timeline.markVariantExported(
-        assetId: id, variant: .original, year: 2025, month: 1, relPath: placement.relativePath,
-        filename: "\(id).JPG", exportedAt: Date())
-      collections.upsertPlacement(.favorites())
-      collections.markVariantExported(
-        assetId: id, placement: .favorites(), variant: .original,
-        filename: "\(id).JPG", exportedAt: Date())
+    func sentinel(_ id: String) async throws {
+      try await timeline.withMutationAdmission {
+        timeline.markVariantExported(
+          assetId: id, variant: .original, year: 2025, month: 1, relPath: placement.relativePath,
+          filename: "\(id).JPG", exportedAt: Date())
+      }
+      try await collections.withMutationAdmission {
+        collections.upsertPlacement(.favorites())
+        collections.markVariantExported(
+          assetId: id, placement: .favorites(), variant: .original,
+          filename: "\(id).JPG", exportedAt: Date())
+      }
     }
 
-    func select(_ id: String) {
+    func select(_ id: String) async {
       destination.selectedFolderURL = destination.root.appendingPathComponent(id)
-      timeline.configure(for: id)
-      collections.configure(for: id)
+      timeline.beginConfigure(for: id)
+      collections.beginConfigure(for: id)
+      await timeline.waitUntilSettled()
+      await collections.waitUntilSettled()
     }
 
     func flush() async throws {
@@ -166,8 +175,10 @@ struct FinalCommitCancellationTests {
       manager.cancelAndClear()
       running += manager.currentPreparationTasks + [manager.currentTask].compactMap { $0 }
       for task in running { _ = await finished(task) }
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      try? await timeline.checkpointHistory()
+      try? await collections.checkpointHistory()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: destination.root)
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)
@@ -176,7 +187,7 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
   func cancelThenRetryRecognizesCommittedOutput(phase: Phase, collection: Bool) async throws {
-    let f = try Fixture(collection: collection, phase: phase)
+    let f = try await Fixture(collection: collection, phase: phase)
     try await withCleanup {
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
@@ -203,8 +214,8 @@ struct FinalCommitCancellationTests {
       try await f.flush()
       #expect(try f.filesInA() == ["FILE.JPG"])
       #expect(f.writer.writeCalls.count == 1)
-      f.select("B")
-      f.select("A")
+      await f.select("B")
+      await f.select("A")
       #expect(f.variants()[.original]?.filename == "FILE.JPG")
     } cleanup: {
       await f.cleanup()
@@ -213,14 +224,14 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
   func switchedDestinationGetsNoLateRecord(phase: Phase, collection: Bool) async throws {
-    let f = try Fixture(collection: collection, phase: phase)
+    let f = try await Fixture(collection: collection, phase: phase)
     try await withCleanup {
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
-      f.sentinel("B-only")
+      await f.select("B")
+      try await f.sentinel("B-only")
       f.manager.progressState.renderActivity = .rendering
       f.gate.release()
       await old.value
@@ -229,7 +240,7 @@ struct FinalCommitCancellationTests {
       #expect(f.manager.renderActivity == .rendering)
       #expect(try f.filesInA() == ["FILE.JPG"])
       try await f.flush()
-      f.select("A")
+      await f.select("A")
       #expect(f.variants()[.original]?.status == .done)
       f.start()
       await f.manager.waitForQueueDrained()
@@ -242,23 +253,23 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
   func returningToOriginalOwnerPreservesNewerRecords(phase: Phase, collection: Bool) async throws {
-    let f = try Fixture(collection: collection, phase: phase)
+    let f = try await Fixture(collection: collection, phase: phase)
     try await withCleanup {
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
-      f.sentinel("B-only")
-      f.select("A")
-      f.sentinel("newer-A")
+      await f.select("B")
+      try await f.sentinel("B-only")
+      await f.select("A")
+      try await f.sentinel("newer-A")
       f.gate.release()
       await old.value
       try await f.flush()
-      f.select("B")
+      await f.select("B")
       #expect(f.variants().isEmpty)
       #expect(f.variants("B-only")[.original]?.status == .done)
-      f.select("A")
+      await f.select("A")
       #expect(f.variants()[.original]?.status == .done)
       #expect(f.variants("newer-A")[.original]?.status == .done)
     } cleanup: {
@@ -269,7 +280,7 @@ struct FinalCommitCancellationTests {
   @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases, [false, true])
   func immediateRetryWaitsBeforeAllocatingAnotherOutput(phase: Phase, collection: Bool) async throws
   {
-    let f = try Fixture(collection: collection, phase: phase)
+    let f = try await Fixture(collection: collection, phase: phase)
     let admitted = AsyncCheckpoint()
     try await withCleanup {
       f.start()
@@ -300,14 +311,14 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func switchedAcknowledgementFailureRemainsRecoverable(collection: Bool) async throws {
-    let f = try Fixture(collection: collection, phase: .move)
+    let f = try await Fixture(collection: collection, phase: .move)
     try await withCleanup {
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
-      f.sentinel("B-only")
+      await f.select("B")
+      try await f.sentinel("B-only")
       let name =
         collection
         ? CollectionExportRecordStore.Constants.logFileName
@@ -319,19 +330,19 @@ struct FinalCommitCancellationTests {
       await old.value
       #expect(f.variants("B-only")[.original]?.status == .done)
       try FileManager.default.removeItem(at: log)
-      f.select("A")
+      await f.select("A")
       #expect(f.variants()[.original]?.filename == "FILE.JPG")
       if collection {
         #expect(f.collections.state == .persistenceFailed)
-        f.collections.retryPersistence()
+        await f.collections.retryHistoryPersistence()
         #expect(f.collections.state == .ready)
       } else {
         #expect(f.timeline.state == .persistenceFailed)
-        f.timeline.retryPersistence()
+        await f.timeline.retryHistoryPersistence()
         #expect(f.timeline.state == .ready)
       }
-      f.select("B")
-      f.select("A")
+      await f.select("B")
+      await f.select("A")
       #expect(f.variants()[.original]?.status == .done)
       f.start()
       await f.manager.waitForQueueDrained()
@@ -343,13 +354,13 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func returningToUnreadableOwnerRetainsCompletion(collection: Bool) async throws {
-    let f = try Fixture(collection: collection, phase: .move)
+    let f = try await Fixture(collection: collection, phase: .move)
     try await withCleanup {
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
+      await f.select("B")
       let name =
         collection
         ? CollectionExportRecordStore.Constants.logFileName
@@ -358,16 +369,16 @@ struct FinalCommitCancellationTests {
       let originalLog = try Data(contentsOf: log)
       try FileManager.default.removeItem(at: log)
       try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
-      f.select("A")
+      await f.select("A")
       f.gate.release()
       await old.value
       #expect(f.variants()[.original]?.status == .done)
       try FileManager.default.removeItem(at: log)
       try originalLog.write(to: log)
-      f.timeline.retryPersistence()
-      f.collections.retryPersistence()
-      f.select("B")
-      f.select("A")
+      await f.timeline.retryHistoryPersistence()
+      await f.collections.retryHistoryPersistence()
+      await f.select("B")
+      await f.select("A")
       #expect(f.variants()[.original]?.status == .done)
       f.start()
       await f.manager.waitForQueueDrained()
@@ -377,21 +388,49 @@ struct FinalCommitCancellationTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-  func deletedCollectionPlacementIsRestoredForCommittedOutput(switchAway: Bool) async throws {
-    let f = try Fixture(collection: true, phase: .move)
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+  func unreadableCompletionSurvivesFailedReloadOrFolderRoundTrip(collection: Bool, switchAway: Bool)
+    async throws
+  {
+    let f = try await Fixture(collection: collection, phase: .move)
     try await withCleanup {
+      try await f.sentinel("seed")
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.collections.deletePlacement(id: f.placement.id)
-      if switchAway { f.select("B") }
+      await f.select("B")
+      let name =
+        collection
+        ? CollectionExportRecordStore.Constants.logFileName
+        : ExportRecordStore.Constants.logFileName
+      let log = f.root.appendingPathComponent("A").appendingPathComponent(name)
+      let originalLog = try Data(contentsOf: log)
+      try FileManager.default.removeItem(at: log)
+      try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
+      await f.select("A")
+      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
       f.gate.release()
       await old.value
-      f.select("A")
+      #expect(f.variants()[.original]?.filename == "FILE.JPG")
+      if switchAway { await f.select("B") }
+      await f.select("A")
+      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
+      #expect(f.variants("seed")[.original]?.status == .done)
       #expect(f.variants()[.original]?.status == .done)
-      #expect(f.collections.placement(id: f.placement.id) == f.placement)
+      try FileManager.default.removeItem(at: log)
+      try originalLog.write(to: log)
+      await f.timeline.retryHistoryPersistence()
+      await f.collections.retryHistoryPersistence()
+      #expect((collection ? f.collections.state : f.timeline.state) == .ready)
+      await f.select("B")
+      await f.select("A")
+      #expect(f.variants("seed")[.original]?.status == .done)
+      #expect(f.variants()[.original]?.filename == "FILE.JPG")
+      f.start()
+      await f.manager.waitForQueueDrained()
+      #expect(f.writer.writeCalls.count == 1)
+      #expect(try f.filesInA() == ["FILE.JPG"])
     } cleanup: {
       await f.cleanup()
     }
@@ -399,7 +438,7 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func lateMoveFailureCannotWriteIntoReplacementDestination() async throws {
-    let f = try Fixture(collection: true, phase: .move)
+    let f = try await Fixture(collection: true, phase: .move)
     try await withCleanup {
       f.files.afterMoveHook = nil
       f.files.beforeMoveHook = { [gate = f.gate] _, _ in
@@ -410,8 +449,8 @@ struct FinalCommitCancellationTests {
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
-      f.sentinel("B-only")
+      await f.select("B")
+      try await f.sentinel("B-only")
       f.manager.progressState.renderActivity = .rendering
       f.gate.release()
       await old.value
@@ -425,7 +464,7 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func cancelledFirstVariantDoesNotStartFurtherVariants() async throws {
-    let f = try Fixture(collection: false, phase: .move, fallback: true)
+    let f = try await Fixture(collection: false, phase: .move, fallback: true)
     try await withCleanup {
       f.photos.resourcesByAssetId[f.asset.id]?.append(
         .init(type: .fullSizePhoto, originalFilename: "EDITED.JPG"))
@@ -446,7 +485,7 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func oldCommitCannotClearReplacementJobOrStage() async throws {
-    let f = try Fixture(collection: true, phase: .move)
+    let f = try await Fixture(collection: true, phase: .move)
     let admitted = AsyncCheckpoint()
     let replacementWritten = AsyncCheckpoint()
     try await withCleanup {
@@ -454,7 +493,7 @@ struct FinalCommitCancellationTests {
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
+      await f.select("B")
       let replacement = TestAssetFactory.makeAsset(id: "replacement")
       f.photos.favoritesAssets = [replacement]
       f.photos.resourcesByAssetId[replacement.id] = [.init(type: .photo, originalFilename: "B.JPG")]
@@ -489,14 +528,14 @@ struct FinalCommitCancellationTests {
   func corruptOwnerKeepsAlertAndReplaysOnlyCommittedDeltaAfterReset(
     collection: Bool, switchAway: Bool
   ) async throws {
-    let f = try Fixture(collection: collection, phase: .move)
+    let f = try await Fixture(collection: collection, phase: .move)
     try await withCleanup {
-      f.sentinel("old-history")
+      try await f.sentinel("old-history")
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
+      await f.select("B")
       let name =
         collection
         ? CollectionExportRecordStore.Constants.snapshotFileName
@@ -504,18 +543,18 @@ struct FinalCommitCancellationTests {
       let snapshot = f.root.appendingPathComponent("A").appendingPathComponent(name)
       let corrupt = Data("corrupt snapshot".utf8)
       try corrupt.write(to: snapshot)
-      f.select("A")
-      if switchAway { f.select("B") }
+      await f.select("A")
+      if switchAway { await f.select("B") }
       f.gate.release()
       await old.value
-      if switchAway { f.select("A") }
+      if switchAway { await f.select("A") }
       #expect(try Data(contentsOf: snapshot) == corrupt)
       #expect(collection ? f.collections.state == .failed : f.timeline.state == .failed)
       // Switching away/back must not let retained progress hide corruption.
-      f.select("B")
-      f.select("A")
+      await f.select("B")
+      await f.select("A")
       #expect(collection ? f.collections.state == .failed : f.timeline.state == .failed)
-      if collection { f.collections.resetToEmpty() } else { f.timeline.resetToEmpty() }
+      if collection { await f.collections.resetHistory() } else { await f.timeline.resetHistory() }
       #expect(f.variants()[.original]?.status == .done)
       #expect(f.variants("old-history").isEmpty)
       let broken = try FileManager.default.contentsOfDirectory(
@@ -525,8 +564,8 @@ struct FinalCommitCancellationTests {
       #expect(broken.count == 1)
       #expect(try Data(contentsOf: #require(broken.first)) == corrupt)
       try await f.flush()
-      f.select("B")
-      f.select("A")
+      await f.select("B")
+      await f.select("A")
       #expect(f.variants()[.original]?.status == .done)
       f.start()
       await f.manager.waitForQueueDrained()
@@ -538,7 +577,7 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func failedOldMoveCannotRemoveReplacementStage() async throws {
-    let f = try Fixture(collection: false, phase: .move)
+    let f = try await Fixture(collection: false, phase: .move)
     let admitted = AsyncCheckpoint()
     let replacementWritten = AsyncCheckpoint()
     try await withCleanup {
@@ -582,28 +621,28 @@ struct FinalCommitCancellationTests {
     async throws
   {
     let io = LogGate()
-    let f = try Fixture(collection: collection, phase: .move, logIO: io)
+    let f = try await Fixture(collection: collection, phase: .move, logIO: io)
     try await withCleanup {
       f.start()
       await f.gate.entered.waitForEnter(count: 1)
       let old = try #require(f.manager.currentTask)
       f.manager.cancelAndClear()
-      f.select("B")
-      f.sentinel("B-only")
+      await f.select("B")
+      try await f.sentinel("B-only")
       io.arm()
       f.gate.release()
       await io.gate.entered.waitForEnter(count: 1)
-      // No MainActor suspension between release and reconfiguration: the parked
-      // writer may finish physically, but its acknowledgement cannot resume yet.
+      // The parked append entered before this round trip; the owner-level test
+      // separately holds acknowledgement until the newer history has been installed.
       io.gate.release()
-      f.select("A")
-      f.sentinel("newer-A")
-      f.select("B")
+      await f.select("A")
+      try await f.sentinel("newer-A")
+      await f.select("B")
       await old.value
-      f.select("A")
+      await f.select("A")
       #expect(f.variants()[.original]?.status == .done)
       #expect(f.variants("newer-A")[.original]?.status == .done)
-      f.select("B")
+      await f.select("B")
       #expect(f.variants("B-only")[.original]?.status == .done)
       #expect(f.variants().isEmpty)
     } cleanup: {
@@ -615,7 +654,7 @@ struct FinalCommitCancellationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Phase.allCases)
   func cancelledFallbackAcknowledgesAcceptance(phase: Phase) async throws {
-    let f = try Fixture(collection: false, phase: phase, fallback: true)
+    let f = try await Fixture(collection: false, phase: phase, fallback: true)
     try await withCleanup {
       f.manager.versionSelection = .edited
       f.start()

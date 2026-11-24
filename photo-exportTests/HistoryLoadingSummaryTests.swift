@@ -35,7 +35,7 @@ import Testing
       }
     }
 
-    private static let loading = ["Loading export history\u{2026}"]
+    private static let loading = "Loading export history\u{2026}"
 
     @Test(arguments: Pane.allCases)
     func summaryReadsLoadingWhileHistoryLoads(pane: Pane) async throws {
@@ -52,17 +52,17 @@ import Testing
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
         userDefaults: defaults)
-      let window = NSWindow(
+      let window = HostedViewHarness.makeWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 700, height: 500),
-        styleMask: [.borderless], backing: .buffered, defer: false)
-      window.isReleasedWhenClosed = false
+        styleMask: [.borderless])
+
       defer {
         window.orderOut(nil)
         window.contentView = nil
         window.close()
         io.releaseAll()
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         try? FileManager.default.removeItem(at: root)
         defaults.removePersistentDomain(forName: defaultsName)
       }
@@ -73,41 +73,37 @@ import Testing
           from: DateComponents(year: 2026, month: 1, day: 10)))
       service.yearCounts = [(2026, 1)]
       service.assetsByYearMonth["2026-1"] = [asset]
-      timeline.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
       timeline.markVariantExported(
         assetId: asset.id, variant: .original, year: 2026, month: 1, relPath: "2026/01/",
         filename: "JANUARY.JPG", exportedAt: Date())
       try await timeline.flush()
-      timeline.configure(for: nil)
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: nil)
+      await collections.configureAndWait(for: "A")
       let snapshot = root.appendingPathComponent("A")
         .appendingPathComponent(ExportRecordStore.Constants.snapshotFileName)
       io.hold(snapshot)
       timeline.beginConfigure(for: "A")
 
-      let key = pane == .month ? "month-summary" : "year-summary"
       window.contentView = NSHostingView(
         rootView: Host(pane: pane, service: service)
-          .environmentObject(PhotoLibraryManager(overrideService: service))
-          .environmentObject(timeline)
-          .environmentObject(collections)
-          .environmentObject(manager)
+          .environment(PhotoLibraryManager(overrideService: service))
+          .environment(timeline)
+          .environment(collections)
+          .environment(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
-          .environment(\.bodyInvalidationCounter, counter))
+          .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true))
       window.orderFront(nil)
 
-      try #require(await eventually("the summary renders") { counter.renderedText[key] != nil })
-      #expect(counter.renderedText[key] == Self.loading)
-
+      try #require(
+        await observe(in: window) { NativeViewAccess.containsText(Self.loading, in: window) })
+      #expect(NativeViewAccess.containsText(Self.loading, in: window))
       io.release(snapshot)
       await timeline.waitUntilSettled()
-      #expect(
-        await eventually("the summary leaves the loading text") {
-          counter.renderedText[key].map { $0 != Self.loading } ?? false
-        })
-      let expected = pane == .month ? ["1/1 exported"] : ["1 photo"]
-      #expect(
-        await eventually("the summary shows \(expected)") { counter.renderedText[key] == expected })
+      let expected = pane == .month ? "1/1 exported" : "1 photo"
+      #expect(await observe(in: window) { NativeViewAccess.containsText(expected, in: window) })
+      #expect(!NativeViewAccess.containsText(Self.loading, in: window))
     }
   }
 #endif

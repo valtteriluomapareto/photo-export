@@ -33,7 +33,7 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
     fingerprint every launch — is what keeps a network-share remount (whose path-derived
     fingerprint drifts) from opening an empty record dir and re-exporting everything (issue
     #127). The same id keys the AutoSync per-destination state
-    (`AutoSync/destinations/<destinationId>/`), the current-run journal, and the
+    (`AutoSync/destinations/<destinationId>/`) and the
     safety-confirmation store; the fingerprint is retained only as the identity-confidence
     signal for the AutoSync safety gate. Identity ownership and the keying invariant live in
     [`docs/reference/architecture-conventions.md`](architecture-conventions.md) §Destination
@@ -44,6 +44,14 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
 - Collection store files (sit in the same per-destination directory):
   - `collection-records.jsonl` — append-only log of placement and record mutations
   - `collection-records.json` — compacted snapshot containing `placements` (placement metadata keyed by placement id) and `records` (record bodies nested by `[placementId][assetId]`)
+
+Released-writer compatibility fixtures cover record snapshots/logs and the Auto Export
+dirty, retry, summary, per-destination token, current-run, safety and scope stores, plus
+the stable destination id. See [historical persistence fixtures](../project/historical-persistence-fixtures.md)
+for first-release provenance, isolated defaults transport and the explicit global
+PhotoKit-token coverage limitation. Retired destination token and current-run journal files
+are left untouched and ignored; their immutable fixtures still verify the released payloads
+using raw Data/JSON checks.
 
 ## Record-store value sets
 
@@ -60,7 +68,7 @@ and the backticked, comma-separated value lists in this shape.
 | `ExportStatus` | variant `status` | `pending`, `inProgress`, `done`, `failed` |
 | `ExportVariantReason` | variant `reason`; an open set, unknown codes round-trip | `interrupted`, `editedResourceUnavailable`, `editedUnavailableOriginalBackedUp`, `pairedVideoUnavailable` |
 | `ExportRecordMutation.Operation` | timeline log `op` | `upsert`, `delete` |
-| `CollectionExportRecordStore.LogOp.OpDiscriminator` | collection log `op` | `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord` |
+| `CollectionExportRecordStore.LogOp.OpDiscriminator` | collection log `op` | `upsertPlacement`, `upsertRecord`, `deleteRecord` |
 
 The AutoSync metadata files have their own persisted enums, such as
 [`AutoSyncFailureCategory`](../../photo-export/Models/AutoSyncFailureCategory.swift); see
@@ -179,7 +187,7 @@ settings. The other kinds use the `standard` policy, which honors those settings
     Shared albums never nest. When sanitized sibling names collide, later placements get
     `_2`, `_3`, … suffixes; a shared album collides only with other shared albums.
   - `createdAt` (ISO8601 date) — diagnostic only, not part of identity.
-- `LogOp` (JSON Lines): four operations, distinguished by an `op` discriminator (a
+- `LogOp` (JSON Lines): three operations, distinguished by an `op` discriminator (a
   `CollectionExportRecordStore.LogOp.OpDiscriminator` value). Record-level bodies are the
   same `{ variants: { ... } }` shape as the snapshot, under the key `record`.
 
@@ -247,15 +255,17 @@ Both stores follow the same lifecycle on their own files: `export-records.json` 
 `collection-records.jsonl` for the collection store.
 
 1. On first run, the store creates its directory.
-2. On launch and on every destination change, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state. The app does this off the main actor: the files are read on the store's IO queue, after any writes still queued for the previous destination, and decoded in a detached task. The store is `.loading` until the result is installed in one main-actor turn; meanwhile its records read as empty and it accepts no mutations. A load that a newer configure replaced is discarded. The blocking `configure(for:)` runs the same steps on the main actor without publishing `.loading` (tests and the read-failure Retry use it; clearing the destination reads nothing).
+2. On launch and on every destination change, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state. The app does this off the main actor: the files are read on the store's IO queue, after any writes still queued for the previous destination, and decoded in a detached task, together with the counters and filename claims installed for that history epoch. The store is `.loading` until the result is installed in one main-actor turn; meanwhile its records read as empty and it accepts no mutations. A load that a newer configure replaced is discarded. Configuration and Retry use the asynchronous path in shipping code and tests. A transition waits for previous maintenance and writes before replacing their owner. While waiting, it retains the old history privately and exposes `.loading` with empty public queries. Rare retained/unreadable-history recovery rebuilds its indexes synchronously in one admitted turn, including a final commit that needs its captured history restored.
 3. On updates, the store:
-   - Applies the mutation to in-memory state immediately
+   - Waits for store-owned maintenance admission, then rechecks destination and history ownership before applying one synchronous, bounded batch to memory
    - Appends a JSON line to its log (`export-records.jsonl` or `collection-records.jsonl`)
-   - Compacts every 1,000 mutations:
-     - Writes a full snapshot to a temp file
-     - Atomically replaces the snapshot (`export-records.json` or `collection-records.json`)
-     - Truncates the log
-4. On quit, any pending compaction can run; otherwise the log is replayed at next launch.
+   - Requests a checkpoint at idle/terminal boundaries once at least 1,000 operations have accumulated. A count of 4,000 operations or 3,000,000 encoded log bytes requests maintenance at the next admitted mutation boundary. Explicit maintenance can checkpoint smaller histories. Admission closes before the history is captured, earlier writes drain, and the IO worker encodes, synchronizes and atomically replaces the snapshot before truncating the log. Admission reopens after physical IO completes, including failure or cancellation. Appends never capture whole-history snapshots.
+4. The durable log is replayed at next launch if no successful checkpoint truncated it. Checkpoint eligibility uses operation count and log bytes; it does not estimate or guarantee replay time.
+
+`drainSynchronously()` on the JSONL writer and both record stores blocks its caller
+until queued IO finishes and delivers any pending persistence failure. It must never
+be called from the writer's IO queue. Finishing the drain does not imply failed writes
+succeeded; the existing persistence state still reports those failures.
 
 ## Crash Safety
 
@@ -294,8 +304,7 @@ adjusted asset whose `original` is `done` and whose `edited` failed with reason
 - `exportInfo(assetId:)` (timeline) and `exportInfo(assetId:placement:)` (collections)
   return the record; callers read `variants` directly, including the paired-video keys.
 - `monthSummary(assets:selection:livePhotosPaired:)` counts the loaded assets for which
-  `isExported` holds. The older `monthSummary(year:month:totalAssets:)` and
-  `yearExportedCount(year:)` count `original` `done` records only.
+  `isExported` holds.
 - `sidebarSummary(year:month:totalCount:adjustedCount:selection:livePhotosPaired:)`
   approximates the count for sidebar rows without loaded `AssetDescriptor`s, from
   per-month record counters. It returns nil until `adjustedCount` is known. The exported

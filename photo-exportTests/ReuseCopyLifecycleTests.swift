@@ -42,16 +42,17 @@ struct ReuseCopyLifecycleTests {
     let defaults: UserDefaults
     let asset = TestAssetFactory.makeAsset(id: "shared", hasAdjustments: false)
 
-    init() throws {
+    init(destinationIO: (any DestinationIOExecuting)? = nil) async throws {
       defaults = TestScratch.defaults(suiteName: defaultsName)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: files, userDefaults: defaults)
+        assetResourceWriter: writer, fileSystem: files,
+        destinationIO: destinationIO ?? DestinationIO(), userDefaults: defaults)
       photos.favoritesAssets = [asset]
       photos.resourcesByAssetId[asset.id] = [
         ResourceDescriptor(type: .photo, originalFilename: "IMG.JPG")
@@ -65,8 +66,8 @@ struct ReuseCopyLifecycleTests {
 
     func cleanup() {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)
@@ -75,7 +76,7 @@ struct ReuseCopyLifecycleTests {
 
   @Test(.timeLimit(.minutes(1)))
   func mainActorRespondsBeforeBlockedReuseCopyFinishes() async throws {
-    let fixture = try Fixture()
+    let fixture = try await Fixture()
     defer { fixture.cleanup() }
     let observation = Observation()
     let offMain = Observation()
@@ -101,7 +102,7 @@ struct ReuseCopyLifecycleTests {
   @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
   func cancelledCopyCannotCommitOrFallback(switchDestination: Bool, sourceError: Bool) async throws
   {
-    let fixture = try Fixture()
+    let fixture = try await Fixture()
     let gate = CopyGate()
     try await withCleanup {
       fixture.files.copyHook = { _, output in
@@ -120,8 +121,8 @@ struct ReuseCopyLifecycleTests {
         fixture.manager.interruptForDestinationUnavailable()
         fixture.destination.selectedFolderURL = fixture.destination.rootURL.appendingPathComponent(
           "B")
-        fixture.timeline.configure(for: "B")
-        fixture.collections.configure(for: "B")
+        await fixture.timeline.configureAndWait(for: "B")
+        await fixture.collections.configureAndWait(for: "B")
         fixture.collections.upsertPlacement(.favorites())
         fixture.collections.markVariantExported(
           assetId: "B-only", placement: .favorites(), variant: .original,
@@ -149,8 +150,7 @@ struct ReuseCopyLifecycleTests {
         let newScope = try #require(fixture.destination.selectedFolderURL)
         fixture.destination.endScopedAccess(for: newScope)
       }
-      let directory = try fixture.destination.urlForRelativeDirectory(
-        "Collections/Favorites/", createIfNeeded: false)
+      let directory = fixture.destination.rootURL.appendingPathComponent("Collections/Favorites/")
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
     } cleanup: {
       gate.release()
@@ -160,8 +160,9 @@ struct ReuseCopyLifecycleTests {
   }
 
   @Test(.timeLimit(.minutes(1)))
-  func oldCopyCleanupCannotDamageSamePathReplacement() async throws {
-    let fixture = try Fixture()
+  func replacementWaitsForOldCopyAndKeepsItsOwnStage() async throws {
+    let io = RecordingDestinationIO()
+    let fixture = try await Fixture(destinationIO: io)
     let gate = CopyGate()
     let replacementWritten = AsyncCheckpoint()
     try await withCleanup {
@@ -176,13 +177,19 @@ struct ReuseCopyLifecycleTests {
         fixture.timeline.removeVariant(assetId: fixture.asset.id, variant: variant)
       }
       fixture.writer.afterWriteCheckpoint = replacementWritten
+      let oldSubmissions = io.submissions.value
       fixture.manager.startExportFavorites()
+      try #require(
+        await eventually("replacement preparation admitted") {
+          io.submissions.value > oldSubmissions
+        })
+      #expect(fixture.writer.writeCalls.isEmpty)
+      gate.release()
       await replacementWritten.waitForEnter(count: 1)
       let replacement = try #require(fixture.manager.currentTask)
       let output = try #require(fixture.writer.writeCalls.last?.url)
       let expectedBytes = try Data(contentsOf: output)
       fixture.manager.progressState.renderActivity = .rendering
-      gate.release()
       await old.value
       #expect(try Data(contentsOf: output) == expectedBytes)
       #expect(fixture.manager.currentJobAssetId == fixture.asset.id)
@@ -205,6 +212,8 @@ struct ReuseCopyLifecycleTests {
       #expect(
         fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
           .variants[.original]?.status == .done)
+      #expect(fixture.destination.beginScopedAccessCount == 2)
+      #expect(fixture.destination.endScopedAccessCount == 2)
     } cleanup: {
       gate.release()
       fixture.cleanup()
@@ -214,7 +223,7 @@ struct ReuseCopyLifecycleTests {
   }
 
   @Test func partialSourceCopyIsRemovedBeforePhotoKitFallback() async throws {
-    let fixture = try Fixture()
+    let fixture = try await Fixture()
     defer { fixture.cleanup() }
     fixture.files.copyHook = { _, output in
       try Data("partial".utf8).write(to: output)

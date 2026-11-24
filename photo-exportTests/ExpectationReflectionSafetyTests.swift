@@ -12,12 +12,12 @@ import Testing
   @Suite(.timeLimit(.minutes(1)))
   struct ExpectationReflectionSafetyTests {
     private struct SubscribingView: View {
-      @EnvironmentObject var manager: ExportManager
-      @EnvironmentObject var library: PhotoLibraryManager
-      @EnvironmentObject var store: ExportRecordStore
-      @EnvironmentObject var collections: CollectionExportRecordStore
-      @EnvironmentObject var progress: ExportProgressState
-      @ObservedObject var counts: TimelineSidebarCounts
+      @Environment(ExportManager.self) var manager
+      @Environment(PhotoLibraryManager.self) var library
+      @Environment(ExportRecordStore.self) var store
+      @Environment(CollectionExportRecordStore.self) var collections
+      @Environment(ExportProgressState.self) var progress
+      let counts: TimelineSidebarCounts
       var body: some View {
         Text(
           "\(manager.queueCount) \(library.libraryRevision) \(store.state) \(progress.totalJobsCompleted)"
@@ -44,13 +44,13 @@ import Testing
       let window: NSWindow
       var isLoaded = false
 
-      init() {
+      init() async {
         defaults = TestScratch.defaults(suiteName: suite)
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -59,8 +59,8 @@ import Testing
         counts = TimelineSidebarCounts(service: service)
         monthViewModel = MonthViewModel(photoLibraryService: service)
         let content = SubscribingView(counts: counts)
-          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-          .environmentObject(manager).environmentObject(manager.progressState)
+          .environment(library).environment(timeline).environment(collections)
+          .environment(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         hostingView = NSHostingView(rootView: content)
         window = NSWindow(
@@ -97,7 +97,7 @@ import Testing
     /// has reference cycles (Combine subscriptions, collaborator back-references, SwiftUI hosting
     /// internals). Both must be recorded as failed expectations; a crash ends the test run.
     @Test func failingExpectationsOnCycleRootsRecordInsteadOfCrashing() async {
-      let f = HostedFixture()
+      let f = await HostedFixture()
       let failures = IssueCount()
       withKnownIssue("Deliberate failures capture cyclic receivers") {
         #expect(f.manager.isRunning)

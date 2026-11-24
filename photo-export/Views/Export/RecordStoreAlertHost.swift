@@ -5,12 +5,14 @@ import SwiftUI
 /// only a corrupt snapshot offers Reset Records. Timeline takes presentation priority.
 @MainActor
 struct RecordStoreAlertHost: ViewModifier {
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @State private var isShowingRecoveryImport = false
+  @State private var timelineDismissed = false
+  @State private var collectionDismissed = false
 
   func body(content: Content) -> some View {
     timelineAlert(content: content)
@@ -19,10 +21,10 @@ struct RecordStoreAlertHost: ViewModifier {
         isPresented: collectionAlertBinding,
         actions: {
           if collectionExportRecordStore.state == .persistenceFailed {
-            Button("Retry") { collectionExportRecordStore.retryPersistence() }
+            Button("Retry") { Task { await collectionExportRecordStore.retryHistoryPersistence() } }
           } else {
             Button("Reset Records", role: .destructive) {
-              collectionExportRecordStore.resetToEmpty()
+              Task { await collectionExportRecordStore.resetHistory() }
             }
           }
           Button("Quit") { NSApplication.shared.terminate(nil) }
@@ -35,6 +37,18 @@ struct RecordStoreAlertHost: ViewModifier {
           }
         }
       )
+      .onChange(of: exportRecordStore.destinationId) { timelineDismissed = false }
+      .onChange(of: collectionExportRecordStore.destinationId) { collectionDismissed = false }
+      .onChange(of: exportRecordStore.state) { _, state in
+        if state == .ready || state == .unconfigured || state == .failed {
+          timelineDismissed = false
+        }
+      }
+      .onChange(of: collectionExportRecordStore.state) { _, state in
+        if state == .ready || state == .unconfigured || state == .failed {
+          collectionDismissed = false
+        }
+      }
       .sheet(isPresented: $isShowingRecoveryImport) {
         ImportView()
       }
@@ -47,11 +61,13 @@ struct RecordStoreAlertHost: ViewModifier {
         isPresented: timelineAlertBinding,
         actions: {
           if exportRecordStore.state == .persistenceFailed {
-            Button("Retry") { exportRecordStore.retryPersistence() }
+            Button("Retry") { Task { await exportRecordStore.retryHistoryPersistence() } }
           } else {
             Button("Reset and Rebuild from Folder…", action: resetAndRebuild)
               .disabled(!canRebuild)
-            Button("Reset Records", role: .destructive) { exportRecordStore.resetToEmpty() }
+            Button("Reset Records", role: .destructive) {
+              Task { await exportRecordStore.resetHistory() }
+            }
           }
           Button("Quit") { NSApplication.shared.terminate(nil) }
         },
@@ -95,13 +111,14 @@ struct RecordStoreAlertHost: ViewModifier {
 
   private func resetAndRebuild() {
     guard exportRecordStore.state == .failed, canRebuild else { return }
-    exportRecordStore.resetToEmpty()
-    guard exportRecordStore.state == .ready, canRebuild else { return }
-    // Claim import synchronously: an empty, ready store must not be exposed to
-    // Auto Export while waiting for the recovery sheet to appear.
-    exportManager.startImport()
-    guard exportManager.isImporting else { return }
-    isShowingRecoveryImport = true
+    Task {
+      await exportRecordStore.resetHistory {
+        guard canRebuild else { return }
+        // Claim import in the same turn that recovery publishes an empty ready history.
+        exportManager.startImport()
+        if exportManager.isImporting { isShowingRecoveryImport = true }
+      }
+    }
   }
 
   private func storageFailureMessage(_ detail: String?) -> String {
@@ -113,8 +130,8 @@ struct RecordStoreAlertHost: ViewModifier {
 
   private var timelineAlertBinding: Binding<Bool> {
     Binding(
-      get: { exportRecordStore.state.needsRecovery },
-      set: { _ in }  // dismissal handled by the actions above
+      get: { exportRecordStore.state.needsRecovery && !timelineDismissed },
+      set: { if !$0 { timelineDismissed = true } }
     )
   }
 
@@ -123,10 +140,10 @@ struct RecordStoreAlertHost: ViewModifier {
       get: {
         // Only show the collection alert when the timeline alert isn't already active so
         // SwiftUI doesn't try to present two alerts on the same view at once.
-        !exportRecordStore.state.needsRecovery
-          && collectionExportRecordStore.state.needsRecovery
+        (!exportRecordStore.state.needsRecovery || timelineDismissed)
+          && collectionExportRecordStore.state.needsRecovery && !collectionDismissed
       },
-      set: { _ in }
+      set: { if !$0 { collectionDismissed = true } }
     )
   }
 }

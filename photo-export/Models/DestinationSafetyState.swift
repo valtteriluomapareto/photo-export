@@ -8,6 +8,10 @@ enum DestinationSafetyState: Equatable, Sendable {
   /// record matching the current scope selection.
   case safe
 
+  /// The destination has not been checked yet: its listing or history is still loading.
+  /// Automatic export waits, so a newly picked folder never counts as safe by default.
+  case checking
+
   /// Automatic export is blocked because the destination is non-empty and has no
   /// matching confirmation/import state.
   case unsafeNeedsConfirmation

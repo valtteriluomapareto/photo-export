@@ -24,7 +24,11 @@ struct HistoricalPersistenceFixtureTests {
     let toolchain: String
     let target: String
     let hostRuntime: String
+    struct AuxiliaryGeneration: Decodable {
+      let files: [String: String]
+    }
     let releases: [String: Release]
+    let auxiliaryGenerations: [String: AuxiliaryGeneration]
   }
 
   private static func digest(_ bytes: Data) -> String {
@@ -94,15 +98,18 @@ struct HistoricalPersistenceFixtureTests {
           (try? root.appendingPathComponent($0).resourceValues(forKeys: [.isRegularFileKey])
             .isRegularFile) == true
         })
-      #expect(files == Set(release.files.keys))
-      for (path, expected) in release.files {
+      let allFiles = release.files.merging(manifest.auxiliaryGenerations[tag]?.files ?? [:]) {
+        old, _ in old
+      }
+      #expect(files == Set(allFiles.keys))
+      for (path, expected) in allFiles {
         #expect(Self.digest(try Data(contentsOf: root.appendingPathComponent(path))) == expected)
       }
     }
   }
 
   @Test(arguments: tags)
-  func timelineSnapshotReplayAndReopenPreserveHistoricalSemantics(tag: String) throws {
+  func timelineSnapshotReplayAndReopenPreserveHistoricalSemantics(tag: String) async throws {
     let fixture = try Fixture(tag: tag)
     defer { fixture.cleanup() }
     for _ in 0..<2 {
@@ -110,8 +117,8 @@ struct HistoricalPersistenceFixtureTests {
       // compaction can mask a missing load/replay operation.
       let a = ExportRecordStore(baseDirectoryURL: fixture.root)
       let b = ExportRecordStore(baseDirectoryURL: fixture.root)
-      a.configure(for: "A")
-      b.configure(for: "B")
+      await a.configureAndWait(for: "A")
+      await b.configureAndWait(for: "B")
       #expect(a.state == .ready)
       #expect(b.state == .ready)
       let expectedIds: Set<String> =
@@ -181,19 +188,19 @@ struct HistoricalPersistenceFixtureTests {
           ).isEmpty)
         #expect(a.exportInfo(assetId: "video")?.variants[.original]?.subfolder == "videos")
       }
-      a.flushForTesting()
-      b.flushForTesting()
+      a.drainSynchronously()
+      b.drainSynchronously()
     }
   }
 
-  @Test func collectionSnapshotReplayAndReopenPreservePlacementOwnership() throws {
+  @Test func collectionSnapshotReplayAndReopenPreservePlacementOwnership() async throws {
     let fixture = try Fixture(tag: "v1.6.5")
     defer { fixture.cleanup() }
     for _ in 0..<2 {
       let a = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
       let b = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
-      a.configure(for: "A")
-      b.configure(for: "B")
+      await a.configureAndWait(for: "A")
+      await b.configureAndWait(for: "B")
       #expect(a.state == .ready && b.state == .ready)
       #expect(
         Set(a.placements.keys) == ["collections:favorites", "fixture-album", "fixture-shared"])
@@ -262,21 +269,21 @@ struct HistoricalPersistenceFixtureTests {
       #expect(
         !b.isExported(
           asset: asset, placement: favorites, selection: .edited, livePhotosPaired: false))
-      a.flushForTesting()
-      b.flushForTesting()
+      a.drainSynchronously()
+      b.drainSynchronously()
     }
   }
 
   /// Import Existing Backup's album adoption on top of v1.6.5 collection history: it appends
   /// only the existing placement and record operations, keeps the saved placement's folder and
   /// completed variants, and the result reopens.
-  @Test func collectionBulkImportOnHistoricalStoreUsesExistingOperations() throws {
+  @Test func collectionBulkImportOnHistoricalStoreUsesExistingOperations() async throws {
     let fixture = try Fixture(tag: "v1.6.5")
     defer { fixture.cleanup() }
     let logURL = fixture.root.appendingPathComponent("A/collection-records.jsonl")
     let originalLog = try Data(contentsOf: logURL)
     let store = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
-    store.configure(for: "A")
+    await store.configureAndWait(for: "A")
     let saved = try #require(store.placements["fixture-album"])
     let imported = ExportPlacement(
       kind: .album, id: "collections:album:aaaaaaaaaaaaaaaa:bbbbbbbb", displayName: "Imported",
@@ -298,7 +305,7 @@ struct HistoricalPersistenceFixtureTests {
     ]
     let placementsBefore = store.placements.count
     store.bulkImportRecords(batches)
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.recordedVariantCount(of: batches) == 4)
     #expect(store.placements.count == placementsBefore + 1)
 
@@ -318,7 +325,7 @@ struct HistoricalPersistenceFixtureTests {
     }
 
     let reopened = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
-    reopened.configure(for: "A")
+    await reopened.configureAndWait(for: "A")
     #expect(reopened.state == .ready)
     let album = try #require(reopened.placements["fixture-album"])
     #expect(album.relativePath == "Collections/Albums/Nested/Album/")
@@ -334,6 +341,6 @@ struct HistoricalPersistenceFixtureTests {
     #expect(
       reopened.exportInfo(assetId: "video", placement: album)?.variants[.original]?.subfolder
         == "videos")
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 }

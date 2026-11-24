@@ -44,40 +44,7 @@ jobs:
         id: ctx
         env:
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
-        run: |
-          echo "::group::Build context"
-          IS_TAG="false"
-          VERSION="0.0.0-dev"
-          IS_DRY_RUN="true"
-          SHOULD_CREATE_RELEASE="false"
-
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            IS_TAG="true"
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "Version tag selected: v${VERSION}"
-          fi
-
-          # Ref identity never overrides a manual build-only request.
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$IS_TAG" == "true" ]]; then
-            IS_DRY_RUN="false"
-          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "${INPUT_DRY_RUN:-}" == "false" \
-            && ( "$IS_TAG" == "true" || "$GITHUB_REF" == refs/heads/* ) ]]; then
-            IS_DRY_RUN="false"
-          fi
-          if [[ "$IS_TAG" == "true" && "$IS_DRY_RUN" == "false" ]]; then
-            SHOULD_CREATE_RELEASE="true"
-          fi
-
-          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "is_dry_run=${IS_DRY_RUN}" >> "$GITHUB_OUTPUT"
-          echo "should_create_release=${SHOULD_CREATE_RELEASE}" >> "$GITHUB_OUTPUT"
-
-          echo "is_tag=${IS_TAG}"
-          echo "version=${VERSION}"
-          echo "is_dry_run=${IS_DRY_RUN}"
-          echo "should_create_release=${SHOULD_CREATE_RELEASE}"
-          echo "::endgroup::"
+        run: bash scripts/ci/release-context-direct.sh
 
       - name: Verify MARKETING_VERSION matches tag
         if: steps.ctx.outputs.is_tag == 'true'
@@ -110,98 +77,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          echo "::group::Keychain setup"
-
-          KEYCHAIN_PATH="${RUNNER_TEMP}/release.keychain-db"
-          KEYCHAIN_PASSWORD="$(uuidgen)"
-          echo "::add-mask::${KEYCHAIN_PASSWORD}"
-
-          echo "Creating temporary keychain at ${KEYCHAIN_PATH}..."
-          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-
-          echo "Configuring keychain settings (no auto-lock)..."
-          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
-
-          echo "Unlocking keychain..."
-          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-
-          echo "Adding keychain to search list..."
-          security list-keychains -d user -s "${KEYCHAIN_PATH}" $(security list-keychains -d user | tr -d '"')
-
-          echo "Decoding and importing Developer ID certificate..."
-          CERT_PATH="${RUNNER_TEMP}/certificate.p12"
-          echo "${CERTIFICATE_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
-          security import "${CERT_PATH}" \
-            -k "${KEYCHAIN_PATH}" \
-            -P "${CERTIFICATE_PASSWORD}" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          rm -f "${CERT_PATH}"
-
-          echo "Setting key partition list for codesign access..."
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s -k "${KEYCHAIN_PASSWORD}" \
-            "${KEYCHAIN_PATH}"
-
-          echo "Storing notarytool credentials in keychain..."
-          xcrun notarytool store-credentials "notarytool-profile" \
-            --apple-id "${APPLE_ID}" \
-            --team-id "${APPLE_TEAM_ID}" \
-            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
-            --keychain "${KEYCHAIN_PATH}"
-
-          echo "Verifying certificate was imported:"
-          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
-
-          # Export for later steps
-          echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
-          echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}" >> "$GITHUB_ENV"
-
-          echo "Keychain setup complete."
-          echo "::endgroup::"
+        run: bash scripts/ci/setup-keychain-direct.sh
 
       # ── Archive ───────────────────────────────────────────────────────
       - name: Archive Release build
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          echo "::group::Archive"
-          ARCHIVE_PATH="${RUNNER_TEMP}/photo-export.xcarchive"
-
-          BUILD_NUMBER="${{ github.run_number }}"
-          echo "Archiving Release build..."
-          echo "  ARCHS=arm64 x86_64 (universal)"
-          echo "  CODE_SIGN_STYLE=Manual"
-          echo "  CODE_SIGN_IDENTITY=Developer ID Application"
-          echo "  DEVELOPMENT_TEAM=[REDACTED]"
-          echo "  KEYCHAIN_PATH=${KEYCHAIN_PATH}"
-          echo "  CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"
-
-          set -o pipefail
-          xcodebuild archive \
-            -project "${PROJECT}" \
-            -scheme "${SCHEME}" \
-            -configuration Release \
-            -destination 'platform=macOS' \
-            -archivePath "${ARCHIVE_PATH}" \
-            "ARCHS=arm64 x86_64" \
-            CODE_SIGN_STYLE=Manual \
-            "CODE_SIGN_IDENTITY=Developer ID Application" \
-            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            "OTHER_CODE_SIGN_FLAGS=--keychain ${KEYCHAIN_PATH}" \
-            CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
-            2>&1 | python3 scripts/ci/sanitize-release-log.py \
-              | tee "${RUNNER_TEMP}/photo-export-direct-archive.log" | tail -30
-
-          echo ""
-          echo "Archive created at: ${ARCHIVE_PATH}"
-          echo "Archive size: $(du -sh "${ARCHIVE_PATH}" | cut -f1)"
-          ls -la "${ARCHIVE_PATH}/Products/Applications/"
-
-          echo "ARCHIVE_PATH=${ARCHIVE_PATH}" >> "$GITHUB_ENV"
-          echo "::endgroup::"
+        run: bash scripts/ci/archive-direct.sh
 
       - name: Upload archive log
         if: always()

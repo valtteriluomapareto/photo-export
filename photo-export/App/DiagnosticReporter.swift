@@ -19,14 +19,6 @@ struct DiagnosticReporter {
   /// maintainer can see exactly how long the fetch took / how many changes
   /// were processed without needing Console snippets.
   let lastCatchUpSummary: PhotoLibraryPersistentChangeAdapter.CatchUpSummary?
-  /// In-flight AutoSync run journal, if any. Read once at panel-open time
-  /// from `FileBackedAutoSyncCurrentRunStore`. Present means the previous
-  /// session's AutoSync fan-out was killed mid-flight (the manager deletes
-  /// the file on clean exit). Surfaced near the top of the report so the
-  /// abnormal-exit signal is visible before the record-count summaries.
-  /// Absent → the report omits the section entirely, keeping reports
-  /// byte-identical to today for users not hitting the issue.
-  let previousRunJournal: AutoSyncRunJournal?
   private let now: () -> Date
 
   init(
@@ -36,7 +28,6 @@ struct DiagnosticReporter {
     appVersion: String,
     buildNumber: String,
     lastCatchUpSummary: PhotoLibraryPersistentChangeAdapter.CatchUpSummary? = nil,
-    previousRunJournal: AutoSyncRunJournal? = nil,
     now: @escaping () -> Date = Date.init
   ) {
     self.timelineStore = timelineStore
@@ -45,7 +36,6 @@ struct DiagnosticReporter {
     self.appVersion = appVersion
     self.buildNumber = buildNumber
     self.lastCatchUpSummary = lastCatchUpSummary
-    self.previousRunJournal = previousRunJournal
     self.now = now
   }
 
@@ -56,7 +46,6 @@ struct DiagnosticReporter {
     lines.append("App version: \(appVersion) (\(buildNumber))")
     lines.append("Destination ID: \(destinationId ?? "<none>")")
     lines.append("")
-    lines.append(contentsOf: previousRunSection())
     lines.append(contentsOf: catchUpSection())
 
     let timelineFailed = collectTimelineProblems(status: .failed)
@@ -209,34 +198,6 @@ struct DiagnosticReporter {
         lines.append("  fallback: original exported as \(fallback)")
       }
     }
-    lines.append("")
-    return lines
-  }
-
-  /// Previous AutoSync run journal block. Emitted **only when a journal
-  /// exists** on disk for the active destination — i.e. when the previous
-  /// session's AutoSync fan-out was killed mid-flight (the manager deletes
-  /// the journal on clean exit). Omitted entirely (no "(none)" placeholder)
-  /// when absent, so reports for healthy users stay byte-identical to today.
-  private func previousRunSection() -> [String] {
-    guard let journal = previousRunJournal else { return [] }
-    var lines: [String] = []
-    lines.append("== Previous Auto-Export Run ==")
-    lines.append("Started:        \(Self.formatter.string(from: journal.startedAt))")
-    lines.append("Trigger:        \(journal.trigger)")
-    lines.append("Planned scopes: \(journal.scopes.joined(separator: ", "))")
-    if let currentScope = journal.currentScope {
-      if let startedAt = journal.currentScopeStartedAt {
-        lines.append(
-          "Current scope:  \(currentScope) (since \(Self.formatter.string(from: startedAt)))"
-        )
-      } else {
-        lines.append("Current scope:  \(currentScope)")
-      }
-    } else {
-      lines.append("Current scope:  (none — killed before first sub-scope started)")
-    }
-    lines.append("Status:         in-flight on launch (previous session did not finish cleanly)")
     lines.append("")
     return lines
   }

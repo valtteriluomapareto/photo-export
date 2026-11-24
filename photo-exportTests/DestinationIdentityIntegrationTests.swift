@@ -14,8 +14,8 @@ import Testing
 /// AutoSync dirty-state leg is covered by
 /// `AutoSyncReducerTests.remountWithDriftedFingerprintKeepsStableIdAndPreservesDirty`.
 ///
-/// Exercises the real security-scope path in `validate(url:)`, so it shares the
-/// `BareTmpScopeProbe` disable guard — runs on the CI macOS runner.
+/// Uses real scratch folders/bookmarks with injected scope acquisition, so this keying
+/// contract runs independently of the host OS's bare temporary URL scope behavior.
 @MainActor
 struct DestinationIdentityIntegrationTests {
 
@@ -24,10 +24,7 @@ struct DestinationIdentityIntegrationTests {
   }
 
   @Test(
-    .disabled(
-      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner runs this."
-    ), .timeLimit(.minutes(2)))
+    .timeLimit(.minutes(2)))
   func remountDriftKeepsEveryKeyOnStableId() async throws {
     let dir = TestScratch.directory("RemountIntegration")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -45,8 +42,12 @@ struct DestinationIdentityIntegrationTests {
       skipRestore: true, userDefaults: defaults,
       bookmarkDefaultsKey: "Bookmark-\(UUID().uuidString)",
       stableIdDefaultsKey: "StableId-\(UUID().uuidString)",
-      fingerprintProvider: { _ in currentFP })
-    manager.persistSelectedFolderForTesting(dir)
+      fingerprintProvider: { _ in currentFP },
+      storedBookmarkScopeAcquirer: { _ in true },
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }
+    )
+    await manager.persistSelectionAndWait(dir)
     let stableId = try #require(manager.destinationId)
 
     let timelineStore = ExportRecordStore(baseDirectoryURL: recordsRoot)
@@ -66,7 +67,7 @@ struct DestinationIdentityIntegrationTests {
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
     try confirmationStore.confirm(destinationId: stableId)
     let safetyMonitor = DestinationSafetyMonitor(
-      identityPublisher: manager.$identity.eraseToAnyPublisher(),
+      identityPublisher: manager.identityPublisher,
       exportRecordStore: timelineStore,
       collectionExportRecordStore: collectionStore,
       confirmationStore: confirmationStore,
@@ -76,19 +77,25 @@ struct DestinationIdentityIntegrationTests {
       destinationManager: manager, lifecycleCoordinator: coordinator,
       safetyMonitor: safetyMonitor)
 
+    var verdicts: [DestinationSafetyMonitor.Verdict] = []
+    let verdictCancellable = safetyMonitor.verdictPublisher.sink { verdicts.append($0) }
+    defer { verdictCancellable.cancel() }
+    let checked: [DestinationSafetyMonitor.Verdict] = [
+      .init(stableId: nil, needsConfirmation: false),
+      .init(stableId: stableId, needsConfirmation: false),
+    ]
+
     coordinator.attach(
       initial: DestinationIdentitySnapshot(identity: manager.identity),
-      identityPublisher: manager.$identity.eraseToAnyPublisher())
+      identityPublisher: manager.identityPublisher)
     safetyMonitor.attach()
     // The stores load S's history off the main actor; the safety check waits for it.
     await timelineStore.waitUntilSettled()
     await collectionStore.waitUntilSettled()
     #expect(timelineStore.state == .ready)
     #expect(collectionStore.state == .ready)
-    #expect(
-      await eventually("the safety check of S finishes") {
-        safetyMonitor.completedEvaluationCount == 1
-      })
+    #expect(await eventually("the safety check of S finishes") { verdicts.count >= 2 })
+    #expect(verdicts == checked)
 
     var snapshots: [DestinationSnapshot] = []
     let cancellable = adapter.destinationSnapshotPublisher.sink { snapshots.append($0) }
@@ -101,7 +108,7 @@ struct DestinationIdentityIntegrationTests {
     // Remount drift: same folder, different fingerprint id.
     currentFP = lowConfidence("/Volumes/mount-B/backup")
     #expect(currentFP?.id != stableId)
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     for _ in 0..<5 { await Task.yield() }
     await timelineStore.waitUntilSettled()
     await collectionStore.waitUntilSettled()
@@ -117,7 +124,7 @@ struct DestinationIdentityIntegrationTests {
     // `confirmationPersistsAcrossRemountDrift` covers the keying directly; here we assert the
     // wired monitor stays quiet.)
     #expect(confirmationStore.isConfirmed(destinationId: stableId))
-    #expect(safetyMonitor.completedEvaluationCount == 1)
+    #expect(verdicts == checked)
     #expect(safetyMonitor.needsSafetyConfirmation == false)
   }
 }

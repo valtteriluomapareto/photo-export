@@ -9,17 +9,16 @@ enum AutoSyncBlockedReason: String, Codable, Equatable, CaseIterable, Sendable {
   /// access in System Settings before Auto Export can run.
   case photosAccessMissing
 
-  /// Photos authorization is `.limited` and the visible selection is empty. A non-empty
-  /// limited library runs Auto Export normally with the limited-access notice visible —
-  /// this case is reserved for "nothing visible to export."
-  case limitedPhotosAccess
-
   /// No destination is currently selected.
   case destinationMissing
 
   /// Destination is selected but its volume is not mounted or its bookmark cannot be
   /// resolved. Resolves to `idle` once the drive becomes reachable again.
   case destinationUnavailable
+
+  /// The safety monitor has not finished checking the destination. Resolves on its own once
+  /// the folder has been listed and its history loaded.
+  case destinationChecking
 
   /// Destination is reachable but the safety scan blocks automatic runs (e.g., non-empty
   /// existing backup with no matching records, or a low-confidence identity that the user
@@ -38,7 +37,4 @@ enum AutoSyncBlockedReason: String, Codable, Equatable, CaseIterable, Sendable {
   /// `manualExportActive`.
   case importActive
 
-  /// At least one variant is sitting in retry backoff and there is no other work eligible
-  /// for export. Becomes `idle` when the backoff window elapses.
-  case retryBackoff
 }

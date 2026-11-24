@@ -9,9 +9,9 @@ import SwiftUI
 /// exported" badge agrees with the sidebar's `YearRow` / `MonthRow` badges without us
 /// having to re-derive the formula.
 struct YearContentView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG
@@ -23,7 +23,7 @@ struct YearContentView: View {
   @Binding var selectedAsset: AssetDescriptor?
 
   private let photoLibraryService: any PhotoLibraryService
-  @StateObject private var counts: TimelineSidebarCounts
+  @State private var counts: TimelineSidebarCounts
 
   init(
     year: Int,
@@ -35,11 +35,10 @@ struct YearContentView: View {
     self._selection = selection
     self._selectedAsset = selectedAsset
     self.photoLibraryService = photoLibraryService
-    _counts = StateObject(
-      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
+    _counts = State(wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
-  @State private var totalCount: Int?
+  @State private var totalCount: PhotoLibraryYearCount?
 
   var body: some View {
     let availability = ManualExportAvailability(
@@ -51,7 +50,7 @@ struct YearContentView: View {
       ?? "Export every photo in this year"
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "year-export-help")
+      let _ = bodyCounter?.record("year-content-body:\(year)")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       // `.title` (heavier than `MonthContentView`'s `.title2`) leans into Photos.app's
@@ -77,11 +76,15 @@ struct YearContentView: View {
 
       Spacer(minLength: 0)
     }
+    .task(id: year) { selectedAsset = nil }
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .task(id: "\(year)|\(photoLibraryManager.libraryRevision)") {
-      totalCount = (try? photoLibraryManager.countAssets(year: year))
-      selectedAsset = nil
+    .task(id: "\(year)|\(photoLibraryManager.libraryRefresh.revision)") {
+      let source = photoLibraryManager.libraryRevision
+      let fresh = try? await photoLibraryManager.countAssets(
+        in: .timeline(year: year, month: nil))
+      guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else { return }
+      totalCount = fresh.map { PhotoLibraryYearCount(year: year, count: $0) }
       await counts.loadCounts(forYears: [year])
     }
   }
@@ -91,14 +94,11 @@ struct YearContentView: View {
     if exportRecordStore.state == .loading {
       // The month tiles' exported badges wait for the history too.
       text = ManualExportAvailability.loadingHistoryText
-    } else if let totalCount {
-      text = totalCount == 1 ? "1 photo" : "\(totalCount) photos"
+    } else if let totalCount, totalCount.year == year {
+      text = totalCount.count == 1 ? "1 photo" : "\(totalCount.count) photos"
     } else {
       text = "Counting\u{2026}"
     }
-    #if DEBUG
-      bodyCounter?.recordText([text], for: "year-summary")
-    #endif
     return HStack(spacing: 8) {
       Image(systemName: "calendar")
         .foregroundStyle(.secondary)

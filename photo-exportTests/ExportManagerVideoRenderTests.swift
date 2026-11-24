@@ -24,41 +24,25 @@ struct ExportManagerVideoRenderTests {
     let store: ExportRecordStore
   }
 
-  private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
+  private func makeHarness() async -> Harness {
     let renderer = FakeMediaRenderer()
-    let fileSystem = FakeFileSystem()
-    let tempDir = TestScratch.directory("VideoRenderTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    let defaults = TestScratch.defaults("VideoRender")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      mediaRenderer: renderer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
+    let h = await ExportManagerHarness(
+      label: "VideoRenderTest", userDefaults: TestScratch.defaults("VideoRender"),
+      mediaRenderer: renderer)
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      renderer: renderer, fileSystem: fileSystem, store: store)
+      manager: h.manager, photoLib: h.photoLib, dest: h.dest, writer: h.writer,
+      renderer: renderer, fileSystem: h.fileSystem, store: h.store)
   }
 
   private func adjustedVideo(
     id: String = "edited-video",
-    filename: String = "IMG_1234.MOV"
+    filename: String = "IMG_1234.MOV",
+    month: Int
   ) -> (asset: AssetDescriptor, resources: [ResourceDescriptor]) {
     let asset = TestAssetFactory.makeAsset(
-      id: id, mediaType: .video, hasAdjustments: true)
+      id: id,
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     let resources = [TestAssetFactory.makeResource(type: .video, originalFilename: filename)]
     return (asset, resources)
   }
@@ -66,11 +50,11 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 1. Render path takes over when no .fullSizeVideo resource exists
 
   @Test func adjustedVideoWithOnlyOriginalResourceGoesThroughRenderer() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
-    let (asset, resources) = adjustedVideo()
+    let (asset, resources) = adjustedVideo(month: 3)
     h.photoLib.assetsByYearMonth["2025-3"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -90,12 +74,14 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 2. Fast path when .fullSizeVideo IS present (rare but real)
 
   @Test func adjustedVideoWithFullSizeVideoUsesResourceWriter() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(
-      id: "rare-edit", mediaType: .video, hasAdjustments: true)
+      id: "rare-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-4"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_5555.MOV"),
@@ -115,7 +101,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 3. Render failure → recoverable .failed, then fallback covers it
 
   @Test func renderFailureRecordsRecoverableEditedFailure() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -123,7 +109,7 @@ struct ExportManagerVideoRenderTests {
       domain: "MediaRenderer", code: 42,
       userInfo: [NSLocalizedDescriptionKey: "AVFoundation oh no"])
 
-    let (asset, resources) = adjustedVideo(id: "render-fail")
+    let (asset, resources) = adjustedVideo(id: "render-fail", month: 5)
     h.photoLib.assetsByYearMonth["2025-5"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -149,12 +135,14 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 4. No edited-side bytes available at all
 
   @Test func adjustedVideoWithNoResourcesFailsRecoverably() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(
-      id: "no-resources", mediaType: .video, hasAdjustments: true)
+      id: "no-resources",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-6"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = []  // no .video, no .fullSizeVideo
 
@@ -173,11 +161,11 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 5. editedWithOriginals: edited via renderer, original via writer
 
   @Test func editedWithOriginalsModeUsesRendererPlusWriterForVideo() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .editedWithOriginals
 
-    let (asset, resources) = adjustedVideo(id: "pair", filename: "IMG_9000.MOV")
+    let (asset, resources) = adjustedVideo(id: "pair", filename: "IMG_9000.MOV", month: 7)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -197,7 +185,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 6. Cancel during render
 
   @Test func cancelDuringRenderRemovesInProgressRecord() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -210,7 +198,7 @@ struct ExportManagerVideoRenderTests {
     h.renderer.arm(latch: latch)
     h.renderer.arm(enteredSignal: entered)
 
-    let (asset, resources) = adjustedVideo(id: "cancel-me")
+    let (asset, resources) = adjustedVideo(id: "cancel-me", month: 8)
     h.photoLib.assetsByYearMonth["2025-8"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -243,7 +231,7 @@ struct ExportManagerVideoRenderTests {
   /// `exportSingleVariant` still runs on the cancellation path — pinning this is what lets
   /// `VariantExporter` extraction in Phase 3 move the cleanup without silently regressing it.
   @Test func cancelDuringRenderLeavesNoTempFileInDestination() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -253,7 +241,7 @@ struct ExportManagerVideoRenderTests {
     h.renderer.arm(enteredSignal: entered)
 
     let (asset, resources) = adjustedVideo(
-      id: "cancel-tmp", filename: "IMG_7777.MOV")
+      id: "cancel-tmp", filename: "IMG_7777.MOV", month: 11)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -287,11 +275,11 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 7. Stale .tmp from a prior render run is cleared
 
   @Test func staleTempFileFromPriorRenderIsRemovedBeforeWrite() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
-    let (asset, resources) = adjustedVideo(id: "stale", filename: "IMG_3210.MOV")
+    let (asset, resources) = adjustedVideo(id: "stale", filename: "IMG_3210.MOV", month: 9)
     h.photoLib.assetsByYearMonth["2025-9"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -312,14 +300,14 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 8. Move failure after a successful render cleans up tmp
 
   @Test func moveFailureAfterRenderCleansTempAndMarksFailed() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
     h.fileSystem.moveError = NSError(
       domain: "FS", code: 1,
       userInfo: [NSLocalizedDescriptionKey: "disk full"])
 
-    let (asset, resources) = adjustedVideo(id: "move-fail", filename: "IMG_4321.MOV")
+    let (asset, resources) = adjustedVideo(id: "move-fail", filename: "IMG_4321.MOV", month: 10)
     h.photoLib.assetsByYearMonth["2025-10"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -336,13 +324,15 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 9. Re-edit after successful export lands at (1) suffix
 
   @Test func reEditedVideoLandsAtCollisionSuffix() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
     // First export: unedited video → writer path lands at IMG_7777.MOV
     var asset = TestAssetFactory.makeAsset(
-      id: "re-edit", mediaType: .video, hasAdjustments: false)
+      id: "re-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!,
+      mediaType: .video, hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_7777.MOV")
@@ -352,7 +342,9 @@ struct ExportManagerVideoRenderTests {
 
     // User edits in Photos. hasAdjustments flips to true.
     asset = TestAssetFactory.makeAsset(
-      id: "re-edit", mediaType: .video, hasAdjustments: true)
+      id: "re-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.manager.startExportMonth(year: 2025, month: 11)
     await h.manager.waitForQueueDrained()
@@ -366,12 +358,14 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 10. Unedited video keeps using the writer
 
   @Test func uneditedVideoNeverReachesRenderer() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(
-      id: "plain-video", mediaType: .video, hasAdjustments: false)
+      id: "plain-video",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 12, day: 15))!,
+      mediaType: .video, hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-12"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_0042.MOV")
@@ -388,11 +382,11 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 11. Render-activity defer clears state on success
 
   @Test func renderActivityClearsAfterSuccessfulRender() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
-    let (asset, resources) = adjustedVideo(id: "activity-clear")
+    let (asset, resources) = adjustedVideo(id: "activity-clear", month: 1)
     h.photoLib.assetsByYearMonth["2025-1"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -405,7 +399,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 12. Renderer reports success but writes a zero-byte file
 
   @Test func zeroByteRenderSuccessStillCompletesPipeline() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -413,7 +407,7 @@ struct ExportManagerVideoRenderTests {
       FileManager.default.createFile(atPath: url.path, contents: Data())
     }
 
-    let (asset, resources) = adjustedVideo(id: "zero-byte")
+    let (asset, resources) = adjustedVideo(id: "zero-byte", month: 2)
     h.photoLib.assetsByYearMonth["2025-2"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 

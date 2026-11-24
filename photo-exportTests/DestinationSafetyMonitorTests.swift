@@ -100,7 +100,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func emptyRecordsAndEmptyDirectoryDoesNotFlag() async {
@@ -112,7 +112,7 @@ struct DestinationSafetyMonitorTests {
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func emptyRecordsAndNonEmptyDirectoryFlags() async {
@@ -138,17 +138,17 @@ struct DestinationSafetyMonitorTests {
     let fp = fingerprint(id: "dest-rebuilt")
 
     // Simulate the post-rebuild world: the import has repopulated the store.
-    harness.recordStore.configure(for: fp.id)
+    await harness.recordStore.configureAndWait(for: fp.id)
     harness.recordStore.markVariantExported(
       assetId: "asset-1", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-    harness.recordStore.flushForTesting()
+    harness.recordStore.drainSynchronously()
 
     harness.monitor.attach()
     harness.send(fp)
     await settleAsyncScan()
 
-    #expect(harness.monitor.needsSafetyConfirmation == false)
+    #expect(harness.monitor.verdict == .init(stableId: fp.id, needsConfirmation: false))
   }
 
   @Test func confirmingCurrentDestinationClearsTheFlag() async {
@@ -167,19 +167,14 @@ struct DestinationSafetyMonitorTests {
     #expect(harness.confirmationStore.isConfirmed(destinationId: fp.id))
   }
 
-  @Test func staleScanDoesNotOverwriteNewerEvaluation() async {
-    // Simulate a slow scan whose result lands after the destination has
-    // changed. The generation guard inside `evaluate` should discard the
-    // stale result.
+  @Test(.timeLimit(.minutes(1)))
+  func staleScanDoesNotOverwriteNewerEvaluation() async throws {
     let storeRoot = TestScratch.directory("SafetyMonitor-stale")
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
     let identitySubject = CurrentValueSubject<DestinationIdentity, Never>(.unavailable)
-    defer { try? FileManager.default.removeItem(at: storeRoot) }
-
-    // Track which fingerprint evaluation each scan call corresponds to.
-    // First call: long-suspended; second call: immediate.
+    let oldScan = AsyncCheckpoint()
     let scanCallsRef = ScanCallsRef()
     let monitor = DestinationSafetyMonitor(
       identityPublisher: identitySubject.eraseToAnyPublisher(),
@@ -188,29 +183,33 @@ struct DestinationSafetyMonitorTests {
       confirmationStore: confirmationStore,
       scanDirectory: { @MainActor in
         scanCallsRef.callCount += 1
-        let myCall = scanCallsRef.callCount
-        if myCall == 1 {
-          // Suspend long enough for the second scan to land first.
-          await Task.yield()
-          await Task.yield()
-          await Task.yield()
-          return true  // would flag, but stale
-        } else {
-          return false  // wins
+        if scanCallsRef.callCount == 1 {
+          await oldScan.enter()
+          scanCallsRef.oldScanReturned = true
+          return true
         }
-      }
-    )
-
-    monitor.attach()
-    let fp1 = fingerprint(id: "old")
-    let fp2 = fingerprint(id: "new")
-    identitySubject.send(DestinationIdentity(stableId: fp1.id, fingerprint: fp1))
-    identitySubject.send(DestinationIdentity(stableId: fp2.id, fingerprint: fp2))
-    // Settle everything.
-    for _ in 0..<10 { await Task.yield() }
-
-    // Final state reflects fp2 (empty dir → no flag), not fp1.
-    #expect(monitor.needsSafetyConfirmation == false)
+        return false
+      })
+    try await withCleanup {
+      monitor.attach()
+      let old = fingerprint(id: "old")
+      let new = fingerprint(id: "new")
+      identitySubject.send(DestinationIdentity(stableId: old.id, fingerprint: old))
+      try #require(await oldScan.waitForEnter(count: 1))
+      identitySubject.send(DestinationIdentity(stableId: new.id, fingerprint: new))
+      try #require(
+        await eventually("the newer scan finishes") {
+          monitor.verdict == .init(stableId: new.id, needsConfirmation: false)
+        })
+      await oldScan.releaseAll()
+      // Both stores are settled, so each `waitUntilSettled()` returns without suspending and
+      // the stale evaluation ends in the main-actor turn in which its scan returns.
+      try #require(await eventually("the stale scan returns") { scanCallsRef.oldScanReturned })
+      #expect(monitor.verdict == .init(stableId: new.id, needsConfirmation: false))
+    } cleanup: {
+      await oldScan.releaseAll()
+      try? FileManager.default.removeItem(at: storeRoot)
+    }
   }
 
   // MARK: - Stable-id keying (#127)
@@ -292,18 +291,18 @@ struct DestinationSafetyMonitorTests {
     let scan = AsyncCheckpoint()
     defer {
       io.releaseAll()
-      recordStore.flushForTesting()
-      collectionStore.flushForTesting()
+      recordStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
     }
     let fp = fingerprint(id: "dest-loading")
     if hasHistory {
-      recordStore.configure(for: fp.id)
+      await recordStore.configureAndWait(for: fp.id)
       recordStore.markVariantExported(
         assetId: "asset-1", variant: .original, year: 2025, month: 1,
         relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
       try await recordStore.flush()
-      recordStore.configure(for: nil)
+      await recordStore.configureAndWait(for: nil)
     }
 
     // The destination is picked: its history starts loading, held at the snapshot read, and
@@ -329,23 +328,67 @@ struct DestinationSafetyMonitorTests {
 
     // The scan finds files while the history is still held.
     try #require(await scan.waitForEnter(count: 1))
-    #expect(monitor.completedEvaluationCount == 0)
+    #expect(monitor.verdict.stableId == nil)
     await scan.release()
     #expect(
       await eventually("the evaluation waits for the history or finishes") {
-        recordStore.pendingSettleWaiterCount == 1 || monitor.completedEvaluationCount == 1
+        recordStore.pendingSettleWaiterCount == 1 || monitor.verdict.stableId == fp.id
       })
     #expect(recordStore.state == .loading)
     io.release(snapshot)
-    #expect(await eventually("the evaluation finishes") { monitor.completedEvaluationCount == 1 })
+    #expect(await eventually("the evaluation finishes") { monitor.verdict.stableId == fp.id })
 
     #expect(recordStore.state == .ready)
     #expect(recordStore.recordsById.isEmpty == !hasHistory)
     #expect(monitor.needsSafetyConfirmation == !hasHistory)
   }
 
+  /// The stores may switch to the new destination after its check has started: a switch
+  /// waits for the previous destination's pending writes. The check still reaches a verdict,
+  /// and the previous destination's history never counts as the new one's.
+  @Test(.timeLimit(.minutes(2))) func storesSwitchingDuringTheScanStillReachAVerdict()
+    async throws
+  {
+    let storeRoot = TestScratch.directory("SafetyMonitor-switch")
+    let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    await recordStore.configureAndWait(for: "dest-old")
+    await collectionStore.configureAndWait(for: "dest-old")
+    recordStore.markVariantExported(
+      assetId: "asset-1", variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    let scan = AsyncCheckpoint()
+    let fp = fingerprint(id: "dest-new")
+    let monitor = DestinationSafetyMonitor(
+      identityPublisher: CurrentValueSubject<DestinationIdentity, Never>(
+        DestinationIdentity(stableId: fp.id, fingerprint: fp)
+      ).eraseToAnyPublisher(),
+      exportRecordStore: recordStore,
+      collectionExportRecordStore: collectionStore,
+      confirmationStore: InMemoryDestinationSafetyConfirmationStore(),
+      scanDirectory: { @MainActor in
+        await scan.enter()
+        return true
+      })
+    try await withCleanup {
+      monitor.attach()
+      try #require(await scan.waitForEnter(count: 1))
+      await recordStore.configureAndWait(for: fp.id)
+      await collectionStore.configureAndWait(for: fp.id)
+      await scan.releaseAll()
+
+      #expect(await eventually("verdict for the new folder") { monitor.verdict.stableId == fp.id })
+      #expect(monitor.verdict.needsConfirmation)
+    } cleanup: {
+      await scan.releaseAll()
+      try? await recordStore.flush()
+      try? FileManager.default.removeItem(at: storeRoot)
+    }
+  }
+
   @MainActor
   private final class ScanCallsRef {
     var callCount: Int = 0
+    var oldScanReturned = false
   }
 }

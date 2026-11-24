@@ -13,11 +13,13 @@ import Testing
       @Published var selection: LibrarySelection = .favorites
       @Published var title = "Favorites"
       @Published var asset: AssetDescriptor?
+      @Published var renderPhase = 0
+      @Published var scrollTargetID: String?
     }
 
     @MainActor
     private struct Parent: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       @ObservedObject var navigation: Navigation
       let service: FakePhotoLibraryService
       let counter: BodyInvalidationCounter
@@ -27,6 +29,7 @@ import Testing
         // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("parent:\(manager.queueCount)")
         let scope = navigation.selection
+        let phase = navigation.renderPhase
         let pane = CollectionContentView(
           selection: navigation.selection, title: navigation.title,
           versionSelection: manager.versionSelection,
@@ -41,7 +44,16 @@ import Testing
           },
           selectedAsset: $navigation.asset, photoLibraryService: service
         )
-        pane.equatable()
+        ScrollViewReader { proxy in
+          pane.equatable()
+            .onChange(of: navigation.scrollTargetID) { _, id in
+              if let id { proxy.scrollTo(id, anchor: .top) }
+            }
+            .overlay {
+              Color.clear.frame(width: 1, height: 1)
+                .task(id: phase) { counter.record("render-phase:\(phase)") }
+            }
+        }
       }
     }
 
@@ -49,6 +61,7 @@ import Testing
     private final class Fixture {
       let navigation = Navigation()
       let counter = BodyInvalidationCounter()
+      let clock = TestClock()
       let service: FakePhotoLibraryService
       let library: PhotoLibraryManager
       let manager: ExportManager
@@ -62,17 +75,19 @@ import Testing
       let window: NSWindow
       let favorite = ExportPlacement.favorites()
 
-      init() {
+      init(preselectFirstAsset: Bool = false) async {
         service = BulkLibraryFixture.makeFakeLibrary(
           timelineAssets: 0,
           albumFolders: 1, albumsPerFolder: 1, assetsPerAlbum: 10_000)
         service.favoritesAssets = service.assetsByAlbumLocalId["bulk-album-0-0"]!
+        // Seed selection before the host captures the pane's rendering inputs.
+        if preselectFirstAsset { navigation.asset = service.favoritesAssets.first }
         library = PhotoLibraryManager(overrideService: service)
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(baseDirectoryURL: root)
-        records = CollectionExportRecordStore(baseDirectoryURL: root)
-        timeline.configure(for: "test")
-        records.configure(for: "test")
+        records = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
+        await timeline.configureAndWait(for: "test")
+        await records.configureAndWait(for: "test")
         records.upsertPlacement(favorite)
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
@@ -87,8 +102,10 @@ import Testing
             manager: manager, navigation: navigation,
             service: service, counter: counter
           )
-          .environmentObject(library).environmentObject(records).environmentObject(manager)
-          .environmentObject(destination).environment(\.bodyInvalidationCounter, counter))
+          .environment(library).environment(records).environment(manager)
+          .environmentObject(destination).environment(\.bodyInvalidationCounter, counter)
+          .environment(\.accessibilityEnabled, true)
+          .environment(\.locale, Locale(identifier: "en_US")))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -103,37 +120,54 @@ import Testing
         window.orderOut(nil)
         window.contentView = nil
         window.close()
-        counter.reset()  // Release captured action closures after dismantling the host.
-        timeline.flushForTesting()
-        records.flushForTesting()
+        counter.reset()
+        timeline.drainSynchronously()
+        records.drainSynchronously()
         try? FileManager.default.removeItem(at: root)
         defaults.removePersistentDomain(forName: defaultsName)
         fakeDestination.cleanup()
       }
 
-      func renderBarrier() async {
-        window.contentView?.layoutSubtreeIfNeeded()
-        // Let the acknowledged parent transaction commit its children through AppKit.
-        try? await Task.sleep(for: .milliseconds(30))
+      func renderBarrier() async throws {
+        navigation.renderPhase += 1
+        let key = "render-phase:\(navigation.renderPhase)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
         window.contentView?.layoutSubtreeIfNeeded()
       }
 
       var readinessDescription: String {
-        "summary=\(counter.count(for: "summary:0/10000")), "
-          + "scans=\(counter.count(for: "summaryScan")), "
+        "scans=\(counter.count(for: "summaryScan")), "
           + "bodies=\(counter.count(for: "collectionBody")), "
           + "preheatStarts=\(service.startCachingCalls.count)"
       }
     }
 
-    private func observe(
-      in window: NSWindow, _ condition: () -> Bool,
-      sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed hosted condition", sourceLocation: sourceLocation) {
-        window.contentView?.layoutSubtreeIfNeeded()
-        return condition()
-      }
+    @Test(.timeLimit(.minutes(2)))
+    func mountedGridScrollingPreheatsAssetsBeyondInitialWindow() async throws {
+      let f = await Fixture(preselectFirstAsset: true)
+      defer { f.close() }
+      f.show()
+      try #require(
+        await observe(in: f.window) {
+          f.counter.count(for: "grid-load-finished") > 0
+            && NativeViewAccess.containsText("0/10,000 exported", in: f.window)
+        })
+      try await f.renderBarrier()
+      let beyondInitialWindow = Set(f.service.favoritesAssets.dropFirst(500).map(\.id))
+      f.navigation.scrollTargetID = f.service.favoritesAssets[800].id
+      try #require(
+        await observe(in: f.window) {
+          f.service.decodedThumbnailCalls.contains { beyondInitialWindow.contains($0.assetId) }
+        })
+      try await f.renderBarrier()
+      try #require(
+        await observe(in: f.window) {
+          f.service.startCachingCalls.contains { batch in
+            batch.contains { beyondInitialWindow.contains($0.id) }
+          }
+        })
+      #expect(f.service.startCachingCalls.allSatisfy { $0.count <= 500 })
+      #expect(!f.service.stopCachingCalls.isEmpty)
     }
 
     /// Unrelated queue publications must not re-render the pane, through either its inputs (the
@@ -142,17 +176,18 @@ import Testing
     /// modifier alone doesn't fail this.
     @Test(.timeLimit(.minutes(2)))
     func unrelatedQueuePublicationsDoNotRescanLoadedCollection() async throws {
-      let f = Fixture()
+      let f = await Fixture(preselectFirstAsset: true)
       defer { f.close() }
       f.show()
       let loaded = await observe(in: f.window) {
-        f.counter.count(for: "summary:0/10000") > 0 && f.service.startCachingCalls.count == 1
+        NativeViewAccess.containsText("0/10,000 exported", in: f.window)
+          && f.service.startCachingCalls.count == 1
       }
       let diagnostics = f.readinessDescription
       try #require(
         loaded, "Must measure a loaded collection with an actual matching placement: \(diagnostics)"
       )
-      await f.renderBarrier()
+      try await f.renderBarrier()
       let scans = f.counter.count(for: "summaryScan")
       let bodies = f.counter.count(for: "collectionBody")
       let revision = f.records.mutationCounter
@@ -169,11 +204,11 @@ import Testing
         ])
         let acknowledged = await observe(in: f.window) { f.counter.count(for: key) > parent }
         try #require(acknowledged, "Parent must process the actual queue-count publication")
-        await f.renderBarrier()
+        try await f.renderBarrier()
       }
       // Surface any record publication still inside its coalescing window.
       f.records.flushPendingNotifications()
-      await f.renderBarrier()
+      try await f.renderBarrier()
       #expect(f.records.mutationCounter == revision, "record publication during the loop")
       let extraScans = f.counter.count(for: "summaryScan") - scans
       let extraBodies = f.counter.count(for: "collectionBody") - bodies
@@ -187,7 +222,7 @@ import Testing
   extension CollectionContentObservationTests {
     @Test(.timeLimit(.minutes(2)))
     func settingsRecordsMembershipAndLiveBindingStillRender() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       let adjusted = TestAssetFactory.makeAsset(
         id: "adjusted", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
@@ -205,36 +240,45 @@ import Testing
           assetId: asset.id, placement: f.favorite, variant: .original,
           filename: "IMG.JPG", exportedAt: Date())
       }
+      f.records.flushPendingNotifications()
       f.show()
       let initial = await observe(in: f.window) {
-        f.counter.count(for: "summary:3/3") > 0 && f.counter.count(for: "selected:adjusted") > 0
+        NativeViewAccess.containsText("3/3 exported", in: f.window)
+          && f.counter.count(for: "thumbnail-body:adjusted") > 0
       }
       try #require(initial)
-      let selectedBefore = f.counter.count(for: "selected:live")
+      let selectedBefore = f.counter.count(for: "thumbnail-body:live")
       f.navigation.asset = live
       let rebound = await observe(in: f.window) {
-        f.counter.count(for: "selected:live") > selectedBefore
+        f.counter.count(for: "thumbnail-body:live") > selectedBefore
       }
       try #require(rebound, "A live binding change must update the pane's selected-thumbnail input")
       #expect(f.navigation.asset == live)
 
       f.manager.versionSelection = .editedWithOriginals
-      let originals = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > 0 }
+      let originals = await observe(in: f.window) {
+        NativeViewAccess.containsText("2/3 exported", in: f.window)
+      }
       try #require(originals)
       f.manager.livePhotosPairedExport = true
-      let paired = await observe(in: f.window) { f.counter.count(for: "summary:1/3") > 0 }
+      let paired = await observe(in: f.window) {
+        NativeViewAccess.containsText("1/3 exported", in: f.window)
+      }
       try #require(paired)
-      let beforeStatus = f.counter.count(for: "summary:2/3")
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
         filename: "ORIGINAL.HEIC", exportedAt: Date())
+      f.records.flushPendingNotifications()
       let status = await observe(in: f.window) {
-        f.counter.count(for: "summary:2/3") > beforeStatus
+        NativeViewAccess.containsText("2/3 exported", in: f.window)
       }
       try #require(status)
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
-      let refreshed = await observe(in: f.window) { f.counter.count(for: "summary:2/4") > 0 }
+      f.library.libraryRefresh.flush()
+      let refreshed = await observe(in: f.window) {
+        NativeViewAccess.containsText("2/4 exported", in: f.window)
+      }
       try #require(refreshed)
       #expect(f.navigation.asset == live)
 
@@ -243,6 +287,7 @@ import Testing
         pathComponents: [], children: [])
       f.service.collectionTree.append(descriptor)
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      f.library.libraryRefresh.flush()
       let shared = try ExportPlacementResolver().placement(
         for: .sharedAlbum(collectionId: "shared"), collections: [descriptor], existingPlacements: []
       )
@@ -250,26 +295,29 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: shared, variant: .original,
         filename: "SHARED.JPG", exportedAt: Date())
+      f.records.flushPendingNotifications()
+      try #require(
+        f.clock.pendingCount == 0, "Record publications must finish before shared-album navigation")
       f.service.assetsBySharedAlbumLocalId["shared"] = [adjusted]
       f.navigation.asset = nil
       f.navigation.selection = .sharedAlbum(collectionId: "shared")
       f.navigation.title = "Updated shared title"
       let sharedRendered = await observe(in: f.window) {
-        f.counter.count(for: "summary:1/1") > 0 && f.counter.count(for: "banner:true") > 0
-          && f.counter.count(for: "title:Updated shared title") > 0
+        NativeViewAccess.containsText("1/1 exported", in: f.window)
+          && NativeViewAccess.containsText("Shared albums export at reduced quality", in: f.window)
+          && NativeViewAccess.containsText("Updated shared title", in: f.window)
       }
       try #require(sharedRendered)
-      let bannersBefore = f.counter.count(for: "banner:false")
       f.manager.versionSelection = .edited
       let bannerRemoved = await observe(in: f.window) {
-        f.counter.count(for: "banner:false") > bannersBefore
+        !NativeViewAccess.containsText("Shared albums export at reduced quality", in: f.window)
       }
       #expect(bannerRemoved)
     }
 
     @Test(.timeLimit(.minutes(2)))
     func readinessAndRenderedActionsFollowCurrentScopeAfterNavigation() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.destination.configureForScreenshotMode()
       f.navigation.title = "Same title"
@@ -285,44 +333,50 @@ import Testing
           id: "shared-action", localIdentifier: "shared-action",
           title: "Shared action", kind: .sharedAlbum, pathComponents: [], children: []))
       f.show()
-      let ready = await observe(in: f.window) { f.counter.count(for: "canExport:true") > 0 }
+      let ready = await observe(in: f.window) {
+        NativeViewAccess.element("collection-export-primary", in: f.window)?
+          .isAccessibilityEnabled?() == true
+      }
       try #require(ready)
-      let disabledBefore = f.counter.count(for: "canExport:false")
-      f.records.configure(for: nil)
+      await f.records.configureAndWait(for: nil)
       let disabled = await observe(in: f.window) {
-        f.counter.count(for: "canExport:false") > disabledBefore
+        NativeViewAccess.element("collection-export-primary", in: f.window)?
+          .isAccessibilityEnabled?() == false
       }
       try #require(disabled)
-      let enabledBefore = f.counter.count(for: "canExport:true")
-      f.records.configure(for: "test")
+      await f.records.configureAndWait(for: "test")
       let reenabled = await observe(in: f.window) {
-        f.counter.count(for: "canExport:true") > enabledBefore
+        NativeViewAccess.element("collection-export-primary", in: f.window)?
+          .isAccessibilityEnabled?() == true
       }
       try #require(reenabled)
-      let action = try #require(f.counter.renderedActions["collectionExport"])
-      action()
+      let button = try #require(NativeViewAccess.button("Export Favorites", in: f.window))
+      let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+      _ = press()
       let favoriteRan = await observe(in: f.window) {
         f.records.exportInfo(assetId: "scope-asset", placement: f.favorite) != nil
       }
       try #require(favoriteRan)
       await f.manager.waitForQueueDrained()
 
-      for (selection, scopeKey, assetId, kind, localId) in [
+      for (selection, assetId, kind, localId) in [
         (
-          LibrarySelection.album(collectionId: "bulk-album-0-0"), "album:bulk-album-0-0",
+          LibrarySelection.album(collectionId: "bulk-album-0-0"),
           "scope-asset",
           ExportPlacement.Kind.album, "bulk-album-0-0"
         ),
         (
-          .sharedAlbum(collectionId: "shared-action"), "shared-album:shared-action", "scope-asset",
+          .sharedAlbum(collectionId: "shared-action"), "scope-asset",
           .sharedAlbum, "shared-action"
         ),
       ] {
         f.navigation.selection = selection
-        let changed = await observe(in: f.window) { f.counter.count(for: "scope:\(scopeKey)") > 0 }
-        try #require(changed)
-        let action = try #require(f.counter.renderedActions["collectionExport"])
-        action()
+        let title = kind == .sharedAlbum ? "Export Shared Album" : "Export Album"
+        try #require(
+          await observe(in: f.window) { NativeViewAccess.button(title, in: f.window) != nil })
+        let button = try #require(NativeViewAccess.button(title, in: f.window))
+        let press = try #require(button.accessibilityPerformPress as (() -> Bool)?)
+        _ = press()
         let ran = await observe(in: f.window) {
           guard
             let placement = f.records.placements(matching: kind).first(where: {

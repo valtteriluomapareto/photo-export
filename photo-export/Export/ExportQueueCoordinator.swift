@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import OSLog
+import Observation
 import os
 
 /// Owns pending jobs, the drain loop, pause/resume/clear, per-placement queue counts,
@@ -22,9 +23,9 @@ final class ExportQueueCoordinator: ObservableObject {
   /// helpers instead of extending this Host protocol.
   @MainActor
   protocol Host: AnyObject {
-    /// True while a bulk-album enqueue Task is still building the queue. The coordinator
-    /// uses this to avoid prematurely finalizing an empty queue.
-    var isEnqueueingAll: Bool { get }
+    /// True while any export scan is still building the queue. The coordinator uses this
+    /// to avoid prematurely finalizing an empty queue.
+    var isPreparingExport: Bool { get }
 
     /// Drives the per-job export pipeline (resource fetch, variant write, record write).
     /// The coordinator's drain loop awaits this on a child Task.
@@ -34,16 +35,20 @@ final class ExportQueueCoordinator: ObservableObject {
     /// run. Distinct from `clearCurrentJobIdentifiers` (which runs between jobs).
     func didDrainQueue()
 
+    /// Brackets a complete synchronous queue transition so presentation callbacks run
+    /// only after its counters, dispatch ownership and mirrors have committed.
+    func beginProgressUpdates()
+    func endProgressUpdates()
+
     /// Sets the manager's `currentJobPlacement`, `currentJobAssetId`, and resets
     /// `currentJobVariant` to nil before the export Task starts. Placement BEFORE
     /// assetId is the load-bearing ordering rule — any cancellation cleanup that
     /// observes `currentJobAssetId` must also see the matching `currentJobPlacement`.
     func setCurrentJob(_ job: ExportManager.ExportJob)
 
-    /// Resets `currentJobAssetId`, `currentJobVariant`, `currentJobPlacement`, and
-    /// `currentAssetFilename` to nil. The coordinator can't write these directly because
-    /// they're the manager's UI-state mirrors.
-    func clearCurrentJobIdentifiers()
+    /// Clears completed-job identifiers, retaining placement only between adjacent jobs.
+    /// Pause, drain and teardown clear placement so its activity indicator stops.
+    func clearCurrentJobIdentifiers(keepingPlacement: Bool)
   }
 
   // MARK: - Published queue state (mirrored on ExportManager)
@@ -55,7 +60,9 @@ final class ExportQueueCoordinator: ObservableObject {
       guard isRunning != oldValue else { return }
       if isRunning {
         runInterval = Self.signposter.beginInterval("ExportRun")
+        if measurements == nil { runWatchdog.begin() }
       } else if let state = runInterval {
+        if measurements == nil { runWatchdog.end() }
         Self.signposter.endInterval("ExportRun", state)
         runInterval = nil
       }
@@ -75,6 +82,9 @@ final class ExportQueueCoordinator: ObservableObject {
     subsystem: Logger.appSubsystem,
     category: "Export.Run")
   private var runInterval: OSSignpostIntervalState?
+  private let runWatchdog: ExportRunWatchdog
+  private let measurements: ExportMeasurements?
+  var measurementJob: ExportMeasurements.Job? { measurements?.currentJob }
 
   // MARK: - Cooperative cancellation
 
@@ -83,9 +93,6 @@ final class ExportQueueCoordinator: ObservableObject {
   /// `cancelImport`). Async work captures `let gen = generation` synchronously before
   /// the first `await` and re-checks `isCurrent(gen)` after every hop; a mid-flight
   /// bump returns false and the work bails out cooperatively.
-  ///
-  /// `clearPending()` (queue-only drop) does NOT bump generation — in-flight work
-  /// keeps its `gen` and finishes normally.
   private(set) var generation: Int = 0
 
   /// Returns `true` if `gen` matches the current generation — i.e. the run that
@@ -111,7 +118,58 @@ final class ExportQueueCoordinator: ObservableObject {
 
   // MARK: - Internal queue state
 
-  private(set) var pendingJobs: [ExportManager.ExportJob] = []
+  private var jobStorage: [ExportManager.ExportJob] = []
+  private var jobHead = 0
+  var pendingJobs: ArraySlice<ExportManager.ExportJob> { jobStorage[jobHead...] }
+
+  /// A month observes only its own queued and active state, published atomically.
+  @Observable
+  final class MonthQueueState {
+    struct Snapshot: Equatable {
+      var queued = 0
+      var isActive = false
+    }
+    var snapshot = Snapshot()
+  }
+  private var monthStates: [String: MonthQueueState] = [:]
+  private var activePlacementId: String?
+  private var placementRevision = 0
+
+  func monthState(placementId: String) -> MonthQueueState {
+    if let state = monthStates[placementId] { return state }
+    let state = MonthQueueState()
+    state.snapshot = .init(
+      queued: queuedCountsByPlacementId[placementId, default: 0],
+      isActive: activePlacementId == placementId)
+    monthStates[placementId] = state
+    return state
+  }
+
+  func setActivePlacement(_ placementId: String?) {
+    guard activePlacementId != placementId else { return }
+    let old = activePlacementId
+    activePlacementId = placementId
+    if let old { refreshMonthState(old) }
+    if let placementId { refreshMonthState(placementId) }
+  }
+
+  private func refreshMonthState(_ id: String) {
+    guard let state = monthStates[id] else { return }
+    // Observation callbacks run before storage and can synchronously cancel the run.
+    // Reconcile again after each write so an outer setter cannot restore stale activity.
+    while true {
+      let next = MonthQueueState.Snapshot(
+        queued: queuedCountsByPlacementId[id, default: 0],
+        isActive: activePlacementId == id)
+      guard state.snapshot != next else { return }
+      state.snapshot = next
+    }
+  }
+
+  private func removePendingJobs() {
+    jobStorage.removeAll(keepingCapacity: true)
+    jobHead = 0
+  }
   /// `true` while the drain loop is actively pulling jobs off the queue. Distinct from
   /// `isRunning` (which is the published mirror): isRunning is the user-facing flag,
   /// isProcessing is the internal "loop is owning the next-job dispatch" gate that
@@ -122,13 +180,36 @@ final class ExportQueueCoordinator: ObservableObject {
   private(set) var currentTask: Task<Void, Never>?
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
 
+  /// Refresh only when per-placement queue counts changed. Active-placement changes
+  /// refresh their old and new month states directly.
+  private func refreshMonthStates(since previous: Int) {
+    guard placementRevision != previous else { return }
+    for id in monthStates.keys { refreshMonthState(id) }
+  }
+
   // MARK: - Dependencies
 
   private let logger = Logger.app(.exportQueueCoordinator)
   private weak var host: Host?
 
-  init(host: Host) {
+  init(host: Host, measurements: ExportMeasurements? = nil, watchdogEnabled: Bool = false) {
     self.host = host
+    self.measurements = measurements
+    self.runWatchdog = ExportRunWatchdog(
+      enabled: watchdogEnabled || measurements != nil, measurements: measurements)
+  }
+
+  /// Capture includes preparation and every queue fragment of the logical activity.
+  func beginMeasurementRun(automatic: Bool, convertHEICToJPEG: Bool) {
+    guard let measurements else { return }
+    measurements.beginRun(automatic: automatic, convertHEICToJPEG: convertHEICToJPEG)
+    runWatchdog.begin()
+  }
+
+  func endMeasurementRun() {
+    guard let measurements else { return }
+    runWatchdog.end()
+    measurements.endRun()
   }
 
   // MARK: - Pause / resume
@@ -137,11 +218,15 @@ final class ExportQueueCoordinator: ObservableObject {
   /// admission check (`canTogglePause`) lives on `ExportManager` — pause is also valid
   /// during the "jobs queued, run loop not started yet" window the manager handles.
   func pause() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     isPaused = true
     logger.info("Export queue paused")
   }
 
   func resume() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     guard isPaused else { return }
     isPaused = false
     logger.info("Export queue resumed")
@@ -155,33 +240,23 @@ final class ExportQueueCoordinator: ObservableObject {
   /// after enqueueing (so a single processing kick can cover multiple enqueues in a
   /// bulk-album run).
   func enqueue(_ jobs: [ExportManager.ExportJob]) {
-    pendingJobs.append(contentsOf: jobs)
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
+    let previous = placementRevision
+    jobStorage.append(contentsOf: jobs)
+    if !jobs.isEmpty { placementRevision &+= 1 }
     totalJobsEnqueued += jobs.count
     for job in jobs {
       queuedCountsByPlacementId[job.placement.id, default: 0] += 1
     }
     updateQueueCount()
+    refreshMonthStates(since: previous)
   }
 
   /// Reads the per-placement queue depth. Existing callers query `(year, month)` via the
   /// timeline placement id.
   func queuedCount(placementId: String) -> Int {
-    queuedCountsByPlacementId[placementId, default: 0]
-  }
-
-  // MARK: - Clear
-
-  /// Empties `pendingJobs`, decrements `totalJobsEnqueued` by the cleared count, clears
-  /// the per-placement counters, and updates `queueCount`. Used by the `clearPending`
-  /// ExportManager API and by the cancellation path.
-  func clearPending() -> Int {
-    let removed = pendingJobs.count
-    pendingJobs.removeAll()
-    queuedCountsByPlacementId.removeAll()
-    totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
-    updateQueueCount()
-    logger.info("Cleared \(removed) pending export jobs")
-    return removed
+    monthState(placementId: placementId).snapshot.queued
   }
 
   // MARK: - Teardown (called by ExportManager.cancelAndClear / supersedeForManualRun /
@@ -189,26 +264,35 @@ final class ExportQueueCoordinator: ObservableObject {
 
   /// Cancels the in-flight `currentTask`, clears every queue counter, drops the queue,
   /// resets running/paused/processing flags. Does NOT bump generation — callers that
-  /// also want the cancellation seam to fire call `bumpGeneration()` separately. This
-  /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
-  /// share the queue teardown logic.
+  /// also want the cancellation seam to fire call `bumpGeneration()` separately.
   func teardownQueue() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
+    let previous = placementRevision
     currentTask?.cancel()
     currentTask = nil
-    pendingJobs.removeAll()
+    removePendingJobs()
+    if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
     isProcessing = false
     isRunning = false
     isPaused = false
+    setActivePlacement(nil)
     queueCount = 0
+    refreshMonthStates(since: previous)
   }
 
   /// Resets the published progress counters. ExportManager calls this before a fresh run
   /// starts so the UI doesn't carry counters from the previous run.
   func resetProgressCounters() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
+    let previous = placementRevision
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
+    if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
+    refreshMonthStates(since: previous)
   }
 
   // MARK: - Drain loop
@@ -218,6 +302,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// edge: when called with no pending jobs and no bulk-enqueue task in flight, the
   /// host's `didDrainQueue` fires so any `runExport` awaitable resolves.
   func processQueueIfNeeded() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     guard !isProcessing else { return }
     guard !isPaused else { return }
     guard !pendingJobs.isEmpty else {
@@ -225,11 +311,10 @@ final class ExportQueueCoordinator: ObservableObject {
       // already-complete library), the queue-drain hook in `processNext` won't fire
       // because `processNext` won't run. Finalize here so the awaiter resolves.
       //
-      // Guard on `!isEnqueueingAll` so a `resume()` during the brief window between an
-      // enqueueing Task starting and adding the first job (queue is empty,
-      // `processQueueIfNeeded` triggered from `resume()`) doesn't prematurely resolve a
-      // run that's still in its enqueue phase.
-      if host?.isEnqueueingAll == false {
+      // Guard on `!isPreparingExport` so an empty queue (for example after `resume()`)
+      // doesn't resolve a run whose scan is still queueing. The scan's own end calls
+      // this again once the flag has dropped.
+      if host?.isPreparingExport == false {
         host?.didDrainQueue()
       }
       return
@@ -240,9 +325,13 @@ final class ExportQueueCoordinator: ObservableObject {
   }
 
   private func processNext() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
+    let previous = placementRevision
     if isPaused {
       isProcessing = false
       isRunning = false
+      host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
       logger.info("Queue paused; not starting next job")
       return
@@ -250,30 +339,41 @@ final class ExportQueueCoordinator: ObservableObject {
     guard !pendingJobs.isEmpty else {
       isProcessing = false
       isRunning = false
-      host?.clearCurrentJobIdentifiers()
+      host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
       logger.info("Export queue drained")
       host?.didDrainQueue()
       return
     }
-    let job = pendingJobs.removeFirst()
+    let currentGen = generation
+    let job = jobStorage[jobHead]
+    jobHead += 1
+    if jobHead == jobStorage.count { removePendingJobs() }
+    placementRevision &+= 1
     let key = job.placement.id
     queuedCountsByPlacementId[key, default: 1] -= 1
     if queuedCountsByPlacementId[key, default: 0] <= 0 {
       queuedCountsByPlacementId.removeValue(forKey: key)
     }
     host?.setCurrentJob(job)
+    guard isCurrent(currentGen) else { return }
     updateQueueCount()
-    let currentGen = generation
-    currentTask = Task { [weak self, weak host] in
+    guard isCurrent(currentGen) else { return }
+    currentTask = Task(priority: .utility) { [weak self, weak host] in
+      guard let self, self.isCurrent(currentGen) else { return }
+      let measurement = self.measurements?.beginJob(assetId: job.assetLocalIdentifier)
       await host?.performExport(job: job, generation: currentGen)
+      self.measurements?.endJob(measurement)
       await MainActor.run { [weak self] in
         guard let self, self.isCurrent(currentGen) else { return }
-        host?.clearCurrentJobIdentifiers()
+        host?.beginProgressUpdates()
+        defer { host?.endProgressUpdates() }
+        host?.clearCurrentJobIdentifiers(keepingPlacement: true)
         self.totalJobsCompleted += 1
         self.processNext()
       }
     }
+    refreshMonthStates(since: previous)
   }
 
   // MARK: - Queue depth

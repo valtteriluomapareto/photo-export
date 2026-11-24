@@ -14,7 +14,7 @@ struct PhotoLibraryManagerTests {
 
   /// Issue #49: `bindLivePhotoDetectionFallback(to:)` subscribes
   /// `livePhotoDetectionFallbackEnabled` to a `Bool` publisher — production
-  /// passes `ExportManager.$livePhotosPairedExport.eraseToAnyPublisher()`. A
+  /// passes `ExportManager.livePhotosPairedExportPublisher`. A
   /// refactor that drops the sink, replaces it with `.assign(to:)` on the
   /// wrong key path, or hops the value through `.receive(on:)` and breaks the
   /// "observable on the next fetch" guarantee would silently disable iCloud-

@@ -136,7 +136,7 @@ class FullMatrixTests(unittest.TestCase):
 
 class SigningOverrideTests(unittest.TestCase):
     def test_release_pipelines_still_override_the_ignored_project_signing_keys(self):
-        direct = (REPO / ".github/workflows/release-direct.yml").read_text()
+        direct = (REPO / "scripts/ci/archive-direct.sh").read_text()
         store = (REPO / "scripts/ci/archive-appstore.sh").read_text()
         for key in vr.PIPELINE_OVERRIDDEN_KEYS:
             with self.subTest(key=key):
@@ -159,6 +159,10 @@ class SigningOverrideTests(unittest.TestCase):
     def test_release_scripts_and_shared_scheme_require_the_full_matrix(self):
         for path in [
             "scripts/ci/archive-appstore.sh",
+            "scripts/ci/archive-direct.sh",
+            "scripts/ci/setup-keychain-direct.sh",
+            "scripts/ci/release-context-direct.sh",
+            "scripts/ci/release-context-appstore.sh",
             "scripts/ci/export-appstore.sh",
             "photo-export.xcodeproj/xcshareddata/xcschemes/photo-export.xcscheme",
         ]:

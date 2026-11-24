@@ -1,8 +1,8 @@
 import Foundation
 
-/// Scope of a single export run. Manual runs use the timeline/favorites/all-albums "full" cases;
-/// Auto Export runs use either targeted asset-id cases or the umbrella `.autoExport` case where
-/// the selected scopes are evaluated as a unit.
+/// Scope of a recorded export run. Auto Export schedules full-scope runs through the
+/// `.autoExport` umbrella, and released versions recorded only those full scopes. The
+/// targeted cases still decode; current runners reject targeted requests.
 enum ExportRunScope: Equatable, Codable, Sendable {
   case timelineFullLibrary
   case timelineAssets(Set<String>)
@@ -20,8 +20,7 @@ enum ExportRunScope: Equatable, Codable, Sendable {
   /// separately by `AutoSyncReducer` because it carries its own selection).
   ///
   /// Single source of truth paired with `AutoExportLibraryScope.fullRunScope`.
-  /// `AutoSyncReducer.coveredScopes` and `manualFullExportCompleted` read this
-  /// instead of restating the mapping.
+  /// `AutoSyncReducer.coveredScopes` reads this instead of restating the mapping.
   var clearableScope: AutoExportLibraryScope? {
     switch self {
     case .timelineFullLibrary: return .timeline
@@ -35,8 +34,8 @@ enum ExportRunScope: Equatable, Codable, Sendable {
   }
 }
 
-/// Where an `ExportRunContext` originated. Manual runs come from user-visible controls; auto-sync
-/// runs come from `AutoSyncManager`.
+/// Where a recorded `ExportRunContext` originated. Contexts come from `AutoSyncManager`;
+/// no released version recorded `.manual`.
 enum ExportRunSource: String, Codable, Equatable, Sendable {
   case manual
   case autoSync

@@ -28,36 +28,23 @@ struct ReuseSourceAlbumPathTests {
 
   // MARK: - Fixtures
 
-  private func makeManager() throws -> (
+  private func makeManager() async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ReuseSourceAlbum")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("ReuseAlbum")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = await ExportManagerHarness(
+      label: "ReuseSourceAlbum",
+      userDefaults: TestScratch.defaults("ReuseAlbum"))
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.writer, harness.fileSystem,
+      harness.store, harness.collectionStore, harness.storeRoot
     )
-    return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -72,7 +59,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func timelineReusesAlbumFile() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -125,7 +112,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func albumReusesAnotherAlbumFile() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -188,7 +175,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func newAlbumExportPrefersTimelineSourceOverAlbumSource() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -251,7 +238,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func multipleAlbumsTiebrokenByLexicographicPlacementId() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -313,7 +300,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func currentPlacementExcludedFromItsOwnReuseSearch() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()

@@ -34,7 +34,8 @@ struct VariantExporterTests {
     var convertHEICToJPEG: Bool = false
 
     func setCurrentAssetFilename(_ name: String?) {}
-    func setCurrentJobVariant(_ variant: ExportVariant?) {}
+    var onSetVariant: (() -> Void)?
+    func setCurrentJobVariant(_ variant: ExportVariant?) { onSetVariant?() }
     func clearRenderActivity() {}
 
     func recordVariantFailed(
@@ -48,11 +49,13 @@ struct VariantExporterTests {
 
     // ExportQueueCoordinator.Host — only required so the coordinator can be
     // constructed; the tests in this file never drive the queue.
-    var isEnqueueingAll: Bool { false }
+    var isPreparingExport: Bool { false }
     func performExport(job: ExportManager.ExportJob, generation: Int) async {}
     func didDrainQueue() {}
+    func beginProgressUpdates() {}
+    func endProgressUpdates() {}
     func setCurrentJob(_ job: ExportManager.ExportJob) {}
-    func clearCurrentJobIdentifiers() {}
+    func clearCurrentJobIdentifiers(keepingPlacement: Bool) {}
   }
 
   // MARK: - Harness
@@ -65,6 +68,7 @@ struct VariantExporterTests {
     let converter: FakeImageConverter
     let fileSystem: FakeFileSystem
     let queueCoordinator: ExportQueueCoordinator
+    let timeline: ExportRecordStore
     let destDir: URL
     let storeRoot: URL
 
@@ -74,7 +78,8 @@ struct VariantExporterTests {
     }
   }
 
-  private func makeHarness(planner: ((FakeFileSystem) -> FinalNamePlanner)? = nil) -> Harness {
+  private func makeHarness(planner: ((FakeFileSystem) -> FinalNamePlanner)? = nil) async -> Harness
+  {
     let host = FakeHost()
     let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
@@ -83,9 +88,9 @@ struct VariantExporterTests {
     let dest = FakeExportDestination()
     let storeRoot = TestScratch.directory("VariantExporter")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let router = RecordStoreRouter(timelineStore: timeline, collectionStore: collection)
     let resolver = ExportDestinationResolver(fileSystem: fileSystem)
     let destDir = dest.rootURL.appendingPathComponent("2025/07/", isDirectory: true)
@@ -105,7 +110,28 @@ struct VariantExporterTests {
     return Harness(
       exporter: exporter, host: host, writer: writer, renderer: renderer,
       converter: converter, fileSystem: fileSystem, queueCoordinator: queueCoordinator,
-      destDir: destDir, storeRoot: storeRoot)
+      timeline: timeline, destDir: destDir, storeRoot: storeRoot)
+  }
+
+  @Test(.timeLimit(.minutes(2)))
+  func synchronousVariantHostCancellationCannotMarkOrDispatch() async throws {
+    let h = await makeHarness()
+    defer { h.cleanup() }
+    h.host.onSetVariant = { h.queueCoordinator.bumpGeneration() }
+    let asset = TestAssetFactory.makeAsset(id: "cancel-variant")
+    let resources = [TestAssetFactory.makeResource(originalFilename: "IMG.JPG")]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+    await #expect(throws: CancellationError.self) {
+      _ = try await h.exporter.exportSingleVariant(
+        variant: .original, descriptor: asset, resources: resources,
+        destDir: h.destDir, relPath: "2025/07/",
+        job: ExportManager.ExportJob(
+          assetLocalIdentifier: asset.id,
+          placement: .timeline(year: 2025, month: 7), selection: .edited),
+        groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
+    }
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.timeline.exportInfo(assetId: asset.id) == nil)
   }
 
   // MARK: - Tests
@@ -114,7 +140,7 @@ struct VariantExporterTests {
   /// called. Pinning this prevents a future bug where the render branch is taken for a
   /// `.resource` producer.
   @Test func staticResourceProducer_writesViaResourceWriter_doesNotRender() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "static", hasAdjustments: false)
@@ -142,7 +168,7 @@ struct VariantExporterTests {
   /// Rendered-media producer (Phase 3b): the renderer is invoked directly on
   /// `VariantExporter`'s own dependency, not through any `Host` bridge.
   @Test func renderedMediaProducer_invokesMediaRendererDirectly() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     // Adjusted video asset with only a `.video` resource → producer selects `.render`.
@@ -178,7 +204,7 @@ struct VariantExporterTests {
   /// re-threw a different error type with the same localized description would silently
   /// regress AutoSync retry routing without failing the existing end-to-end tests.
   @Test func renderFailure_translatedToExportDomainCode9NSError() async {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     h.renderer.renderError = NSError(domain: "Test", code: 42, userInfo: nil)
@@ -225,7 +251,7 @@ struct VariantExporterTests {
   /// `RecordStoreRouter.markVariantFailed` directly), so the bookkeeping-aware path
   /// runs and `ExportRunSummary.failedCount` can increment.
   @Test func noResourceProducer_recordsFailureThroughHost() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     // Video asset, no resources → producer.originalFilename is nil → sentinel failure.
@@ -260,7 +286,7 @@ struct VariantExporterTests {
   /// host returns the toggle value, exporter threads it through selection,
   /// the converter sees the call.
   @Test func heicWithToggleOnAndUneditedAsset_invokesConverterAndWritesJPEG() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.host.convertHEICToJPEG = true
 
@@ -311,7 +337,7 @@ struct VariantExporterTests {
   /// `_orig` companion (covered elsewhere). What this test pins is the seam:
   /// without the toggle, the converter must not be reached.
   @Test func heicWithToggleOffAndUneditedAsset_doesNotInvokeConverter() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.host.convertHEICToJPEG = false
 
@@ -350,7 +376,7 @@ struct VariantExporterTests {
   /// future refactor that accidentally routes them through the video render path would
   /// fail this gate.
   @Test func originalPairedVideo_writesViaResourceWriter_doesNotRender() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
@@ -386,7 +412,7 @@ struct VariantExporterTests {
   /// `.editedPairedVideo` prefers `.fullSizePairedVideo` when Photos has rendered an
   /// edited motion companion.
   @Test func editedPairedVideo_prefersFullSizePairedVideoResource() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "live", hasAdjustments: true, isLivePhoto: true)
@@ -422,7 +448,7 @@ struct VariantExporterTests {
   /// fallback is silent: no host failure call, the writer is invoked with the unedited
   /// motion bytes and the file lands at the natural edited stem.
   @Test func editedPairedVideo_fallsBackToPairedVideoWhenFullSizeMissing() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "live", hasAdjustments: true, isLivePhoto: true)
@@ -456,7 +482,7 @@ struct VariantExporterTests {
   /// reported through the normal `.failed` channel, so the diagnostic report and
   /// run-summary counter surface it.
   @Test func originalPairedVideo_noResource_recordsSentinelThroughHost() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
@@ -486,7 +512,7 @@ struct VariantExporterTests {
 
 extension VariantExporterTests {
   @Test func conversionFailureCarriesTypedReasonAndPreservesRetryIdentity() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.host.convertHEICToJPEG = true
     h.converter.convertError = NSError(domain: "Test", code: 42)
@@ -517,7 +543,7 @@ extension VariantExporterTests {
   /// A run that goes stale without its Task being cancelled stops comparing at the next
   /// generation check: here every read, so the middle is never read and nothing is recorded.
   @Test func staleGenerationStopsTheCompareBeforeItsNextRead() async throws {
-    let h = makeHarness(planner: {
+    let h = await makeHarness(planner: {
       FinalNamePlanner(fileSystem: $0, edgeChunkSize: 4, middleChunkSize: 4, stopCheckInterval: 1)
     })
     defer { h.cleanup() }

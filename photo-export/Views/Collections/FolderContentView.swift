@@ -8,9 +8,9 @@ import SwiftUI
 /// its own existing album placement, so the on-disk layout matches what the user
 /// gets from per-album exports today.
 struct FolderContentView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG
@@ -53,12 +53,6 @@ struct FolderContentView: View {
 
   var body: some View {
     let exportHelp = exportButtonHelp
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText([exportHelp], for: "folder-export-help")
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordAction("folder-select-all", action: selectAllChildren)
-    #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
         .font(.title2)
@@ -81,7 +75,10 @@ struct FolderContentView: View {
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(keyboardShortcutsHost)
-    .task(id: folderId + "|\(photoLibraryManager.libraryRevision)") {
+    .task(id: folderId + "|\(photoLibraryManager.libraryRefresh.revision)") {
+      let source = photoLibraryManager.libraryRevision
+      await photoLibraryManager.libraryRefresh.loadTree()
+      guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else { return }
       folder = findFolder(folderId: folderId)
       // A library change refreshes in place and keeps the selection, minus children that
       // left the folder. Each album or folder has a single parent in PhotoKit, so child ids
@@ -194,10 +191,6 @@ struct FolderContentView: View {
     let albumCount = albumIds.count
     let exported = exportedPhotoCount(albumIds: albumIds)
     let total = totalPhotoCount(albumIds: albumIds)
-    #if DEBUG
-      bodyCounter?.recordText(["\(exported)/\(total)"], for: "folder-summary")
-      bodyCounter?.recordText(selectedChildIds.sorted(), for: "folder-selection")
-    #endif
 
     return HStack(spacing: 8) {
       Image(systemName: summaryIconName(exported: exported, total: total))
@@ -466,7 +459,7 @@ struct FolderContentView: View {
   // MARK: - Tree + counts
 
   private func findFolder(folderId: String) -> PhotoCollectionDescriptor? {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
   }
 
@@ -480,11 +473,12 @@ struct FolderContentView: View {
       return
     }
     isLoadingCounts = true
+    let source = photoLibraryManager.libraryRevision
     let counts = await collectCounts(in: folder.children)
     // A newer library change or folder switch restarted the load. This load's results are
     // stale (cancelled fetches read as zero), so leave the counts and `isLoadingCounts` to
     // the newer load, which clears the flag when it finishes.
-    guard !Task.isCancelled else {
+    guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else {
       #if DEBUG
         bodyCounter?.record("folder-counts-superseded")
       #endif

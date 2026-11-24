@@ -28,7 +28,7 @@ When you first open Photo Export, macOS will ask you to grant access to your Pho
 
 ## Step 3: Choose your export destination
 
-Click **Choose Folder** and select your external hard drive or any local folder. The app remembers your choice, so you only need to do this once.
+Click **Choose Folder** and select your external hard drive or any local folder. The app remembers your choice, so you only need to do this once. Re-selecting the same folder keeps an active export running. Choosing a different folder cancels the previous run and switches to that folder’s history.
 
 ## Step 4: Browse and export
 
@@ -96,6 +96,8 @@ Export badges and counts refresh during continuous exports and show their final 
 
 Export progress appears in the content-column strip below the toolbar. After a manual export finishes, the strip briefly shows **Export complete** on success. If any asset job fails, it instead shows **N exported · M failed** with **View Issues**, which opens **Settings → Export Issues**. A job that fails on several photo/video versions counts once; successfully exported versions remain tracked. Failed scans, cleared pending work and export-history save errors show an incomplete or stopped explanation. Failure feedback stays until you dismiss it or start another run. A full, denied or unreachable destination stops the current run immediately and shows the reason. If the drive is then unmounted while nothing is exporting, the stop message stays. If a drive or network share can't be reached, check that it is connected and the folder still exists. Unattempted assets keep their history and do not gain failure rows. Fix the destination, then start a new export; the stopped queue is cleared, and the new run skips versions already exported. Dismissal and success expiry hide the finished strip without changing export history. Explicit cancellation clears the feedback; an unavailable destination is also explained above the strip.
 
+Long failure details wrap to the content column’s width so recovery guidance stays visible.
+
 ## Rebuilding state from an existing backup
 
 If you reinstall the app, switch builds, or restore your data on a new Mac, **File → Import Existing Backup…** rebuilds local export state from disk. It scans the destination, matches files to your Photos library, and adopts what's already there as exported. As part of the same step, it **prunes records for files that are no longer on disk** — for example if you deleted a folder, recreated it empty under the same name, or removed individual exports. Matched files retain their actual year/month folder, even when a timezone change or a Photos date adjustment places the asset in an adjacent month. The next export skips the imported asset instead of creating another copy in its current Photos month.
@@ -114,7 +116,7 @@ saved. Restore access, then use **Retry**; missing optional `videos/` folders re
 
 If timeline history is corrupt, choose **Reset and Rebuild from Folder…** in its recovery alert to reset tracking and immediately run Import Existing Backup. **Reset Records** alone leaves tracking empty; exporting before rebuilding can create duplicate copies. Rebuilding requires Photos access, a connected readable destination, and no export or import already running. If both history stores need recovery, reset timeline history, resolve the collection alert, then choose **File → Import Existing Backup…**. Import rebuilds Favorites and album history too, so after resetting collection history, run it before exporting collections again.
 
-If an import fails, the sheet stops showing progress and explains the error. **Close** lets you reconnect the drive or reselect the export folder; **Retry** becomes available when the folder and export history are ready. Read-only backup folders remain valid for importing. If either history store reports a storage or corruption problem, close the import sheet and resolve the export-history alert before retrying. Cancelling or invalidating an old import cannot replace a newer import’s result or error.
+If an import fails, including a failure saving history partway through, the sheet stops showing progress and explains the error. **Close** lets you reconnect the drive or reselect the export folder; **Retry** becomes available when the folder and export history are ready. Read-only backup folders remain valid for importing. If either history store reports a storage or corruption problem, close the import sheet and resolve the export-history alert before retrying. Cancelling or invalidating an old import cannot replace a newer import’s result or error.
 
 ## If an export gets stuck
 

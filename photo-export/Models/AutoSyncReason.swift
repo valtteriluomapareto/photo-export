@@ -8,7 +8,7 @@ import Foundation
 /// Three vocabularies stay separate so inputs, triggers and blockers are not conflated:
 /// - `AutoSyncReason` (this type): what caused a debounce or run to start.
 /// - `AutoSyncEvent`: inputs the reducer reacts to. Reducer events
-///   like `retryTimerFired` and `manualFullExportCompleted` are *not* reasons; they are
+///   like `retryTimerFired` and `autoSyncRunCompleted` are *not* reasons; they are
 ///   their own events.
 /// - `AutoSyncBlockedReason`: why Auto Export is currently blocked or waiting.
 enum AutoSyncReason: String, Codable, Equatable, Sendable {
@@ -60,14 +60,13 @@ extension AutoSyncBlockedReason {
   var userFacingLabel: String {
     switch self {
     case .photosAccessMissing: return "Photos access needed"
-    case .limitedPhotosAccess: return "limited Photos access"
     case .destinationMissing: return "no destination"
     case .destinationUnavailable: return "drive disconnected"
+    case .destinationChecking: return "checking the destination"
     case .destinationUnsafe: return "destination needs review"
     case .noScopesSelected: return "pick what to export"
     case .manualExportActive: return "manual export running"
     case .importActive: return "import running"
-    case .retryBackoff: return "retry backoff"
     }
   }
 }

@@ -1,12 +1,14 @@
 import AppKit
 import Combine
 import Foundation
+import Observation
 import Photos
 import SwiftUI
 import os
 
+@Observable
 @MainActor
-final class ExportManager: ObservableObject {
+final class ExportManager {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
   /// Persistence key for the Live Photo paired-video export toggle.
@@ -37,19 +39,6 @@ final class ExportManager: ObservableObject {
       self.settings = settings
     }
 
-    init(
-      assetLocalIdentifier: String,
-      placement: ExportPlacement,
-      selection: ExportVersionSelection,
-      livePhotosPaired: Bool = false,
-      videoLayout: ExportVideoLayout = .flat
-    ) {
-      self.init(
-        assetLocalIdentifier: assetLocalIdentifier, placement: placement,
-        settings: .init(
-          selection: selection, livePhotosPaired: livePhotosPaired, videoLayout: videoLayout))
-    }
-
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
     /// `.favorites`/`.album`/`.sharedAlbum` placements where year/month is not part of
     /// the on-disk path (the destination uses `placement.relativePath` directly).
@@ -57,15 +46,25 @@ final class ExportManager: ObservableObject {
     var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
 
-  // MARK: - Published State (Export)
-  @Published private(set) var isRunning: Bool = false
-  @Published private(set) var queueCount: Int = 0
-  @Published private(set) var isPaused: Bool = false
+  // MARK: - Export state
+  // `isRunning`, `queueCount`, `activeRunContext` and `isPreparingExport` feed
+  // `exportRunStatePublisher`. Each is held in an `ObservableCombineBridge` so views track
+  // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
+  private(set) var isRunning: Bool {
+    get { bridgedRead(isRunningBridge, \.isRunning) }
+    set { bridgedWrite(isRunningBridge, \.isRunning, newValue) }
+  }
+  private let isRunningBridge = ObservableCombineBridge(false)
+  private(set) var queueCount: Int {
+    get { bridgedRead(queueCountBridge, \.queueCount) }
+    set { bridgedWrite(queueCountBridge, \.queueCount, newValue) }
+  }
+  private let queueCountBridge = ObservableCombineBridge(0)
+  private(set) var isPaused: Bool = false
 
-  /// Frequently-mutating progress-bar state lives here so the per-asset filename and
-  /// per-job counter updates don't trigger `ExportManager.objectWillChange` storms.
-  /// See `ExportProgressState` for the rationale and tests-still-pass forwarders below.
-  let progressState = ExportProgressState()
+  /// Per-asset progress has its own observable owner. Views track only the progress
+  /// fields they read; the forwarders below preserve the manager's read surface.
+  let progressState: ExportProgressState
 
   /// Forwarders to `progressState`. Read-only at the manager surface so callers that
   /// always treated these as `private(set)` continue to compile; internal writes go
@@ -77,12 +76,14 @@ final class ExportManager: ObservableObject {
   var emptyRunMessage: String? { progressState.emptyRunMessage }
   var queueWarningMessage: String? { progressState.queueWarningMessage }
 
-  private var emptyRunMessageTask: Task<Void, Never>?
+  @ObservationIgnored private var emptyRunMessageTask: Task<Void, Never>?
 
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
-  @Published var versionSelection: ExportVersionSelection {
-    didSet {
+  var versionSelection: ExportVersionSelection {
+    get { bridgedRead(versionSelectionBridge, \.versionSelection) }
+    set {
+      bridgedWrite(versionSelectionBridge, \.versionSelection, newValue)
       userDefaults.set(
         versionSelection.rawValue, forKey: Self.versionSelectionDefaultsKey)
       // The "already exported" copy is scoped to the previous selection — under a new
@@ -90,6 +91,7 @@ final class ExportManager: ObservableObject {
       clearEmptyRunMessage()
     }
   }
+  private let versionSelectionBridge: ObservableCombineBridge<ExportVersionSelection>
 
   /// When on, the export pipeline writes JPEG `.edited` variants for
   /// HEIC/HEIF assets by re-encoding via `ImageConverter`. Off by default —
@@ -99,11 +101,13 @@ final class ExportManager: ObservableObject {
   /// When flipped on, already-exported HEIC assets become "incomplete" under
   /// `requiredVariants` (which now requires `.edited` for HEIC) and will
   /// re-enqueue on the next manual or auto-export action. The record stores
-  /// observe `_convertHEICToJPEG` via their own published state so view-side
+  /// mirror `convertHEICToJPEG` in their own observable state so view-side
   /// `isExported` queries stay accurate without callers having to thread the
   /// flag.
-  @Published var convertHEICToJPEG: Bool {
-    didSet {
+  var convertHEICToJPEG: Bool {
+    get { bridgedRead(convertHEICToJPEGBridge, \.convertHEICToJPEG) }
+    set {
+      bridgedWrite(convertHEICToJPEGBridge, \.convertHEICToJPEG, newValue)
       userDefaults.set(convertHEICToJPEG, forKey: Self.convertHEICToJPEGDefaultsKey)
       exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
       collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
@@ -112,12 +116,13 @@ final class ExportManager: ObservableObject {
       clearEmptyRunMessage()
     }
   }
+  private let convertHEICToJPEGBridge: ObservableCombineBridge<Bool>
 
   static let convertHEICToJPEGDefaultsKey = "exportConvertHEICToJPEG"
 
   /// Toolbar/onboarding-friendly view of `versionSelection`. Off ↔ `.edited`, on ↔
   /// `.editedWithOriginals`. Mutations route back through `versionSelection` so
-  /// `@Published` observation and `UserDefaults` persistence flow through one source.
+  /// Observation and `UserDefaults` persistence flow through one source.
   var includeOriginals: Bool {
     get { versionSelection == .editedWithOriginals }
     set { versionSelection = newValue ? .editedWithOriginals : .edited }
@@ -131,14 +136,17 @@ final class ExportManager: ObservableObject {
   /// choice survives restart and stays globally consistent regardless of destination.
   /// Snapshotted onto each `ExportJob` at enqueue time (alongside `selection`) so a
   /// mid-run toggle change does not corrupt in-flight work or strand orphans.
-  @Published var livePhotosPairedExport: Bool {
-    didSet {
+  var livePhotosPairedExport: Bool {
+    get { bridgedRead(livePhotosPairedExportBridge, \.livePhotosPairedExport) }
+    set {
+      bridgedWrite(livePhotosPairedExportBridge, \.livePhotosPairedExport, newValue)
       userDefaults.set(livePhotosPairedExport, forKey: Self.livePhotosPairedExportDefaultsKey)
       // The "already exported" copy is scoped to the previous setting — under a new
       // setting the user may have new work, so the message would be misleading.
       clearEmptyRunMessage()
     }
   }
+  private let livePhotosPairedExportBridge: ObservableCombineBridge<Bool>
 
   /// when `.subfolder`, standalone-video assets land in a `videos/` subfolder
   /// inside the placement (`2026/03/videos/IMG_0002.MOV`) instead of the bare placement
@@ -154,24 +162,32 @@ final class ExportManager: ObservableObject {
   /// `requiredVariants` (no asset becomes "incomplete" when toggled). Reconcile
   /// correctness instead rides on the per-variant `subfolder` field on
   /// `ExportVariantRecord`. Don't add a store push.
-  @Published var videoLayout: ExportVideoLayout {
+  var videoLayout: ExportVideoLayout {
     didSet {
       userDefaults.set(videoLayout.rawValue, forKey: Self.videoLayoutDefaultsKey)
-      // Same rationale as `livePhotosPairedExport.didSet`: a layout change can make
+      // Same rationale as the `livePhotosPairedExport` setter: a layout change can make
       // "already exported" misleading for a future re-export attempt on the same scope.
       clearEmptyRunMessage()
     }
   }
 
-  // MARK: - Published State (Import)
-  @Published private(set) var isImporting: Bool = false
-  @Published private(set) var importStage: BackupScanner.ImportStage?
-  @Published private(set) var importError: String?
-  @Published private(set) var previousBackupMissing: Bool = false
-  @Published var importResult: ImportReport?
+  // MARK: - Import state
+  private(set) var isImporting: Bool {
+    get { bridgedRead(isImportingBridge, \.isImporting) }
+    set { bridgedWrite(isImportingBridge, \.isImporting, newValue) }
+  }
+  private let isImportingBridge = ObservableCombineBridge<Bool>(false)
+  private(set) var importStage: BackupScanner.ImportStage?
+  private(set) var importError: String?
+  private(set) var previousBackupMissing: Bool {
+    get { bridgedRead(previousBackupMissingBridge, \.previousBackupMissing) }
+    set { bridgedWrite(previousBackupMissingBridge, \.previousBackupMissing, newValue) }
+  }
+  private let previousBackupMissingBridge = ObservableCombineBridge<Bool>(false)
+  var importResult: ImportReport?
   /// Changes each time the app starts an import the user didn't open the Import sheet for, so the
   /// library window shows the sheet (progress, result, or why it didn't run).
-  @Published private(set) var importSheetRequest: UUID?
+  private(set) var importSheetRequest: UUID?
 
   // MARK: - Awaitable run lifecycle
 
@@ -180,70 +196,86 @@ final class ExportManager: ObservableObject {
   /// observing this property see exactly one transition `nil → context → nil` per
   /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
   /// `start*` methods.
-  @Published private(set) var activeRunContext: ExportRunContext?
+  private(set) var activeRunContext: ExportRunContext? {
+    get { bridgedRead(activeRunContextBridge, \.activeRunContext) }
+    set { bridgedWrite(activeRunContextBridge, \.activeRunContext, newValue) }
+  }
+  private let activeRunContextBridge = ObservableCombineBridge<ExportRunContext?>(nil)
 
   /// Composite run-state observable for AutoSync. Republishes whenever the active
-  /// context, the running flag, the queue depth, or the bulk-enqueue flag changes
+  /// context, the running flag, the queue depth, or the preparation flag changes
   /// — so the fire-and-forget `start*` methods (which never set `activeRunContext`)
-  /// still register as `isManualActive` while the queue is processing them OR
-  /// while the bulk dispatcher is mid-enqueue but hasn't appended its first job
-  /// yet. Without `isEnqueueingAll` in the tuple, AutoSync could observe `.idle`
-  /// during the window between `isEnqueueingAll = true` and the first
-  /// `pendingJobs.append`, and race to start its own background run on top of a
-  /// user-initiated bulk export.
+  /// register as `isManualActive` from the click: while their scan runs, before any job
+  /// is queued, and while the queue processes them. Without `isPreparingExport` in the
+  /// tuple, AutoSync could observe `.idle` during a scan and start its own run on top
+  /// of a user-initiated export.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-    Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
-      .map { context, isRunning, queueCount, isEnqueueingAll in
-        let manualFireAndForget =
-          context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
-        return ExportRunState(
-          activeContext: context,
-          isManualActive: context?.source == .manual || manualFireAndForget,
-          isAutoSyncActive: context?.source == .autoSync
-        )
-      }
-      .removeDuplicates()
-      .eraseToAnyPublisher()
+    Publishers.CombineLatest4(
+      activeRunContextBridge.publisher, isRunningBridge.publisher,
+      queueCountBridge.publisher, isPreparingExportBridge.publisher
+    )
+    .map { context, isRunning, queueCount, isPreparingExport in
+      let manualFireAndForget =
+        context == nil && (isRunning || queueCount > 0 || isPreparingExport)
+      return ExportRunState(
+        activeContext: context,
+        isManualActive: context?.source == .manual || manualFireAndForget,
+        isAutoSyncActive: context?.source == .autoSync
+      )
+    }
+    .removeDuplicates()
+    .eraseToAnyPublisher()
   }
 
   /// Combine publisher for `versionSelection` so AutoSync can subscribe to user
   /// changes (Include Originals toggle). Without this, the reducer would default
   /// to `.edited` regardless of the user's actual setting.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
-    $versionSelection.eraseToAnyPublisher()
+    versionSelectionBridge.publisher
   }
 
   /// Combine publisher for `convertHEICToJPEG`. AutoSync subscribes
   /// so flipping the toggle re-triggers a debounced evaluation — HEIC assets
   /// previously skipped as "already exported" become eligible once
   /// `requiredVariants` widens to include `.edited`.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
-    $convertHEICToJPEG.eraseToAnyPublisher()
+    convertHEICToJPEGBridge.publisher
   }
 
   /// Combine publisher for `livePhotosPairedExport`. `PhotoLibraryManager`
   /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
   /// fallback runs only when the user has the toggle on.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
-    $livePhotosPairedExport.eraseToAnyPublisher()
+    livePhotosPairedExportBridge.publisher
   }
 
   /// Combine publisher for the import flag.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
     // A "previous backup missing" result holds AutoSync like a running import until the user
     // decides, so nothing is exported into the folder they were just told is wrong.
-    $isImporting.combineLatest($previousBackupMissing)
+    isImportingBridge.publisher.combineLatest(previousBackupMissingBridge.publisher)
       .map { $0 || $1 }
       .removeDuplicates()
       .eraseToAnyPublisher()
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
-  /// terminal state. AutoSync uses manual-source summaries to clear compatible
-  /// dirty state. Fire-and-forget manual UI actions do not build a run context
+  /// terminal state. Retained for completion-seam characterization. Fire-and-forget
+  /// manual UI actions do not build a run context
   /// or summary and therefore do not emit through this publisher. Their terminal
   /// feedback is published separately through `ExportProgressState.manualSummary`.
   private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
+  /// Terminal summaries are sent synchronously on the main actor.
   var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
     completedRunsSubject.eraseToAnyPublisher()
   }
@@ -265,7 +297,8 @@ final class ExportManager: ObservableObject {
   /// `ExportManager` enqueue paths that call it are already `@MainActor`,
   /// so this is a no-op at runtime but prevents future off-main callers
   /// from compiling.
-  var autoSyncEligibilityCheck: (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
+  @ObservationIgnored var autoSyncEligibilityCheck:
+    (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
 
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
@@ -296,7 +329,7 @@ final class ExportManager: ObservableObject {
     /// change-event-driven debounce retries.
     var incompleteScan: Bool = false
   }
-  private var activeRunBookkeeping: ActiveRunBookkeeping?
+  @ObservationIgnored private var activeRunBookkeeping: ActiveRunBookkeeping?
 
   private struct ManualRunFeedback {
     let generation: Int
@@ -305,11 +338,11 @@ final class ExportManager: ObservableObject {
     var failureSignals = 0
     var failureMessage: String?
   }
-  private var manualRunFeedback: ManualRunFeedback?
+  @ObservationIgnored private var manualRunFeedback: ManualRunFeedback?
 
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
-    isRunning || queueCount > 0 || isEnqueueingAll
+    isRunning || queueCount > 0 || isPreparingExport
   }
 
   /// Whether the pause/resume toolbar control should accept clicks. Pausing is meaningful
@@ -334,6 +367,7 @@ final class ExportManager: ObservableObject {
   // MARK: - Dependencies
   private let logger = Logger.app(.exportOperations)
   let photoLibraryService: any PhotoLibraryService
+  private let photoKitReader: any PhotoKitReading
   /// Seam for dropping `PhotoLibraryManager`'s long-lived PHAsset cache
   /// between bulk-export iterations. See `PHAssetCacheControlling` for the
   /// memory-watermark backstory.
@@ -359,7 +393,7 @@ final class ExportManager: ObservableObject {
   /// property has a value. The IUO is assigned at the end of `init` (before init exits)
   /// and never reassigned thereafter; it retires whenever the Host protocol shrinks
   /// to zero callbacks that need `self` (a future refactor task — not load-bearing).
-  private(set) var variantExporter: VariantExporter!
+  @ObservationIgnored private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -369,7 +403,7 @@ final class ExportManager: ObservableObject {
   // ready. Functionally a `let`; the `var` is purely for the init order.
   // DO NOT change this back to `let` without re-examining the closure
   // capture in `init` — the rebind is the whole point.
-  private(set) var mediaRenderer: any MediaRenderer
+  @ObservationIgnored private(set) var mediaRenderer: any MediaRenderer
   /// Seam for the HEIC→JPEG conversion path. `VariantExporter` invokes
   /// it through this reference. Defaults to `ProductionImageConverter` (a thin
   /// CoreImage wrapper); tests inject `FakeImageConverter`.
@@ -397,76 +431,104 @@ final class ExportManager: ObservableObject {
     collectionExportRecordStore.state == .ready
   }
 
-  // Unpublished lifetime handles for deterministic preparation completion.
-  // These do not participate in UI/AutoSync admission or publications.
-  private var preparationTasks: [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
-  var currentPreparationTasks: [Task<Void, Never>] {
-    preparationTasks.values.filter { $0.generation == generation }.map(\.task)
+  @ObservationIgnored private let runActivity: any ExportRunActivity
+  @ObservationIgnored private let exportMeasurements: ExportMeasurements?
+  @ObservationIgnored private var holdsRunActivity = false
+
+  private func beginRunActivityIfNeeded() {
+    guard !holdsRunActivity else { return }
+    holdsRunActivity = true
+    queueCoordinator.beginMeasurementRun(
+      automatic: activeRunContext?.source == .autoSync, convertHEICToJPEG: convertHEICToJPEG)
+    runActivity.begin()
   }
 
+  private func endRunActivity() {
+    guard holdsRunActivity else { return }
+    holdsRunActivity = false
+    queueCoordinator.endMeasurementRun()
+    runActivity.end()
+  }
+
+  private func endRunActivityIfIdle() {
+    guard activeRunContext == nil, !hasActiveExportWork else { return }
+    endRunActivity()
+  }
+
+  /// Export scans that have not finished queueing; `isPreparingExport` says whether any exist.
+  @ObservationIgnored private(set) var preparationTasks:
+    [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+  private enum ScanEnd { case finished, failed }
+
+  /// Runs one export scan. Its end is handled only after the preparation flag has dropped,
+  /// so AutoSync never sees a resolved run as a manual one and an empty queue finalizes
+  /// only once no scan is left. A failed scan still exports what it queued, as an
+  /// incomplete run; with nothing queued it resolves an active run as `.failed`.
   @discardableResult
   private func trackPreparation(
-    generation gen: Int, operation: @escaping @MainActor () async -> Void
+    generation gen: Int, priority: TaskPriority? = nil,
+    operation: @escaping @MainActor () async -> ScanEnd
   ) -> Task<Void, Never> {
+    beginRunActivityIfNeeded()
     let id = UUID()
-    let task = Task { [weak self] in
-      defer {
-        self?.preparationTasks[id] = nil
-        self?.finishManualFeedbackIfReady(generation: gen)
+    let task = Task(priority: priority) { [weak self] in
+      let end = await operation()
+      guard let self else { return }
+      self.preparationTasks[id] = nil
+      let preparing = !self.preparationTasks.isEmpty
+      if self.isPreparingExport != preparing { self.isPreparingExport = preparing }
+      if self.isCurrent(gen) {
+        if end == .failed, self.pendingJobs.isEmpty {
+          if self.activeRunContext != nil {
+            self.finalizeActiveRun(result: .failed, cancelReason: nil)
+          }
+        } else {
+          if end == .failed { self.activeRunBookkeeping?.incompleteScan = true }
+          self.processQueueIfNeeded()
+        }
       }
-      await operation()
+      self.finishManualFeedbackIfReady(generation: gen)
+      self.endRunActivityIfIdle()
     }
     preparationTasks[id] = (gen, task)
+    if !isPreparingExport { isPreparingExport = true }
     return task
   }
 
   // MARK: - Internals
 
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
-  /// counters, and the drain loop. ExportManager forwards reads via computed properties
-  /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
-  /// `clearPending`, `processQueueIfNeeded`). The @Published mirrors on this manager
-  /// (`isRunning`, `isPaused`, `queueCount`, `totalJobsEnqueued`, `totalJobsCompleted`)
-  /// are kept in sync with the coordinator's own publishers via sinks established in
-  /// `init` — so existing UI bindings and the AutoSync `exportRunStatePublisher` keep
-  /// emitting from the same `ExportManager` source.
+  /// counters, and the drain loop. ExportManager forwards `pendingJobs` and the control
+  /// calls (`pause`, `resume`, `processQueueIfNeeded`). Synchronous sinks in `init` update the
+  /// manager's bridged running/depth values, tracked pause flag and progress-state
+  /// counters, preserving the UI reads and AutoSync's named publisher contract.
   ///
   /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
-  private(set) var queueCoordinator: ExportQueueCoordinator!
+  @ObservationIgnored private(set) var queueCoordinator: ExportQueueCoordinator!
 
   /// Owns the Import Existing Backup flow. `isImporting`,
   /// `importStage` and `importError` on this manager are sink-driven mirrors of the coordinator's
   /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
   /// writable on the manager because external callers (test code) sometimes reset it
   /// directly; the coordinator writes through `Host.setImportResult`.
-  private(set) var importCoordinator: ImportCoordinator!
-  private var importCancellables: Set<AnyCancellable> = []
-  private var queueCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private(set) var importCoordinator: ImportCoordinator!
+  @ObservationIgnored private var importCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private var queueCancellables: Set<AnyCancellable> = []
 
-  // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
-  // test reads (`manager.pendingJobs`, `manager.currentTask`,
-  // `manager.queuedCountsByPlacementId`) and the "fresh-start condition" check in the
-  // `start*` methods (`!isProcessing`) don't have to thread through `queueCoordinator`.
-  var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
-  var currentTask: Task<Void, Never>? { queueCoordinator.currentTask }
-  var queuedCountsByPlacementId: [String: Int] { queueCoordinator.queuedCountsByPlacementId }
-  var isProcessing: Bool { queueCoordinator.isProcessing }
+  var pendingJobs: ArraySlice<ExportJob> { queueCoordinator.pendingJobs }
 
-  private(set) var currentJobAssetId: String?
-  private(set) var currentJobVariant: ExportVariant?
+  @ObservationIgnored private(set) var currentJobAssetId: String?
+  @ObservationIgnored private(set) var currentJobVariant: ExportVariant?
   /// The placement of the job currently in flight. Set in `processNext()` *before*
-  /// `currentJobAssetId` and reset everywhere `currentJobAssetId` is reset, so any
+  /// `currentJobAssetId` and retained between adjacent jobs, so any
   /// cancellation cleanup that observes `currentJobAssetId` is guaranteed to see the
   /// matching placement. Used by both the `cancelAndClear` and run-loop catch-block
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// The observable storage lives on `progressState` so that the per-job mutation
-  /// (set on job start, cleared on job end — twice per asset) doesn't fan out as
-  /// `ExportManager.objectWillChange` to every view holding the manager. The only
-  /// SwiftUI reader is `MonthRow`'s in-flight spinner; it subscribes to
-  /// `ExportProgressState` directly. This forwarder keeps internal write sites in
+  /// The observable storage lives on `progressState`. Sidebar activity is published
+  /// through the coordinator's month-specific snapshots. This forwarder keeps write sites in
   /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
   /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
   /// owns) may mutate the in-flight placement.
@@ -479,17 +541,14 @@ final class ExportManager: ObservableObject {
   /// preserves `manager.generation` as a stable read surface for tests and
   /// in-module callers.
   var generation: Int { queueCoordinator.generation }
-  /// `@Published` so AutoSync's `exportRunStatePublisher` can include the
-  /// bulk-enqueue window (after the dispatcher flips this true but before the
-  /// first job lands in `pendingJobs`) in its idle/active decision. Without this,
-  /// AutoSync would race to start a background run
-  /// during the multi-select / Export-All dispatcher's mid-enqueue window.
-  @Published private(set) var isEnqueueingAll: Bool = false
-  /// Forwarder to the import coordinator's task handle so existing test reads
-  /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
-  /// resolve against the same in-flight Task.
-  var importTask: Task<Void, Never>? { importCoordinator?.importTask }
-
+  /// True while any export scan has not finished queueing, single-scope or bulk. Part of
+  /// `hasActiveExportWork` and `exportRunStatePublisher`, so Import and Auto Export wait
+  /// from the click, not from the first queued job.
+  private(set) var isPreparingExport: Bool {
+    get { bridgedRead(isPreparingExportBridge, \.isPreparingExport) }
+    set { bridgedWrite(isPreparingExportBridge, \.isPreparingExport, newValue) }
+  }
+  private let isPreparingExportBridge = ObservableCombineBridge(false)
   /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
   /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
   /// instance and stop sharing `UserDefaults.standard` across concurrently-running
@@ -498,6 +557,7 @@ final class ExportManager: ObservableObject {
 
   init(
     photoLibraryService: any PhotoLibraryService,
+    photoKitReader: (any PhotoKitReading)? = nil,
     exportDestination: any ExportDestination,
     exportRecordStore: ExportRecordStore,
     collectionExportRecordStore: CollectionExportRecordStore,
@@ -507,10 +567,19 @@ final class ExportManager: ObservableObject {
     fileSystem: any FileSystemService = FileIOService(),
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
+    runActivity: (any ExportRunActivity)? = nil,
+    exportMeasurements: ExportMeasurements? = nil,
+    progressClock: (any AutoSyncClock)? = nil,
+    destinationIO: any DestinationIOExecuting = DestinationIO(),
     userDefaults: UserDefaults
   ) {
+    self.progressState = ExportProgressState(clock: progressClock)
     self.userDefaults = userDefaults
+    self.runActivity = runActivity ?? SystemExportRunActivity()
+    self.exportMeasurements =
+      exportMeasurements ?? ExportMeasurements.fromArguments(ProcessInfo.processInfo.arguments)
     self.photoLibraryService = photoLibraryService
+    self.photoKitReader = photoKitReader ?? PhotoLibraryServiceReader(service: photoLibraryService)
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
     self.phAssetCacheControl = phAssetCacheControl
@@ -531,19 +600,19 @@ final class ExportManager: ObservableObject {
     } else {
       self.mediaRenderer = ProductionMediaRenderer { _ in }
     }
+    let versionSelection: ExportVersionSelection
     if let raw = userDefaults.string(forKey: Self.versionSelectionDefaultsKey),
       let saved = ExportVersionSelection(rawValue: raw)
     {
-      self.versionSelection = saved
+      versionSelection = saved
     } else {
-      self.versionSelection = .edited
+      versionSelection = .edited
     }
-    // `bool(forKey:)` returns `false` for an unset key — the off-by-default
-    // contract is implicit. Initial values flow into both record stores via
-    // the manual sync below (didSet is suppressed during init). All stored
-    // properties must be assigned before any `self.` access, so the Live
-    // Photo paired-video toggle is set first.
-    self.livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
+    self.versionSelectionBridge = ObservableCombineBridge(versionSelection)
+    // Seed the persisted settings without running their setter side effects. The explicit
+    // store synchronization below also handles unset boolean defaults, which read as false.
+    let livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
+    self.livePhotosPairedExportBridge = ObservableCombineBridge(livePhotosPairedExport)
     if let raw = userDefaults.string(forKey: Self.videoLayoutDefaultsKey),
       let saved = ExportVideoLayout(rawValue: raw)
     {
@@ -551,9 +620,10 @@ final class ExportManager: ObservableObject {
     } else {
       self.videoLayout = .flat
     }
-    self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
-    self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
-    self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
+    let convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
+    self.convertHEICToJPEGBridge = ObservableCombineBridge(convertHEICToJPEG)
+    self.exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
+    self.collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
     // `self` is fully initialised now — rebind the default renderer with
     // a callback that routes render activity back to `renderActivity`.
     if mediaRenderer == nil {
@@ -567,7 +637,12 @@ final class ExportManager: ObservableObject {
     // and ImportCoordinator. Both reach the cancellation seam (generation /
     // isCurrent / throwIfCancelledOrStale) through this reference rather than
     // through their Host protocols.
-    self.queueCoordinator = ExportQueueCoordinator(host: self)
+    self.queueCoordinator = ExportQueueCoordinator(
+      host: self,
+      measurements: self.exportMeasurements,
+      watchdogEnabled: ExportRunWatchdog.isEnabled(
+        arguments: ProcessInfo.processInfo.arguments,
+        preferenceEnabled: userDefaults.bool(forKey: "exportWatchdogEnabled")))
     self.variantExporter = VariantExporter(
       host: self,
       queueCoordinator: self.queueCoordinator,
@@ -577,16 +652,24 @@ final class ExportManager: ObservableObject {
       mediaRenderer: self.mediaRenderer,
       imageConverter: self.imageConverter,
       fileSystem: self.fileSystem,
-      exportDestination: self.exportDestination)
+      exportDestination: self.exportDestination, destinationIO: destinationIO)
     // Mirror the coordinator's published queue state onto ExportManager so existing
     // `manager.isRunning` / `.queueCount` / etc. readers and the AutoSync
     // `exportRunStatePublisher` keep emitting from the same source. Sinks fire
     // synchronously on the `@MainActor` since both objects are MainActor-bound.
     self.queueCoordinator.$isRunning
-      .sink { [weak self] in self?.isRunning = $0 }
+      .sink { [weak self] running in
+        guard let self else { return }
+        self.isRunning = running
+        if !running { self.exportDestination.resetDirectoryResolution() }
+        self.progressState.flushPresentation()
+      }
       .store(in: &queueCancellables)
     self.queueCoordinator.$isPaused
-      .sink { [weak self] in self?.isPaused = $0 }
+      .sink { [weak self] in
+        self?.isPaused = $0
+        self?.progressState.flushPresentation()
+      }
       .store(in: &queueCancellables)
     self.queueCoordinator.$queueCount
       .sink { [weak self] in self?.queueCount = $0 }
@@ -614,9 +697,29 @@ final class ExportManager: ObservableObject {
       .store(in: &importCancellables)
   }
 
+  // MARK: - Observation bridge
+  //
+  // Computed bridge properties register with the macro's registrar. A changing write
+  // notifies Observation before synchronous Combine delivery and storage. Equal writes
+  // still reach Combine subscribers while leaving Observation readers unchanged.
+
+  private func bridgedRead<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+  ) -> Value {
+    access(keyPath: keyPath)
+    return bridge.value
+  }
+
+  private func bridgedWrite<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ newValue: Value
+  ) {
+    bridge.write(newValue) { withMutation(keyPath: keyPath, $0) }
+  }
+
   // MARK: - Lifetime contract
   //
-  // `ExportManager` is owned by `PhotoExportApp` as an `@StateObject` for the entire
+  // `AppCore` owns `ExportManager` for the entire
   // app lifetime, so a pending `runExport` continuation effectively cannot outlive the
   // process. Tests must call `cancelAndClear()` (or `interruptForDestinationUnavailable()`)
   // during teardown to resolve any active run before the harness drops its reference —
@@ -667,14 +770,15 @@ final class ExportManager: ObservableObject {
 
   /// Call after entry-specific bulk/empty-input rejection, before the first await.
   private func prepareExport(
-    selectionOverride: ExportVersionSelection? = nil, bulk: Bool = false
+    selectionOverride: ExportVersionSelection? = nil
   ) -> (settings: ExportSettingsSnapshot, generation: Int) {
     let settings = ExportSettingsSnapshot(manager: self, selectionOverride: selectionOverride)
     clearEmptyRunMessage()
     clearQueueWarningMessage()
-    if bulk { isEnqueueingAll = true }
     // A paused queue with pending jobs must accumulate progress instead of resetting.
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    if !isRunning && !queueCoordinator.isProcessing && pendingJobs.isEmpty {
+      resetProgressCounters()
+    }
     return (settings, generation)
   }
 
@@ -683,7 +787,8 @@ final class ExportManager: ObservableObject {
     if isPaused, photoLibraryService.isAuthorized {
       let placement = ExportPlacement.timeline(year: year, month: month)
       let hasMatchingInFlightJob =
-        isProcessing && currentJobAssetId != nil && currentJobPlacement?.id == placement.id
+        queueCoordinator.isProcessing && currentJobAssetId != nil
+        && currentJobPlacement?.id == placement.id
       if queuedCount(year: year, month: month) > 0 || hasMatchingInFlightJob {
         // Continue the existing FIFO queue with its captured settings and counters.
         // Rescanning here would append unfinished assets a second time.
@@ -691,48 +796,45 @@ final class ExportManager: ObservableObject {
         return
       }
     }
-    let (settings, gen) = prepareExport()
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
-      do {
-        let outcome = try await enqueueMonth(
-          year: year, month: month, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This month is already exported.")
-        }
-        processQueueIfNeeded()
-      } catch {
-        guard self.isCurrent(gen) else { return }
-        handleScanFailure(
-          "Could not scan this month. Try exporting again.", scope: "month", error: error)
-      }
+    startSingleScopeExport(
+      scope: "month", alreadyDoneMessage: "This month is already exported.",
+      failureMessage: "Could not scan this month. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueMonth(year: year, month: month, settings: settings, generation: gen)
     }
   }
 
   func startExportYear(year: Int) {
     guard canStartExport(in: .timeline, logTag: "startExportYear") else { return }
-    let (settings, gen) = prepareExport()
+    startSingleScopeExport(
+      scope: "year", alreadyDoneMessage: "This year is already exported.",
+      failureMessage: "Could not scan this year. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueYear(year: year, settings: settings, generation: gen)
+    }
+  }
+
+  /// Admission and Month's queued-resume path run before this shared preparation.
+  /// Wrapper closures capture scope identifiers; only the owned task promotes the manager.
+  private func startSingleScopeExport(
+    selectionOverride: ExportVersionSelection? = nil,
+    scope: String, alreadyDoneMessage: String, failureMessage: String,
+    enqueue:
+      @escaping @MainActor (ExportManager, ExportSettingsSnapshot, Int) async throws
+      -> EnqueueOutcome
+  ) {
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
-        let outcome = try await enqueueYear(
-          year: year, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This year is already exported.")
-        }
-        processQueueIfNeeded()
+        let outcome = try await enqueue(self, settings, gen)
+        guard self.isCurrent(gen) else { return .finished }
+        if outcome == .alreadyComplete { self.setEmptyRunMessage(alreadyDoneMessage) }
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
-        handleScanFailure(
-          "Could not scan this year. Try exporting again.", scope: "year", error: error)
+        guard self.isCurrent(gen) else { return .finished }
+        self.handleScanFailure(failureMessage, scope: scope, error: error)
+        return .failed
       }
     }
   }
@@ -742,15 +844,12 @@ final class ExportManager: ObservableObject {
   @discardableResult
   func startExportAll(selectionOverride: ExportVersionSelection? = nil) -> Task<Void, Never>? {
     guard canStartExport(in: .timeline, logTag: "startExportAll") else { return nil }
-    guard !isEnqueueingAll else { return nil }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
+    guard !isPreparingExport else { return nil }
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     return runBulkExportTask(
       generation: gen,
       logTag: "startExportAll",
-      emptyDoneMessage: { "Everything in this destination is already exported." },
-      partialScanWarning: {
-        "Couldn't list every year. Continuing with the photos already queued."
-      },
+      partialScanWarning: "Couldn't list every year. Continuing with the photos already queued.",
       body: { [weak self] in
         guard let self else { return .stale }
         let allYears = try self.photoLibraryService.availableYears()
@@ -758,7 +857,11 @@ final class ExportManager: ObservableObject {
           try await self.enqueueYear(
             year: year, settings: settings, generation: gen)
         }
-        return result.completed ? .completed(result.totals) : .stale
+        return result.completed
+          ? .completed(
+            result.totals, zeroEnqueueMessage: "Everything in this destination is already exported."
+          )
+          : .stale
       }
     )
   }
@@ -784,19 +887,17 @@ final class ExportManager: ObservableObject {
     selectionOverride: ExportVersionSelection? = nil
   ) {
     guard canStartExport(in: .timeline, logTag: "startExportTimelineSelection") else { return }
-    guard !isEnqueueingAll else { return }
+    guard !isPreparingExport else { return }
     if years.isEmpty && months.isEmpty {
       setEmptyRunMessage("No timeline items selected.")
       return
     }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     runBulkExportTask(
       generation: gen,
       logTag: "startExportTimelineSelection",
-      emptyDoneMessage: { "Everything in the selection is already exported." },
-      partialScanWarning: {
-        "Couldn't scan every item in the selection. Continuing with the photos already queued."
-      },
+      partialScanWarning:
+        "Couldn't scan every item in the selection. Continuing with the photos already queued.",
       body: { [weak self] in
         guard let self else { return .stale }
         let yearsResult = try await self.runBulkEnqueueLoop(items: years, generation: gen) { year in
@@ -810,7 +911,11 @@ final class ExportManager: ObservableObject {
           try await self.enqueueMonth(
             year: m.year, month: m.month, settings: settings, generation: gen)
         }
-        return monthsResult.completed ? .completed(monthsResult.totals) : .stale
+        return monthsResult.completed
+          ? .completed(
+            monthsResult.totals,
+            zeroEnqueueMessage: "Everything in the selection is already exported.")
+          : .stale
       }
     )
   }
@@ -823,38 +928,24 @@ final class ExportManager: ObservableObject {
   /// timeline exports are independent under the disjoint-key-spaces rationale).
   func startExportFavorites(selectionOverride: ExportVersionSelection? = nil) {
     guard canStartExport(in: .collection, logTag: "startExportFavorites") else { return }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
-      do {
-        let outcome = try await enqueueCollection(
-          selection: .favorites, scope: .favorites, settings: settings, generation: gen)
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("Favorites are already exported.")
-        }
-        processQueueIfNeeded()
-      } catch {
-        guard self.isCurrent(gen) else { return }
-        handleScanFailure(
-          "Could not scan Favorites. Try exporting again.", scope: "favorites", error: error)
-      }
+    startSingleScopeExport(
+      selectionOverride: selectionOverride,
+      scope: "favorites", alreadyDoneMessage: "Favorites are already exported.",
+      failureMessage: "Could not scan Favorites. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueCollection(
+        selection: .favorites, settings: settings, generation: gen)
     }
   }
 
   /// Collections sidebar surfaces. AutoSync passes `selectionOverride` so a scheduled
   /// run honours the AutoSync version selection regardless of the current UI toggle.
   func startExportAllAlbums(selectionOverride: ExportVersionSelection? = nil) {
-    enqueueBulkAlbumExport(
-      source: .allAlbums,
-      logTag: "startExportAllAlbums",
-      emptyMessage: "No albums to export.",
+    startCollectionBulkExport(
+      .allAlbums, logTag: "startExportAllAlbums", emptyMessage: "No albums to export.",
       allDoneMessage: "All albums in this destination are already exported.",
-      selectionOverride: selectionOverride
-    )
+      partialScanWarning: "Couldn't list every album. Continuing with the photos already queued.",
+      selectionOverride: selectionOverride)
   }
 
   /// Batch action for every iCloud shared album. Used by Auto Export's
@@ -863,13 +954,12 @@ final class ExportManager: ObservableObject {
   /// kind so each batch member writes to `Collections/Shared Albums/<title>/` at
   /// reduced fidelity (one downscaled JPEG per asset).
   func startExportAllSharedAlbums(selectionOverride: ExportVersionSelection? = nil) {
-    enqueueBulkAlbumExport(
-      source: .allSharedAlbums,
-      logTag: "startExportAllSharedAlbums",
+    startCollectionBulkExport(
+      .allSharedAlbums, logTag: "startExportAllSharedAlbums",
       emptyMessage: "No shared albums to export.",
       allDoneMessage: "All shared albums in this destination are already exported.",
-      selectionOverride: selectionOverride
-    )
+      partialScanWarning: "Couldn't list every album. Continuing with the photos already queued.",
+      selectionOverride: selectionOverride)
   }
 
   /// Starts an export of every user album under a single folder, recursively. Each
@@ -878,12 +968,11 @@ final class ExportManager: ObservableObject {
   /// placements, they only group children, and `pathComponents` on each album already
   /// encodes the parent folder hierarchy in the on-disk path.
   func startExportFolder(folderId: String) {
-    enqueueBulkAlbumExport(
-      source: .folder(folderId: folderId),
-      logTag: "startExportFolder",
+    startCollectionBulkExport(
+      .folder(folderId: folderId), logTag: "startExportFolder",
       emptyMessage: "This folder has no albums to export.",
-      allDoneMessage: "All albums in this folder are already exported."
-    )
+      allDoneMessage: "All albums in this folder are already exported.",
+      partialScanWarning: "Couldn't list every album. Continuing with the photos already queued.")
   }
 
   /// Starts an export of an explicit list of user albums by `collectionLocalIdentifier`.
@@ -893,70 +982,30 @@ final class ExportManager: ObservableObject {
   func startExportAlbums(collectionIds: [String]) {
     var seen = Set<String>()
     let deduped = collectionIds.filter { seen.insert($0).inserted }
-    enqueueBulkAlbumExport(
-      source: .explicitIds(deduped),
-      logTag: "startExportAlbums",
-      emptyMessage: "No albums in selection.",
-      allDoneMessage: "All selected albums are already exported."
-    )
+    startCollectionBulkExport(
+      .explicitIds(deduped), logTag: "startExportAlbums", emptyMessage: "No albums in selection.",
+      allDoneMessage: "All selected albums are already exported.",
+      partialScanWarning: "Couldn't list every album. Continuing with the photos already queued.")
   }
 
-  /// Multi-select bulk export across a mixed Collections sidebar selection. Caller
-  /// supplies the normalized buckets from `CollectionsSelectionBuckets`. Each kind
-  /// (favorites, user albums, shared albums) is enqueued by calling the same
-  /// `enqueueCollection` helper the per-kind start methods use — but all three
-  /// loops run in a *single* Task so the user sees one merged enqueue lifecycle
-  /// and one final `emptyRunMessage` instead of three fire-and-forget Tasks
-  /// racing on the message slot. Partial-failure recovery and generation
-  /// tracking match `enqueueBulkAlbumExport`.
-  func startExportCollectionsSelection(_ buckets: CollectionsSelectionBuckets) {
-    guard canStartExport(in: .collection, logTag: "startExportCollectionsSelection") else { return }
-    guard !isEnqueueingAll else { return }
-    if buckets.isEmpty {
-      setEmptyRunMessage("No collections selected.")
-      return
-    }
-    let (settings, gen) = prepareExport(bulk: true)
-    runBulkExportTask(
-      generation: gen,
-      logTag: "startExportCollectionsSelection",
-      emptyDoneMessage: { "Everything in the selection is already exported." },
-      partialScanWarning: {
-        "Couldn't scan every item in the selection. Continuing with the photos already queued."
-      },
-      body: { [weak self] in
-        guard let self else { return .stale }
-        // Favorites — modelled as a 0-or-1 element pass so the helper handles
-        // the cancellation check + outcome merge identically to the other passes.
-        let favorites: [Bool] = buckets.includesFavorites ? [true] : []
-        let favResult = try await self.runBulkEnqueueLoop(
-          items: favorites, generation: gen
-        ) { _ in
-          try await self.enqueueCollection(
-            selection: .favorites, scope: .favorites,
-            settings: settings, generation: gen)
-        }
-        guard favResult.completed else { return .stale }
-        let albumsResult = try await self.runBulkEnqueueLoop(
-          items: buckets.albumIds, generation: gen, startingFrom: favResult.totals
-        ) { albumId in
-          try await self.enqueueCollection(
-            selection: .album(collectionId: albumId),
-            scope: .album(collectionId: albumId),
-            settings: settings, generation: gen)
-        }
-        guard albumsResult.completed else { return .stale }
-        let sharedResult = try await self.runBulkEnqueueLoop(
-          items: buckets.sharedAlbumIds, generation: gen, startingFrom: albumsResult.totals
-        ) { sharedId in
-          try await self.enqueueCollection(
-            selection: .sharedAlbum(collectionId: sharedId),
-            scope: .sharedAlbum(collectionId: sharedId),
-            settings: settings, generation: gen)
-        }
-        return sharedResult.completed ? .completed(sharedResult.totals) : .stale
-      }
-    )
+  /// Resolves folder membership inside the owned preparation, independently of display caches.
+  func startExportCollectionsSelection(items: Set<LibrarySelection>) {
+    startCollectionBulkExport(
+      .selection(items), logTag: "startExportCollectionsSelection",
+      emptyMessage: "Everything in the selection is already exported.",
+      allDoneMessage: "Everything in the selection is already exported.",
+      partialScanWarning:
+        "Couldn't scan every item in the selection. Continuing with the photos already queued.")
+  }
+
+  /// Includes Favorites and every current user album, leaving shared albums explicit.
+  func startExportAllUserCollections() {
+    startCollectionBulkExport(
+      .allUserCollections, logTag: "startExportCollectionsSelection",
+      emptyMessage: "Everything in the selection is already exported.",
+      allDoneMessage: "Everything in the selection is already exported.",
+      partialScanWarning:
+        "Couldn't scan every item in the selection. Continuing with the photos already queued.")
   }
 
   /// Accumulates the result of one or more `runBulkEnqueueLoop` passes so the
@@ -969,34 +1018,23 @@ final class ExportManager: ObservableObject {
     var sawUnauthorized: Bool = false
   }
 
-  /// Outcome of a bulk-export body. `.completed(totals)` triggers the helper's
-  /// empty/done message dispatch on zero-enqueue, then `processQueueIfNeeded()`.
-  /// `.completedWithCustomMessage` is for bodies that have set their own user
-  /// message (e.g. `enqueueBulkAlbumExport`'s "folder no longer exists" branch)
-  /// — the helper skips the message dispatch but still runs the queue. `.stale`
-  /// short-circuits without finalizing because a generation check failed
-  /// mid-body and a `cancelAndClear` (or equivalent) has already finalized
-  /// whatever run was in flight.
+  /// A completed body carries its zero-work feedback; the shared task publishes it
+  /// only when no jobs were enqueued and no scope was unauthorized. Stale bodies do
+  /// not publish. `trackPreparation` retains queue/finalization ownership.
   private enum BulkExportOutcome {
-    case completed(BulkExportTotals)
-    case completedWithCustomMessage
+    case completed(BulkExportTotals, zeroEnqueueMessage: String)
     case stale
   }
 
-  /// Owns the bulk-export Task scaffolding every multi-item dispatcher
-  /// (`startExportAll`, `startExportTimelineSelection`,
-  /// `startExportCollectionsSelection`, `enqueueBulkAlbumExport`) was
-  /// duplicating: the `Task { [weak self] in }` wrapper, the
-  /// `isEnqueueingAll = false` teardown for the owning generation, the success
-  /// finalize (empty/done message + `processQueueIfNeeded()`), and the
-  /// partial-failure recovery on throw (queue warning + `incompleteScan` +
-  /// drain if any jobs already queued; otherwise finalize as failed). An
+  /// Owns task scaffolding for timeline bulk starts and the collection bulk driver:
+  /// the preparation task, the zero-work message, and the failure
+  /// handling on throw (a queue warning when jobs already landed; `trackPreparation`
+  /// then drains them as an incomplete run, or resolves an empty run as failed). An
   /// unauthorized item does not throw; its scan sets `incompleteScan` itself,
-  /// so the drain after a `.completed(totals)` body still resolves `.failed`.
+  /// so the drain after a completed body still resolves `.failed`.
   ///
   /// Callers supply just (a) the bulk-loop body that does the enqueue work
-  /// and returns `BulkExportOutcome`, (b) the empty/done message factory used
-  /// when nothing was enqueued, and (c) the partial-scan warning factory used
+  /// and returns `BulkExportOutcome`, and (b) the partial-scan warning used
   /// when the body throws after partial progress.
   ///
   /// The body checks `gen` after each await to protect its enqueue work.
@@ -1007,47 +1045,29 @@ final class ExportManager: ObservableObject {
   private func runBulkExportTask(
     generation gen: Int,
     logTag: String,
-    emptyDoneMessage: @escaping @MainActor () -> String,
-    partialScanWarning: @escaping @MainActor () -> String,
+    partialScanWarning: String,
     body: @escaping @MainActor () async throws -> BulkExportOutcome
   ) -> Task<Void, Never> {
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
+    trackPreparation(generation: gen, priority: .utility) { [weak self] in
+      guard let self, self.isCurrent(gen) else { return .finished }
       do {
         let outcome = try await body()
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .stale:
-          return
-        case .completed(let totals):
-          self.isEnqueueingAll = false
-          if totals.totalEnqueued == 0 && !totals.sawUnauthorized {
-            self.setEmptyRunMessage(emptyDoneMessage())
-          }
-          self.processQueueIfNeeded()
-        case .completedWithCustomMessage:
-          self.isEnqueueingAll = false
-          self.processQueueIfNeeded()
+        if self.isCurrent(gen), case .completed(let totals, let zeroEnqueueMessage) = outcome,
+          totals.totalEnqueued == 0 && !totals.sawUnauthorized
+        {
+          self.setEmptyRunMessage(zeroEnqueueMessage)
         }
+        return .finished
       } catch {
-        guard self.isCurrent(gen) else { return }
-        self.isEnqueueingAll = false
+        guard self.isCurrent(gen) else { return .finished }
         self.logger.error(
           "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
         )
         self.noteManualPreparationFailure(
           "Some requested photos could not be scanned. Try exporting again.")
-        // Partial-failure recovery: if any jobs already landed in the queue,
-        // drain them and surface a warning + flag the run as `incompleteScan`
-        // so AutoSync's dirty-flag bookkeeping survives the partial scan.
-        // Otherwise finalize the active run (if any) as failed.
-        if !self.pendingJobs.isEmpty {
-          self.setQueueWarningMessage(partialScanWarning())
-          self.activeRunBookkeeping?.incompleteScan = true
-          self.processQueueIfNeeded()
-        } else {
-          self.finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
+        // Jobs already queued still export, under a warning.
+        if !self.pendingJobs.isEmpty { self.setQueueWarningMessage(partialScanWarning) }
+        return .failed
       }
     }
   }
@@ -1062,7 +1082,7 @@ final class ExportManager: ObservableObject {
     items: [Item],
     generation gen: Int,
     startingFrom seed: BulkExportTotals = .init(),
-    enqueue: (Item) async throws -> EnqueueOutcome
+    enqueue: @MainActor (Item) async throws -> EnqueueOutcome
   ) async throws -> (totals: BulkExportTotals, completed: Bool) {
     var totals = seed
     for item in items {
@@ -1084,172 +1104,105 @@ final class ExportManager: ObservableObject {
     return (totals, true)
   }
 
-  /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
-  /// whole tree; `.allSharedAlbums` walks the flat top-level shared-album list;
-  /// `.folder` walks one folder's subtree (and short-circuits with a "folder no
-  /// longer exists" message if the id can't be found); `.explicitIds` uses the
-  /// caller-supplied list as-is.
-  ///
-  /// `placementKind` controls which placement family each batch member resolves
-  /// to. Only `.allSharedAlbums` produces `.sharedAlbum`; folder and explicit-id
-  /// sources are user-album-only by design (folders don't contain shared albums;
-  /// the multi-select UI for shared albums isn't a feature today).
-  private enum BulkAlbumSource {
+  /// All collection bulk entry points resolve into the same ordered target loop.
+  private enum CollectionBulkSource {
+    case selection(Set<LibrarySelection>)
+    case allUserCollections
     case allAlbums
     case allSharedAlbums
     case folder(folderId: String)
     case explicitIds([String])
-
-    var placementKind: ExportPlacement.Kind {
-      switch self {
-      case .allSharedAlbums: return .sharedAlbum
-      case .allAlbums, .folder, .explicitIds: return .album
-      }
-    }
-
-    func selection(for collectionId: String) -> LibrarySelection {
-      switch placementKind {
-      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
-      default: return .album(collectionId: collectionId)
-      }
-    }
-
-    func scope(for collectionId: String) -> PhotoFetchScope {
-      switch placementKind {
-      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
-      default: return .album(collectionId: collectionId)
-      }
-    }
   }
 
-  /// Shared driver for the three bulk-album export entry points
-  /// (`startExportAllAlbums`, `startExportFolder`, `startExportAlbums`). Owns the
-  /// guards, generation tracking, partial-failure recovery, and the messaging
-  /// matrix. Album-id resolution is deferred into the run Task — every source
-  /// dereferences `self.photoLibraryService` from main-actor context, so no
-  /// non-Sendable closure capture crosses an actor boundary.
-  private func enqueueBulkAlbumExport(
-    source: BulkAlbumSource,
-    logTag: String,
-    emptyMessage: String,
-    allDoneMessage: String,
+  private func startCollectionBulkExport(
+    _ source: CollectionBulkSource, logTag: String, emptyMessage: String,
+    allDoneMessage: String, partialScanWarning: String,
     selectionOverride: ExportVersionSelection? = nil
   ) {
     guard canStartExport(in: .collection, logTag: logTag) else { return }
-    guard !isEnqueueingAll else { return }
-    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
+    guard !isPreparingExport else { return }
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     runBulkExportTask(
-      generation: gen,
-      logTag: logTag,
-      // Body owns the empty/done message because the variant depends on whether
-      // any albums were *resolved* (`emptyMessage`) vs all resolved are already
-      // done (`allDoneMessage`) — a distinction the helper can't see from
-      // `BulkExportTotals` alone.
-      emptyDoneMessage: { "" },
-      partialScanWarning: {
-        "Couldn't list every album. Continuing with the photos already queued."
-      },
+      generation: gen, logTag: logTag, partialScanWarning: partialScanWarning,
       body: { [weak self] in
         guard let self else { return .stale }
-        let albumIds: [String]
+        let tree: [PhotoCollectionDescriptor]
+        if case .explicitIds = source {
+          tree = []
+        } else {
+          tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
+        }
+        let targets: [LibrarySelection]
         switch source {
-        case .allAlbums:
-          let tree = try self.photoLibraryService.fetchCollectionTree()
-          albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
-        case .allSharedAlbums:
-          let tree = try self.photoLibraryService.fetchCollectionTree()
-          albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
-        case .folder(let folderId):
-          let tree = try self.photoLibraryService.fetchCollectionTree()
-          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
-            // Folder vanished between guard-pass and lookup. Surface the
-            // dedicated message and signal the helper to skip its empty/done
-            // dispatch. Symmetric with the other body exits: any future
-            // awaitable `runExport(context:)` wiring for folder runs still
-            // gets the `processQueueIfNeeded()` finalize via the helper.
-            self.setEmptyRunMessage("That folder no longer exists.")
-            return .completedWithCustomMessage
+        case .selection(let items):
+          let buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
+            guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
+            else { return [] }
+            return PhotoCollectionDescriptor.albumLocalIds(under: folder)
           }
-          albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
+          targets =
+            (buckets.includesFavorites ? [.favorites] : [])
+            + buckets.albumIds.map { .album(collectionId: $0) }
+            + buckets.sharedAlbumIds.map { .sharedAlbum(collectionId: $0) }
+        case .allUserCollections:
+          targets =
+            [.favorites]
+            + PhotoCollectionDescriptor.albumLocalIds(in: tree).map { .album(collectionId: $0) }
+        case .allAlbums:
+          targets = PhotoCollectionDescriptor.albumLocalIds(in: tree).map {
+            .album(collectionId: $0)
+          }
+        case .allSharedAlbums:
+          targets = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree).map {
+            .sharedAlbum(collectionId: $0)
+          }
+        case .folder(let folderId):
+          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
+            return .completed(.init(), zeroEnqueueMessage: "That folder no longer exists.")
+          }
+          targets = PhotoCollectionDescriptor.albumLocalIds(under: folder).map {
+            .album(collectionId: $0)
+          }
         case .explicitIds(let ids):
-          albumIds = ids
+          targets = ids.map { .album(collectionId: $0) }
         }
-        let result = try await self.runBulkEnqueueLoop(items: albumIds, generation: gen) { id in
-          try await self.enqueueCollection(
-            selection: source.selection(for: id),
-            scope: source.scope(for: id),
-            settings: settings,
-            generation: gen
-          )
+        let result = try await self.runBulkEnqueueLoop(items: targets, generation: gen) { target in
+          try await self.enqueueCollection(selection: target, settings: settings, generation: gen)
         }
-        guard result.completed else { return .stale }
-        if result.totals.totalEnqueued == 0 && !result.totals.sawUnauthorized {
-          self.setEmptyRunMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage)
-        }
-        return .completedWithCustomMessage
+        return result.completed
+          ? .completed(
+            result.totals,
+            zeroEnqueueMessage: targets.isEmpty ? emptyMessage : allDoneMessage)
+          : .stale
       }
     )
   }
 
   /// Starts an export of a single iCloud shared album. Mirrors `startExportAlbum` but
   /// drives the `.sharedAlbum` enqueue branch so the resolved placement lands under
-  /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums";
-  /// users export them one at a time.
+  /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums"
+  /// and have their own single and batch entry points.
   func startExportSharedAlbum(collectionId: String) {
     guard canStartExport(in: .collection, logTag: "startExportSharedAlbum") else { return }
-    let (settings, gen) = prepareExport()
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
-      do {
-        let outcome = try await enqueueCollection(
-          selection: .sharedAlbum(collectionId: collectionId),
-          scope: .sharedAlbum(collectionId: collectionId),
-          settings: settings,
-          generation: gen
-        )
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This shared album is already exported.")
-        }
-        processQueueIfNeeded()
-      } catch {
-        guard self.isCurrent(gen) else { return }
-        handleScanFailure(
-          "Could not scan this shared album. Try exporting again.", scope: "shared-album",
-          error: error)
-      }
+    startSingleScopeExport(
+      scope: "shared-album", alreadyDoneMessage: "This shared album is already exported.",
+      failureMessage: "Could not scan this shared album. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueCollection(
+        selection: .sharedAlbum(collectionId: collectionId), settings: settings, generation: gen)
     }
   }
 
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
     guard canStartExport(in: .collection, logTag: "startExportAlbum") else { return }
-    let (settings, gen) = prepareExport()
-    trackPreparation(generation: gen) { [weak self] in
-      guard let self, self.isCurrent(gen) else { return }
-      do {
-        let outcome = try await enqueueCollection(
-          selection: .album(collectionId: collectionId),
-          scope: .album(collectionId: collectionId),
-          settings: settings,
-          generation: gen
-        )
-        guard self.isCurrent(gen) else { return }
-        switch outcome {
-        case .enqueued, .unauthorized:
-          break
-        case .alreadyComplete:
-          setEmptyRunMessage("This album is already exported.")
-        }
-        processQueueIfNeeded()
-      } catch {
-        guard self.isCurrent(gen) else { return }
-        handleScanFailure(
-          "Could not scan this album. Try exporting again.", scope: "album", error: error)
-      }
+    startSingleScopeExport(
+      scope: "album", alreadyDoneMessage: "This album is already exported.",
+      failureMessage: "Could not scan this album. Try exporting again."
+    ) { manager, settings, gen in
+      try await manager.enqueueCollection(
+        selection: .album(collectionId: collectionId), settings: settings, generation: gen)
     }
   }
 
@@ -1261,7 +1214,6 @@ final class ExportManager: ObservableObject {
   @discardableResult
   private func enqueueCollection(
     selection: LibrarySelection,
-    scope: PhotoFetchScope,
     settings: ExportSettingsSnapshot,
     generation gen: Int
   ) async throws -> EnqueueOutcome {
@@ -1272,11 +1224,23 @@ final class ExportManager: ObservableObject {
     // collection tree to find the descriptor and any colliding siblings; for
     // `.favorites` the resolver returns a fixed placement.
     let collections: [PhotoCollectionDescriptor]
+    let scope: PhotoFetchScope
     switch selection {
-    case .album, .sharedAlbum:
-      collections = try photoLibraryService.fetchCollectionTree()
-    default:
+    case .favorites:
       collections = []
+      scope = .favorites
+    case .album(let id):
+      collections = try await photoLibraryService.loadCollectionTree()
+      try throwIfCancelledOrStale(gen)
+      scope = .album(collectionId: id)
+    case .sharedAlbum(let id):
+      collections = try await photoLibraryService.loadCollectionTree()
+      try throwIfCancelledOrStale(gen)
+      scope = .sharedAlbum(collectionId: id)
+    case .timelineYear(let year), .timelineMonth(let year, _):
+      throw ExportPlacementResolver.ResolutionError.timelineYearNotResolvable(year: year)
+    case .folder(let id):
+      throw ExportPlacementResolver.ResolutionError.folderNotResolvable(collectionId: id)
     }
     let existingPlacements = collectionExportRecordStore.placements
       .values.map { $0 }
@@ -1306,8 +1270,15 @@ final class ExportManager: ObservableObject {
     activeRunBookkeeping?.skippedCount += skippedCount
     // Placement metadata is needed only when writing records. Avoid an unacknowledged
     // metadata append on the empty-queue completion path; real jobs flush it before IO.
-    if !newJobs.isEmpty { collectionExportRecordStore.upsertPlacement(placement) }
+    if !newJobs.isEmpty {
+      try await collectionExportRecordStore.withMutationAdmission {
+        try throwIfCancelledOrStale(gen)
+        collectionExportRecordStore.upsertPlacement(placement)
+      }
+      try throwIfCancelledOrStale(gen)
+    }
     queueCoordinator.enqueue(newJobs)
+    try throwIfCancelledOrStale(gen)
     logger.info(
       "Enqueued \(newJobs.count) assets for export to \(placement.relativePath, privacy: .public)"
     )
@@ -1315,6 +1286,8 @@ final class ExportManager: ObservableObject {
   }
 
   func cancelAndClear() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     logger.info("Cancelling current export and clearing queue due to destination change")
     importCoordinator.clearPreviousBackupMissing()
     teardownActiveWork()
@@ -1326,6 +1299,8 @@ final class ExportManager: ObservableObject {
   /// re-evaluates after manual work drains.
   /// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
   func supersedeForManualRun() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     logger.info("Superseding active auto-sync run for manual export")
     teardownActiveWork()
     finalizeActiveRun(result: .superseded, cancelReason: .supersededByManualRun)
@@ -1337,6 +1312,8 @@ final class ExportManager: ObservableObject {
   /// after `supersedeForManualRun()` a manual export can already be active while the old
   /// fan-out task still exists, and `cancelAndClear()` would stop that manual export.
   func cancelAutoSyncRun() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     guard activeRunContext?.source == .autoSync else { return }
     logger.info("Auto Export turned off; cancelling the automatic run")
     teardownActiveWork()
@@ -1358,10 +1335,10 @@ final class ExportManager: ObservableObject {
   /// complete or fail because there is no cancellation plumbing for that path — the
   /// in-flight write will surface as a transient failure on the next reconciliation.
   func interruptForDestinationUnavailable() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     logger.info("Interrupting current export — destination unavailable")
-    let isIdle =
-      activeRunContext == nil && !hasActiveExportWork && currentPreparationTasks.isEmpty
-      && manualRunFeedback == nil
+    let isIdle = activeRunContext == nil && !hasActiveExportWork && manualRunFeedback == nil
     let keptSummary = isIdle ? progressState.manualSummary : nil
     teardownActiveWork()
     progressState.manualSummary = keptSummary
@@ -1391,11 +1368,12 @@ final class ExportManager: ObservableObject {
     preparationTasks.removeAll()
     queueCoordinator.teardownQueue()
     queueCoordinator.resetProgressCounters()
-    isEnqueueingAll = false
-    progressState.currentAssetFilename = nil
+    isPreparingExport = false
+    setCurrentAssetFilename(nil)
     clearRenderActivity()
     clearEmptyRunMessage()
     clearQueueWarningMessage()
+    endRunActivity()
     flushRecordNotifications()
   }
 
@@ -1457,20 +1435,13 @@ final class ExportManager: ObservableObject {
     queueCoordinator.resume()
   }
 
-  func clearPending() {
-    if queueCoordinator.clearPending() > 0 {
-      noteManualPreparationFailure("Pending exports were cleared before they finished.")
-      finishManualFeedbackIfReady(generation: generation)
-    }
-  }
-
   // MARK: - Queue Handling
 
   /// Shared by the enqueue scans when Photos access is missing. The scan covers nothing,
   /// so the active run, if any, is marked incomplete: its drain resolves `.failed`
   /// and AutoSync keeps the scope's pending work for the next run.
   private func unauthorizedScan() -> EnqueueOutcome {
-    noteManualPreparationFailure("Photos access is required to scan this selection.")
+    noteManualPreparationFailure(PhotosAccessGuidance.message)
     activeRunBookkeeping?.incompleteScan = true
     return .unauthorized
   }
@@ -1506,6 +1477,7 @@ final class ExportManager: ObservableObject {
     try throwIfCancelledOrStale(gen)
     activeRunBookkeeping?.skippedCount += skippedCount
     queueCoordinator.enqueue(newJobs)
+    try throwIfCancelledOrStale(gen)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
@@ -1535,6 +1507,7 @@ final class ExportManager: ObservableObject {
     try throwIfCancelledOrStale(gen)
     activeRunBookkeeping?.skippedCount += skippedCount
     queueCoordinator.enqueue(newJobs)
+    try throwIfCancelledOrStale(gen)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
@@ -1647,6 +1620,8 @@ final class ExportManager: ObservableObject {
     jobTotals: (enqueued: Int, completed: Int)? = nil,
     stoppedBy: AutoSyncFailureCategory? = nil
   ) {
+    exportRecordStore.requestHistoryCheckpoint()
+    collectionExportRecordStore.requestHistoryCheckpoint()
     flushRecordNotifications()
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
@@ -1687,15 +1662,8 @@ final class ExportManager: ObservableObject {
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
-    // Order matters: send the summary on `completedRunsSubject` *before*
-    // resuming the awaiter. AutoSync's manager subscribes to
-    // `completedRunsPublisher` and filters to `source == .manual`, so its
-    // own AutoSync-sourced runs never reach the manual-clear path either
-    // way. But the awaiter dispatches `.autoSyncRunCompleted(summary)`
-    // which is also queued behind the in-flight reducer event — and we
-    // want the subject emission to land first so that any reordering
-    // future-us applies stays self-consistent rather than relying on the
-    // continuation-resume / subject-send order to bend a specific way.
+    // Keep completion-seam subscribers ahead of the awaiter, which dispatches the
+    // AutoSync completion event after the terminal run state has been published.
     completedRunsSubject.send(summary)
     bookkeeping.continuation.resume(returning: summary)
   }
@@ -1720,32 +1688,28 @@ final class ExportManager: ObservableObject {
   }
 
   private func resetProgressCounters() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     progressState.manualSummary = nil
     if activeRunContext?.source == .autoSync {
       manualRunFeedback = nil
-    } else if manualRunFeedback?.generation != generation || currentPreparationTasks.isEmpty {
+    } else if manualRunFeedback?.generation != generation || !isPreparingExport {
       // A temporarily empty queue can still have another accepted scan outstanding.
       // Keep feedback totals across those scans without changing legacy counters.
       manualRunFeedback = ManualRunFeedback(generation: generation)
     }
     queueCoordinator.resetProgressCounters()
-    progressState.currentAssetFilename = nil
+    setCurrentAssetFilename(nil)
   }
 
   /// Scan failure in a single-scope `start*` (month, year, Favorites, album, shared album).
-  /// Notes the failure for manual feedback and, when the start runs under `runExport` with
-  /// nothing queued, resolves that run as `.failed` so its awaiter never hangs. Only
-  /// Favorites runs under a run context today; the rule keeps every path safe if more do.
-  /// Legacy `start*` calls from the UI have no run context, so they neither flush nor
-  /// finalize here; their feedback flushes when the preparation ends.
+  /// Notes the failure for manual feedback and logs it. The scan then returns `.failed`, and
+  /// `trackPreparation` resolves an active run once the scan has ended.
   private func handleScanFailure(_ message: String, scope: String, error: Error) {
     noteManualPreparationFailure(message)
     logger.error(
       "Failed to enqueue \(scope, privacy: .public) export: \(String(describing: error), privacy: .public)"
     )
-    if activeRunContext != nil, pendingJobs.isEmpty {
-      finalizeActiveRun(result: .failed, cancelReason: nil)
-    }
   }
 
   private func noteManualPreparationFailure(_ message: String) {
@@ -1754,13 +1718,12 @@ final class ExportManager: ObservableObject {
   }
 
   private func finishManualFeedbackIfReady(generation gen: Int) {
-    guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
-      manualRunFeedback?.generation == gen
+    guard isCurrent(gen), !hasActiveExportWork, manualRunFeedback?.generation == gen
     else { return }
     flushRecordNotifications()
     // Notification subscribers can synchronously start another preparation.
-    guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
-      let feedback = manualRunFeedback, feedback.generation == gen
+    guard isCurrent(gen), !hasActiveExportWork, let feedback = manualRunFeedback,
+      feedback.generation == gen
     else { return }
     manualRunFeedback = nil
     guard feedback.completedCount > 0 || feedback.failureMessage != nil else { return }
@@ -1775,9 +1738,7 @@ final class ExportManager: ObservableObject {
   /// captured generation is still the active one, i.e. the work has not been superseded
   /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`,
   /// `interruptForDestinationUnavailable`, `supersedeForManualRun`, `cancelImport`).
-  /// Note: `clearPending()` only drops queued jobs and does NOT bump generation —
-  /// in-flight work that started before `clearPending` keeps its `gen` and finishes
-  /// normally. The path that *does* cancel mid-flight is `cancelAndClear`. Use this
+  /// Use this
   /// helper at non-throwing checkpoints — typically inside escaping closures that
   /// `return` early when the run is stale. Per
   /// docs/reference/architecture-conventions.md#1-cancellation-contract, these helpers
@@ -1797,6 +1758,13 @@ final class ExportManager: ObservableObject {
     var intendedVariant: ExportVariant = .original
     do {
       try throwIfCancelledOrStale(gen)
+      let root = exportDestination.selectedFolderURL
+      let destinationId = recordStoreRouter.destinationId(for: job.placement)
+      await exportDestination.waitForValidation()
+      try throwIfCancelledOrStale(gen)
+      guard exportDestination.selectedFolderURL == root,
+        recordStoreRouter.destinationId(for: job.placement) == destinationId
+      else { throw CancellationError() }
       // Claims are kept per month, so without one every name would read as claimed and
       // each walk would try all 10,000 suffixes before failing.
       if job.placement.kind == .timeline, job.placement.timelineYearMonth == nil {
@@ -1806,16 +1774,22 @@ final class ExportManager: ObservableObject {
           userInfo: [NSLocalizedDescriptionKey: "Timeline placement has no year and month"])
       }
 
-      guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
-      else {
+      let metadata = await photoKitReader.readAsset(
+        id: job.assetLocalIdentifier, livePhotosPaired: job.livePhotosPaired)
+      try throwIfCancelledOrStale(gen)
+      guard exportDestination.selectedFolderURL == root,
+        recordStoreRouter.destinationId(for: job.placement) == destinationId
+      else { throw CancellationError() }
+      guard let metadata else {
         try throwIfCancelledOrStale(gen)
-        recordVariantFailed(
+        await recordVariantFailed(
           assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
           sentinelMessage: "Asset not found", reason: nil, category: .assetMissing, at: Date())
         logger.error(
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
         return nil
       }
+      let descriptor = metadata.descriptor
       let required = requiredVariants(
         for: descriptor, selection: job.selection,
         policy: job.placement.kind.variantPolicy,
@@ -1881,11 +1855,16 @@ final class ExportManager: ObservableObject {
         for: descriptor.mediaType, layout: job.videoLayout)
       let effectiveRelPath = ExportMediaPathPolicy.relativePath(
         placement: job.placement, subfolder: subfolder)
-      let destDir = try exportDestination.urlForRelativeDirectory(
-        effectiveRelPath, createIfNeeded: true)
+      let destinationContext = try variantExporter.captureDestinationContext(
+        placement: job.placement, generation: gen)
+      let destDir = try await destinationContext.io.run {
+        try destinationContext.directories.urlForRelativeDirectory(
+          effectiveRelPath, createIfNeeded: true)
+      }
+      try variantExporter.checkOwnership(destinationContext, placement: job.placement)
       let relPath = effectiveRelPath
 
-      let resources = photoLibraryService.resources(for: descriptor.id)
+      let resources = metadata.resources
       let resourceSummary = resources.map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(
         separator: ", ")
       logger.debug("Asset resources: \(resourceSummary, privacy: .public)")
@@ -1927,10 +1906,6 @@ final class ExportManager: ObservableObject {
       // A stem chosen for the whole group skips names another asset's records hold, so no
       // member is later written at a name another record claims, or pushed alone onto
       // another stem.
-      let claimedByAnotherAsset = { [recordStoreRouter] (name: String) in
-        recordStoreRouter.isFilenameClaimed(
-          name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
-      }
 
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
@@ -1985,14 +1960,15 @@ final class ExportManager: ObservableObject {
             convertHEICToJPEG: convertHEICToJPEG)
           if let editedFilename = editedProducer.originalFilename {
             let editedExt = (editedFilename as NSString).pathExtension
-            groupStem = destinationResolver.allocatePairedGroupStem(
+            groupStem = try await variantExporter.allocatePairedGroupStem(
               baseStem: baseStem,
               imageExt: originalExt,
               editedExt: editedExt,
               destDir: destDir,
               pairOriginalWithSuffix: true,
               pairedVideoExt: pairedVideoExt,
-              isClaimed: claimedByAnotherAsset)
+              job: job, subfolder: subfolder, assetId: descriptor.id,
+              context: destinationContext)
           }
         } else if editedLivePhotoOnly {
           // 2-slot edited-only path: the only image side written is the edited variant.
@@ -2003,25 +1979,27 @@ final class ExportManager: ObservableObject {
             convertHEICToJPEG: convertHEICToJPEG)
           if let editedFilename = editedProducer.originalFilename {
             let editedExt = (editedFilename as NSString).pathExtension
-            groupStem = destinationResolver.allocatePairedGroupStem(
+            groupStem = try await variantExporter.allocatePairedGroupStem(
               baseStem: baseStem,
               imageExt: editedExt,
               editedExt: nil,
               destDir: destDir,
               pairOriginalWithSuffix: false,
               pairedVideoExt: pairedVideoExt,
-              isClaimed: claimedByAnotherAsset)
+              job: job, subfolder: subfolder, assetId: descriptor.id,
+              context: destinationContext)
           }
         } else {
           // 2-slot unedited path: the only image side written is the original.
-          groupStem = destinationResolver.allocatePairedGroupStem(
+          groupStem = try await variantExporter.allocatePairedGroupStem(
             baseStem: baseStem,
             imageExt: originalExt,
             editedExt: nil,
             destDir: destDir,
             pairOriginalWithSuffix: false,
             pairedVideoExt: pairedVideoExt,
-            isClaimed: claimedByAnotherAsset)
+            job: job, subfolder: subfolder, assetId: descriptor.id,
+            context: destinationContext)
         }
       }
 
@@ -2046,7 +2024,8 @@ final class ExportManager: ObservableObject {
             generation: gen,
             inFlight: &inFlight,
             subfolder: subfolder,
-            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants)
+            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants),
+            context: destinationContext
           )
           try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
@@ -2057,7 +2036,7 @@ final class ExportManager: ObservableObject {
           logger.error(
             "Variant \(variant.rawValue, privacy: .public) failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
-          let failure = recordVariantFailed(
+          let failure = await recordVariantFailed(
             assetId: descriptor.id, placement: job.placement, variant: variant,
             error: error, at: Date())
           inFlight = nil
@@ -2084,7 +2063,7 @@ final class ExportManager: ObservableObject {
         return await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
           relPath: relPath, job: job, generation: gen, inFlight: &inFlight,
-          subfolder: subfolder)
+          subfolder: subfolder, context: destinationContext)
       }
     } catch is CancellationError {
       logger.info(
@@ -2102,7 +2081,7 @@ final class ExportManager: ObservableObject {
       // byte production; attribute those to the intended required variant rather
       // than inventing original history for an edited-only job.
       let failedVariant = inFlight?.variant ?? intendedVariant
-      let failure = recordVariantFailed(
+      let failure = await recordVariantFailed(
         assetId: job.assetLocalIdentifier, placement: job.placement, variant: failedVariant,
         error: error, at: Date())
       if failure.category.stopsCurrentExportRun { return failure }
@@ -2147,7 +2126,7 @@ final class ExportManager: ObservableObject {
     job: ExportJob,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil, context: ExportDestinationContext
   ) async -> ExportFailureSignal? {
     guard
       isAutoSyncVariantEligible(
@@ -2164,14 +2143,11 @@ final class ExportManager: ObservableObject {
     }
     let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
-    let stem = destinationResolver.allocateUnusedOrigStem(
-      baseStem: baseStem, originalExt: originalExt, destDir: destDir
-    ) { [recordStoreRouter] name in
-      recordStoreRouter.isFilenameClaimed(
-        name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
-    }
     do {
-      try throwIfCancelledOrStale(gen)
+      let stem = try await variantExporter.allocateUnusedOrigStem(
+        baseStem: baseStem, originalExt: originalExt, destDir: destDir,
+        job: job, subfolder: subfolder, assetId: descriptor.id, context: context)
+      try variantExporter.checkOwnership(context, placement: job.placement)
       _ = try await variantExporter.exportSingleVariant(
         variant: .original,
         descriptor: descriptor,
@@ -2184,14 +2160,14 @@ final class ExportManager: ObservableObject {
         generation: gen,
         inFlight: &inFlight,
         subfolder: subfolder,
-        acceptsEditedFallback: true
+        acceptsEditedFallback: true, context: context
       )
       try throwIfCancelledOrStale(gen)
       // Mark `.edited` with the explicit fallback sentinel so future runs
       // recognise the asset as covered without relying on the ambiguous
       // `_orig` filename shape. Overwrites the generic
       // `editedResourceUnavailableMessage` the variant loop recorded.
-      recordVariantFailed(
+      await recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .edited,
         sentinelMessage: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
         reason: .editedUnavailableOriginalBackedUp,
@@ -2215,7 +2191,7 @@ final class ExportManager: ObservableObject {
       // rewrites it to `.failed`. Record the failure here so the
       // store reflects what actually happened. The asset is still re-queued
       // on the next run because `.original` is now `.failed` (not `.done`).
-      let failure = recordVariantFailed(
+      let failure = await recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .original,
         error: error, at: Date())
       inFlight = nil
@@ -2251,10 +2227,13 @@ final class ExportManager: ObservableObject {
 
   // MARK: - ExportQueueCoordinator.Host conformance
 
-  // `isEnqueueingAll` supplies the coordinator's preparation guard.
+  // `isPreparingExport` supplies the coordinator's preparation guard.
+
+  func beginProgressUpdates() { progressState.beginSourceUpdates() }
+  func endProgressUpdates() { progressState.endSourceUpdates() }
 
   /// Internal observation seam for deterministic tests of final-commit admission.
-  var finalCommitWaitObserver: (() -> Void)?
+  @ObservationIgnored var finalCommitWaitObserver: (() -> Void)?
 
   /// Drives the per-job export pipeline on behalf of the coordinator. Wraps the
   /// existing `export(job:generation:)` body so the coordinator's drain loop doesn't need to
@@ -2262,6 +2241,8 @@ final class ExportManager: ObservableObject {
   func performExport(job: ExportJob, generation gen: Int) async {
     let failureSignalsBefore = manualRunFeedback?.failureSignals ?? 0
     do {
+      await recordStoreRouter.waitForCancellationCleanup()
+      try throwIfCancelledOrStale(gen)
       await variantExporter.waitForFinalCommit(onWait: finalCommitWaitObserver)
       try throwIfCancelledOrStale(gen)
       try await recordStoreRouter.flush(placement: job.placement)
@@ -2280,6 +2261,8 @@ final class ExportManager: ObservableObject {
         manualRunFeedback?.failedCount += 1
       }
     } catch {
+      progressState.beginSourceUpdates()
+      defer { progressState.endSourceUpdates() }
       guard isCurrent(gen) else { return }
       logger.error(
         "Stopping export because progress could not be saved: \(error.localizedDescription, privacy: .public)"
@@ -2302,6 +2285,8 @@ final class ExportManager: ObservableObject {
   }
 
   private func stopForDestinationFailure(_ failure: ExportFailureSignal) {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     let message = Self.destinationStopMessage(for: failure.category)
     // This job will not receive the coordinator's normal completion increment.
     let totals = (enqueued: totalJobsEnqueued, completed: totalJobsCompleted + 1)
@@ -2345,6 +2330,7 @@ final class ExportManager: ObservableObject {
     logger.info("Export queue drained")
     finalizeActiveRun(result: .completed, cancelReason: nil)
     finishManualFeedbackIfReady(generation: generation)
+    endRunActivityIfIdle()
   }
 
   /// Set placement before assetId so any cancellation
@@ -2352,16 +2338,20 @@ final class ExportManager: ObservableObject {
   /// `currentJobPlacement`. Reset `currentJobVariant` because the variant write hasn't
   /// started yet.
   func setCurrentJob(_ job: ExportJob) {
-    currentJobPlacement = job.placement
+    if currentJobPlacement != job.placement { currentJobPlacement = job.placement }
     currentJobAssetId = job.assetLocalIdentifier
     currentJobVariant = nil
+    queueCoordinator.setActivePlacement(job.placement.id)
   }
 
-  func clearCurrentJobIdentifiers() {
+  func clearCurrentJobIdentifiers(keepingPlacement: Bool = false) {
     currentJobAssetId = nil
     currentJobVariant = nil
-    currentJobPlacement = nil
-    progressState.currentAssetFilename = nil
+    if !keepingPlacement {
+      if currentJobPlacement != nil { currentJobPlacement = nil }
+      queueCoordinator.setActivePlacement(nil)
+    }
+    if !keepingPlacement { setCurrentAssetFilename(nil) }
   }
 
   // MARK: Record-mutation routing
@@ -2417,11 +2407,10 @@ final class ExportManager: ObservableObject {
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     failure: ExportFailureSignal, reason: ExportVariantReason? = nil, at date: Date
-  ) {
-    recordStoreRouter.markVariantFailed(
-      assetId: assetId, placement: placement, variant: variant,
-      error: failure.localizedDescription, reason: reason, at: date)
-    if manualRunFeedback?.generation == generation { manualRunFeedback?.failureSignals += 1 }
+  ) async {
+    let owner = generation
+    guard isCurrent(owner), !Task.isCancelled else { return }
+    if manualRunFeedback?.generation == owner { manualRunFeedback?.failureSignals += 1 }
     activeRunBookkeeping?.failedCount += 1
     activeRunBookkeeping?.failures.append(
       ExportRunFailureDetail(
@@ -2433,6 +2422,14 @@ final class ExportManager: ObservableObject {
         localizedDescription: failure.localizedDescription,
         failedAt: date
       ))
+    do {
+      try await recordStoreRouter.withMutationAdmission(placement: placement) {
+        try throwIfCancelledOrStale(owner)
+        recordStoreRouter.markVariantFailed(
+          assetId: assetId, placement: placement, variant: variant,
+          error: failure.localizedDescription, reason: reason, at: date)
+      }
+    } catch { return }
   }
 
   /// Backwards-compatible overload — call sites that already have an
@@ -2442,9 +2439,9 @@ final class ExportManager: ObservableObject {
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     error: Error, at date: Date
-  ) -> ExportFailureSignal {
+  ) async -> ExportFailureSignal {
     let failure = AutoSyncFailureCategory.classify(error)
-    recordVariantFailed(
+    await recordVariantFailed(
       assetId: assetId, placement: placement, variant: variant, failure: failure,
       reason: error is EditedResourceUnavailableError ? .editedResourceUnavailable : nil, at: date)
     return failure
@@ -2463,8 +2460,8 @@ final class ExportManager: ObservableObject {
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     sentinelMessage: String, reason: ExportVariantReason?, category: AutoSyncFailureCategory,
     at date: Date
-  ) {
-    recordVariantFailed(
+  ) async {
+    await recordVariantFailed(
       assetId: assetId, placement: placement, variant: variant,
       failure: AutoSyncFailureCategory.sentinel(
         category: category, signature: reason?.legacySignature ?? sentinelMessage,
@@ -2536,7 +2533,7 @@ final class ExportManager: ObservableObject {
 
   // MARK: - ImportCoordinator.Host conformance
 
-  /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
+  /// Writes the import report back to the manager's tracked state. Kept as a Host
   /// method (not a sink) because `importResult` is intentionally writable on the
   /// manager — test code resets it directly between consecutive imports.
   func setImportResult(_ result: ImportReport?) {
