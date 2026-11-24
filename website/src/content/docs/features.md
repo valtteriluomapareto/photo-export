@@ -56,11 +56,10 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 
 ### Album folder names
 
-New sibling albums whose names differ only by case get distinct folder names, for example
-`Trip/` and `trip_2/`. The same rule applies to Shared Albums. Existing folder names and
-tracking records stay unchanged; the app does not move or merge backup files. Collisions
-between different folder trees whose parent folder names differ only by case remain a
-separate limitation.
+New album placements get distinct folders when their export paths differ only by case, even
+when the case difference is in a parent folder. For example, `Trips/Iceland/` and
+`trips/Iceland/` can become `Trips/Iceland/` and `trips/Iceland_2/`. The same rule applies
+to case-only Shared Album names. Existing folders, files, and tracking records stay in place.
 
 If an older backup already mixed case-only sibling albums into one folder, choose a **new
 empty destination folder** and export the affected albums there. That destination starts
