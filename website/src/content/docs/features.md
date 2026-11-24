@@ -58,8 +58,12 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 
 New album placements get distinct folders when their export paths differ only by case, even
 when the case difference is in a parent folder. For example, `Trips/Iceland/` and
-`trips/Iceland/` can become `Trips/Iceland/` and `trips/Iceland_2/`. The same rule applies
-to case-only Shared Album names. Existing folders, files, and tracking records stay in place.
+`trips/Iceland/` can appear as `Trips/Iceland/` and `Trips/Iceland_2/` on a case-insensitive
+volume, where both parents are the same directory. On a case-sensitive volume, the app
+still adds the suffix conservatively, but the second folder stays under `trips/`. The same
+rule applies to case-only Shared Album names. Existing folders, files, and tracking
+records stay in place. When importing a backup, the app does not claim another album’s own
+name as a generated suffix under the same on-disk parent.
 
 If an older backup already mixed case-only sibling albums into one folder, choose a **new
 empty destination folder** and export the affected albums there. That destination starts

@@ -58,6 +58,66 @@ struct CaseOnlyParentPlacementTests {
     #expect(reused.createdAt == Fixture.date(2))
   }
 
+  @Test func insensitiveImportDoesNotClaimAnotherAlbumsNaturalSuffix() {
+    let tree = [
+      Fixture.album("beta", "Iceland", in: ["region", "trips"]),
+      Fixture.album("natural", "ICELAND_2", in: ["Region", "Trips"]),
+    ]
+    let directory = Fixture.directory(
+      .albums, ["Region", "Trips", "ICELAND_2"], [Fixture.file("SHARED.JPG", date: Fixture.date(1))]
+    )
+    let candidates = CollectionBackupPlanner.candidates(
+      directories: [directory], collections: tree, existingPlacements: [],
+      caseSensitiveVolume: false)
+    #expect(candidates.map(\.target) == [.album(collectionId: "natural")])
+  }
+
+  @Test func insensitiveExportWipeImportRecoversSuffixFromTheSharedParent() async throws {
+    let h = await CollectionImportHarness("CaseOnlyParentImportRoundTrip")
+    // This is a real filesystem round trip; the pure candidate test above is volume independent.
+    guard
+      try h.root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        .volumeSupportsCaseSensitiveNames == false
+    else {
+      await h.cleanup()
+      return
+    }
+    h.library.collectionTree = [
+      Fixture.album("alpha", "Iceland", in: ["Trips"]),
+      Fixture.album("beta", "Iceland", in: ["trips"]),
+    ]
+    h.library.assetsByAlbumLocalId = [
+      "alpha": [h.addAsset("alpha-photo", "A.JPG", date: Fixture.date(1))],
+      "beta": [h.addAsset("beta-photo", "B.JPG", date: Fixture.date(2))],
+    ]
+    h.manager.startExportAlbums(collectionIds: ["alpha"])
+    await h.manager.waitForQueueDrained()
+    h.manager.startExportAlbums(collectionIds: ["beta"])
+    await h.manager.waitForQueueDrained()
+    let exported = h.collections.placements
+    try #require(exported.count == 2)
+    let listing = try Fixture.listing(of: h.root)
+    try #require(
+      Set(listing.keys) == [
+        "/Collections/Albums/Trips/Iceland/A.JPG",
+        "/Collections/Albums/Trips/Iceland_2/B.JPG",
+      ])
+    let writes = h.writer.writeCalls.count
+
+    await h.wipeHistory()
+    try #require(h.collections.placements.isEmpty)
+    await h.importBackup()
+    try #require(h.manager.importError == nil)
+    #expect(
+      h.collections.placements.mapValues(\.relativePath) == exported.mapValues(\.relativePath))
+
+    h.manager.startExportAlbums(collectionIds: ["alpha", "beta"])
+    await h.manager.waitForQueueDrained()
+    #expect(h.writer.writeCalls.count == writes)
+    #expect(try Fixture.listing(of: h.root) == listing)
+    await h.cleanup()
+  }
+
   @Test func importCanStillRecoverLegacySuffixWithAnExactParent() async throws {
     let tree = [
       Fixture.album("alpha", "Iceland", in: ["Trips"]),

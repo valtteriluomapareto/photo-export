@@ -300,20 +300,20 @@ struct ExportPlacementResolver {
         return trimmed.isEmpty ? nil : trimmed
       }
 
-    let leafKey = siblingLeafKey(sanitizedLeaf)
-    let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
+    let leafKey = componentKey(sanitizedLeaf)
+    let existingLeafKeys = Set(existingLeaves.map(componentKey))
     // Reserve natural names even before those siblings are persisted. Otherwise
     // Trip/trip could consume the directory intended for a sibling named TRIP_2.
     let reservedLeafKeys = Set(
       collections.filter { $0.kind == .sharedAlbum }
-        .map { siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
+        .map { componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
 
     let siblingCandidates =
       collections
       .filter { $0.kind == .sharedAlbum }
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
-        siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
+        componentKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
           == leafKey
       }
       .filter { other in
@@ -349,7 +349,7 @@ struct ExportPlacementResolver {
     var n = 2
     while true {
       let candidate = "\(sanitizedLeaf)_\(n)"
-      let key = siblingLeafKey(candidate)
+      let key = componentKey(candidate)
       if !existingLeafKeys.contains(key) && !reservedLeafKeys.contains(key) {
         if slot == targetSlot { return candidate }
         slot += 1
@@ -387,12 +387,12 @@ struct ExportPlacementResolver {
   ) -> String {
     func parentKey(_ album: PhotoCollectionDescriptor) -> [String] {
       album.pathComponents.map {
-        siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0))
+        componentKey(CollectionPathComponentPolicy.sanitizeComponent($0))
       }
     }
     let parent = parentKey(descriptor)
 
-    // Existing claimants: any existing placement under the same parent folder whose
+    // Existing claimants: any existing placement under the same case-folded parent whose
     // leaf matches the candidate (with or without an existing suffix). We compare on
     // the *sanitized* leaf component because users see and pick by that.
     let existingLeaves =
@@ -407,7 +407,7 @@ struct ExportPlacementResolver {
         let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
           .map(String.init)
         guard let leaf = parts.last else { return nil }
-        return parts.dropLast().map(siblingLeafKey) == parent ? leaf : nil
+        return parts.dropLast().map(componentKey) == parent ? leaf : nil
       }
 
     // New (not-yet-existing) sibling claimants from the collection tree: other albums
@@ -422,15 +422,15 @@ struct ExportPlacementResolver {
     // distinct renamed albums could each end up at the bare path because the filter
     // would have dropped them as "covered above".
     let siblings = albumsInTree(collections).filter { parentKey($0) == parent }
-    let leafKey = siblingLeafKey(sanitizedLeaf)
-    let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
+    let leafKey = componentKey(sanitizedLeaf)
+    let existingLeafKeys = Set(existingLeaves.map(componentKey))
     let reservedLeafKeys = Set(
-      siblings.map { siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
+      siblings.map { componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
     let siblingCandidates =
       siblings
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter {
-        siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) == leafKey
+        componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) == leafKey
       }
       .filter { other in
         // If an existing placement matches `other` at its *current* path-hash, it
@@ -479,7 +479,7 @@ struct ExportPlacementResolver {
       let candidate = "\(sanitizedLeaf)_\(n)"
       // Skip persisted names and natural sibling names; finite reservations always
       // leave a free suffix, without an unchecked upper-bound fallback.
-      let key = siblingLeafKey(candidate)
+      let key = componentKey(candidate)
       if !existingLeafKeys.contains(key) && !reservedLeafKeys.contains(key) {
         if slot == targetSlot { return candidate }
         slot += 1
@@ -490,8 +490,8 @@ struct ExportPlacementResolver {
 
   /// Conservative component comparison for new placements on case-insensitive volumes.
   /// Emitted spelling and identity hashing deliberately keep the original case.
-  func siblingLeafKey(_ sanitizedLeaf: String) -> String {
-    sanitizedLeaf.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+  func componentKey(_ component: String) -> String {
+    component.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
       .precomposedStringWithCanonicalMapping
   }
 

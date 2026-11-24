@@ -40,7 +40,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   actions](https://valtteriluomapareto.github.io/photo-export/features/#export).
 - Export Favorites, individual albums, a folder’s albums or all user albums, preserving their folder hierarchy. [Collection
   exports](https://valtteriluomapareto.github.io/photo-export/features/#export).
-- Keep separate progress for renamed or moved albums, with distinct folders for new album paths that differ only by case. [Album folder
+- Keep separate progress for renamed or moved albums, with distinct folders for new album paths that differ only by case. Import respects other albums’ reserved names when recovering those folders. [Album folder
   rules](https://valtteriluomapareto.github.io/photo-export/features/#album-folder-names).
 - Export selected **iCloud Shared Albums** using the reduced-quality JPEGs Apple provides. [Shared album
   limits](https://valtteriluomapareto.github.io/photo-export/features/#shared-albums-reduced-fidelity).
