@@ -47,14 +47,13 @@ jobs:
       APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
       APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
     steps:
-      # The tagged commit, so What's New matches the release notes that shipped.
+      # The script comes from the default branch (or the dispatched ref), so a fix merged
+      # there reaches an already-tagged release through a dispatch. The release notes
+      # always come from the release tag.
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-
-      - name: Wait for App Store Connect processing
-        run: python3 -B scripts/ci/appstore-connect.py wait-build --version "$VERSION" --build "$BUILD_NUMBER"
 
       - name: Prepare App Store version
-        run: python3 -B scripts/ci/appstore-connect.py prepare-version --version "$VERSION" --build "$BUILD_NUMBER"
+        env:
+          CATALOG_REF: ${{ github.event.workflow_run.head_sha || format('refs/tags/v{0}', inputs.version) }}
+        run: python3 -B scripts/ci/appstore-connect.py prepare --version "$VERSION" --build "$BUILD_NUMBER" --catalog-ref "$CATALOG_REF"

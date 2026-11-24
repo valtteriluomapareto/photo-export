@@ -96,11 +96,11 @@ The same `v*` tag also triggers `release-app-store.yml`, which archives, signs, 
 
 1. Waits until App Store Connect has processed the build, up to 45 minutes. A build that fails processing turns the run red instead of arriving only as an email from Apple.
 2. Finds or creates the macOS App Store version (new versions are released manually after approval), and attaches the build.
-3. Fills the English **What's New** from the version's `ReleaseNotesCatalog.swift` entry at the tagged commit. Preview the text with `python3 scripts/ci/appstore-connect.py whats-new 1.2.0`. Without an entry, the run warns and leaves What's New to be written by hand.
+3. Fills the English **What's New** from the version's `ReleaseNotesCatalog.swift` entry at the release tag. Preview the text with `python3 scripts/ci/appstore-connect.py whats-new 1.2.0`. Without an entry, the run warns and leaves What's New to be written by hand.
 
-It stops if that version is already waiting for or past review, since its build can no longer change. Then review the version in App Store Connect and submit it for App Review manually.
+It stops before writing anything if the catalog entry can't be read or is too long, or if that version is already waiting for or past review, since its build can no longer change. Then review the version in App Store Connect and submit it for App Review manually.
 
-An upload from a manual `release-app-store.yml` run with `skip_upload: false` is not prepared automatically. Run **Actions > App Store Connect (prepare version)** with the version and the build number that run printed. Use the same dispatch to re-prepare after fixing a failure.
+An upload from a manual `release-app-store.yml` run with `skip_upload: false` is not prepared automatically. Run **Actions > App Store Connect (prepare version)** from `main` with the version and the build number that run printed; the release notes still come from the `v<version>` tag. Re-run a failed job after a temporary failure; after merging a fix to the script, use the dispatch instead, since a re-run keeps the code it first ran with.
 
 If you ever need to archive locally (CI down, secret rotation, etc.):
 

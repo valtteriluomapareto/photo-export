@@ -2,16 +2,16 @@
 """Prepare an uploaded build for App Review through the App Store Connect API.
 
 Subcommands:
-  whats-new VERSION          Print the store "What's New" text for VERSION, built from
-                             photo-export/Models/ReleaseNotesCatalog.swift. Needs no credentials.
-  wait-build                 Wait until App Store Connect has processed the uploaded build;
-                             fail if processing fails or the build never appears.
-  prepare-version            Find or create the macOS App Store version, attach the processed
-                             build and fill the English "What's New" text from the catalog.
-                             Submission for review and release stay manual.
+  whats-new VERSION   Print the store "What's New" text for VERSION, built from
+                      photo-export/Models/ReleaseNotesCatalog.swift. Needs no credentials.
+  prepare             Wait until App Store Connect has processed the uploaded build, find or
+                      create the macOS App Store version, attach the build and fill the English
+                      "What's New" from the catalog. Submission for review and release stay
+                      manual.
 
-The API subcommands take --version (CFBundleShortVersionString) and --build
-(CFBundleVersion) and read these environment variables:
+`prepare` takes --version (a tag such as v1.2.3, or 1.2.3), --build (CFBundleVersion) and
+optionally --catalog-ref, a git ref whose catalog to use (for example the release tag), and
+reads these environment variables:
   APP_STORE_APP_APPLE_ID               numeric Apple ID of the app record
   APP_STORE_CONNECT_API_KEY_BASE64     base64 of the AuthKey_<id>.p8 file
   APP_STORE_CONNECT_API_KEY_ID
@@ -21,6 +21,7 @@ Standard library only; the ES256 token is signed with the openssl command line t
 """
 import argparse
 import base64
+import http.client
 import json
 import os
 from pathlib import Path
@@ -34,10 +35,13 @@ import urllib.parse
 import urllib.request
 
 API = "https://api.appstoreconnect.apple.com"
-CATALOG = Path(__file__).resolve().parents[2] / "photo-export/Models/ReleaseNotesCatalog.swift"
+REPO = Path(__file__).resolve().parents[2]
+CATALOG_PATH = "photo-export/Models/ReleaseNotesCatalog.swift"
 WHATS_NEW_LIMIT = 4000
-TOKEN_LIFETIME = 20 * 60  # the maximum App Store Connect accepts
-TOKEN_REFRESH_AFTER = 10 * 60
+# Apple accepts tokens that expire at most 20 minutes ahead; leave room for clock skew.
+TOKEN_LIFETIME = 19 * 60
+BUILD_TIMEOUT = 45 * 60
+BUILD_POLL_INTERVAL = 30
 # States in which the build and What's New of a version can still change.
 EDITABLE_STATES = {
     "PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED",
@@ -51,7 +55,9 @@ class ConnectError(Exception):
 
 # ── What's New from the release-note catalog ────────────────────────────────
 
-TOKEN = re.compile(r'(\w+):|"((?:[^"\\\n]|\\.)*)"')
+# Comments are matched as their own tokens so labels or quotes inside them are skipped.
+TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/|(\w+):|"((?:[^"\\\n]|\\.)*)"', re.DOTALL)
+UNSUPPORTED = (('"""', "multi-line strings"), ('#"', "raw strings"), ("\\(", "interpolation"))
 
 
 def unescape(literal):
@@ -64,15 +70,21 @@ def unescape(literal):
 
 
 def parse_catalog(text):
-    """Return {version: {"summary", "bullets": [(title, body)], "learnMore"}}.
+    """Return {version: {"summary", "bullets": [[title, body]], "learnMore"}}.
 
-    The catalog holds only string literals joined with `+`, so each labelled field is the
-    concatenation of the literals that follow its label.
+    The catalog holds only plain string literals joined with `+`, so each labelled field is
+    the concatenation of the literals that follow its label. Anything else is refused rather
+    than misread.
     """
-    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+    for marker, name in UNSUPPORTED:
+        if marker in text:
+            raise ConnectError(f"ReleaseNotesCatalog.swift uses {name}, which this script "
+                               "can't read; use plain string literals joined with +.")
     notes, note, field = {}, None, None
-    for match in TOKEN.finditer(code):
+    for match in TOKEN.finditer(text):
         label, literal = match.groups()
+        if label is None and literal is None:
+            continue
         if label is not None:
             field = label
             if label == "version":
@@ -98,22 +110,35 @@ def plain(markdown):
     return re.sub(r"`\s*([^`]*?)\s*`", r"\1", text).strip()
 
 
-def whats_new(version, catalog_text=None):
+def whats_new(version, catalog_text):
     """Store text for VERSION, or None when the catalog has no entry for it."""
-    if catalog_text is None:
-        catalog_text = CATALOG.read_text(encoding="utf-8")
     note = parse_catalog(catalog_text).get(version)
     if note is None:
         return None
+    if not note["summary"] or any(not title or not body for title, body in note["bullets"]):
+        raise ConnectError(f"The {version} catalog entry has an empty summary, title or body; "
+                           "this script reads only string literals.")
     parts = [plain(note["summary"])]
     parts += [f"• {plain(title)}\n{plain(body)}" for title, body in note["bullets"]]
     if note["learnMore"]:
         parts.append(plain(note["learnMore"]))
-    text = "\n\n".join(part for part in parts if part)
+    text = "\n\n".join(parts)
     if len(text) > WHATS_NEW_LIMIT:
         raise ConnectError(f"What's New for {version} is {len(text)} characters; "
                            f"App Store Connect accepts at most {WHATS_NEW_LIMIT}.")
     return text
+
+
+def read_catalog(ref=None):
+    if ref is None:
+        return (REPO / CATALOG_PATH).read_text(encoding="utf-8")
+    print(f"Reading release notes at {ref}", flush=True)
+    for command in (["git", "fetch", "--quiet", "--depth", "1", "origin", ref],
+                    ["git", "show", f"FETCH_HEAD:{CATALOG_PATH}"]):
+        result = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise ConnectError(f"Could not read the catalog at {ref}: {result.stderr.strip()}")
+    return result.stdout
 
 
 # ── API client ──────────────────────────────────────────────────────────────
@@ -164,14 +189,6 @@ class Client:
     def __init__(self, key_path, key_id, issuer_id, sleep=time.sleep):
         self.key_path, self.key_id, self.issuer_id = key_path, key_id, issuer_id
         self.sleep = sleep
-        self.token, self.token_time = None, 0.0
-
-    def authorization(self):
-        now = time.time()
-        if self.token is None or now - self.token_time > TOKEN_REFRESH_AFTER:
-            self.token, self.token_time = make_token(self.key_path, self.key_id, self.issuer_id,
-                                                     now), now
-        return f"Bearer {self.token}"
 
     def request(self, method, path, params=None, body=None):
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
@@ -179,22 +196,25 @@ class Client:
         # Creation is not retried: a repeated POST could create twice.
         attempts = 1 if method == "POST" else 4
         for attempt in range(1, attempts + 1):
+            # A fresh token per request, so a long wait never outlives one.
+            token = make_token(self.key_path, self.key_id, self.issuer_id, time.time())
             request = urllib.request.Request(url, data=data, method=method, headers={
-                "Authorization": self.authorization(), "Content-Type": "application/json"})
+                "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(request, timeout=60) as response:
-                    print(f"  {method} {path} -> {response.status}", flush=True)
                     payload = response.read()
+                    print(f"  {method} {path} -> {response.status}", flush=True)
                     return json.loads(payload) if payload else None
             except urllib.error.HTTPError as error:
                 details = error_details(error.read().decode(errors="replace"))
                 print(f"  {method} {path} -> {error.code} {details}", flush=True)
                 if error.code not in (429, 500, 502, 503, 504) or attempt == attempts:
                     raise ConnectError(f"{method} {path} failed with {error.code}: {details}")
-            except urllib.error.URLError as error:
-                print(f"  {method} {path} -> {error.reason}", flush=True)
+            except (OSError, http.client.HTTPException) as error:
+                # URLError, dropped connections and read timeouts.
+                print(f"  {method} {path} -> {error!r}", flush=True)
                 if attempt == attempts:
-                    raise ConnectError(f"{method} {path} failed: {error.reason}")
+                    raise ConnectError(f"{method} {path} failed: {error!r}")
             self.sleep(2 ** attempt)
         raise AssertionError("unreachable")
 
@@ -218,9 +238,8 @@ def find_build(client, app_id, version, build):
     return builds[0] if builds else None
 
 
-def wait_for_build(client, app_id, version, build, timeout, interval,
-                   sleep=time.sleep, monotonic=time.monotonic):
-    deadline = monotonic() + timeout
+def wait_for_build(client, app_id, version, build, sleep=time.sleep, monotonic=time.monotonic):
+    deadline = monotonic() + BUILD_TIMEOUT
     while True:
         found = find_build(client, app_id, version, build)
         state = found["attributes"].get("processingState") if found else None
@@ -232,9 +251,10 @@ def wait_for_build(client, app_id, version, build, timeout, interval,
                                f"{state}. Apple's email to the account holder names the cause.")
         if monotonic() >= deadline:
             raise ConnectError(f"Build {version} ({build}) was not processed within "
-                               f"{int(timeout)} seconds (last state: {state or 'not visible'}). "
-                               "Re-run this job once it shows as processed in App Store Connect.")
-        sleep(interval)
+                               f"{BUILD_TIMEOUT // 60} minutes (last state: "
+                               f"{state or 'not visible'}). Re-run this job once it shows as "
+                               "processed in App Store Connect.")
+        sleep(BUILD_POLL_INTERVAL)
 
 
 def version_state(record):
@@ -264,13 +284,11 @@ def find_or_create_version(client, app_id, version):
                            "App Store Connect allows one at a time.") from error
 
 
-def prepare_version(client, app_id, version, build, catalog_text=None):
+def prepare(client, app_id, version, build, catalog_text,
+            sleep=time.sleep, monotonic=time.monotonic):
+    # Checked before waiting, so a catalog problem fails in seconds and before any write.
     text = whats_new(version, catalog_text)
-    found = find_build(client, app_id, version, build)
-    state = found["attributes"].get("processingState") if found else None
-    if state != "VALID":
-        raise ConnectError(f"Build {version} ({build}) is {state or 'not visible'}; "
-                           "run wait-build first.")
+    found = wait_for_build(client, app_id, version, build, sleep, monotonic)
     record = find_or_create_version(client, app_id, version)
     print(f"Attaching build {build} to version {version}", flush=True)
     client.patch(f"/v1/appStoreVersions/{record['id']}/relationships/build",
@@ -290,10 +308,6 @@ def prepare_version(client, app_id, version, build, catalog_text=None):
         client.patch(f"/v1/appStoreVersionLocalizations/{item['id']}", {"data": {
             "type": "appStoreVersionLocalizations", "id": item["id"],
             "attributes": {"whatsNew": text}}})
-    for item in localizations:
-        if item not in english:
-            print(f"::warning::What's New for {item['attributes'].get('locale')} needs "
-                  "filling by hand.", flush=True)
     print(f"Version {version} is ready to submit for review in App Store Connect.", flush=True)
 
 
@@ -315,7 +329,7 @@ def store_version(value):
     return version
 
 
-def run_api(arguments, temporary):
+def run_prepare(arguments, temporary):
     app_id = environment("APP_STORE_APP_APPLE_ID")
     key_path = Path(temporary) / "AuthKey.p8"
     key_path.write_bytes(base64.b64decode(environment("APP_STORE_CONNECT_API_KEY_BASE64")))
@@ -323,35 +337,29 @@ def run_api(arguments, temporary):
     client = Client(key_path, environment("APP_STORE_CONNECT_API_KEY_ID"),
                     environment("APP_STORE_CONNECT_API_ISSUER_ID"))
     print(f"App {app_id}, version {arguments.version}, build {arguments.build}", flush=True)
-    if arguments.command == "wait-build":
-        wait_for_build(client, app_id, arguments.version, arguments.build,
-                       arguments.timeout, arguments.interval)
-    else:
-        prepare_version(client, app_id, arguments.version, arguments.build)
+    prepare(client, app_id, arguments.version, arguments.build,
+            read_catalog(arguments.catalog_ref))
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     preview = commands.add_parser("whats-new", help="print What's New for a version")
-    preview.add_argument("version")
-    for name in ("wait-build", "prepare-version"):
-        command = commands.add_parser(name)
-        command.add_argument("--version", required=True, type=store_version)
-        command.add_argument("--build", required=True)
-        if name == "wait-build":
-            command.add_argument("--timeout", type=float, default=45 * 60)
-            command.add_argument("--interval", type=float, default=30)
+    preview.add_argument("version", type=store_version)
+    command = commands.add_parser("prepare", help="prepare the App Store version for review")
+    command.add_argument("--version", required=True, type=store_version)
+    command.add_argument("--build", required=True)
+    command.add_argument("--catalog-ref")
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "whats-new":
-            text = whats_new(arguments.version)
+            text = whats_new(arguments.version, read_catalog())
             if text is None:
                 raise ConnectError(f"ReleaseNotesCatalog.swift has no {arguments.version} entry.")
             print(text)
             return 0
         with tempfile.TemporaryDirectory() as temporary:
-            run_api(arguments, temporary)
+            run_prepare(arguments, temporary)
         return 0
     except ConnectError as error:
         print(f"::error::{error}", file=sys.stderr)
