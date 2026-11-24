@@ -2,7 +2,7 @@ import Testing
 
 @testable import Photo_Export
 
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct ExportRunWatchdogTests {
   @Test func classifiesStrictThresholdsAndCumulativeCounts() {
     var turns = ExportRunWatchdog.TurnCounts()

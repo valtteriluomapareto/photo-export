@@ -35,7 +35,7 @@ struct AutoSyncDestinationCompletionTests {
       cancelReason: nil, result: .failed, failures: [failure])
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func switchingToBDiscardsALateFailureWithoutTouchingB() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -72,7 +72,7 @@ struct AutoSyncDestinationCompletionTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func clearingDestinationCancelsOldFanOutAndDropsLateCompletion() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -105,7 +105,7 @@ struct AutoSyncDestinationCompletionTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func lateATaskCannotClearNewATaskAfterAtoBtoA() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()

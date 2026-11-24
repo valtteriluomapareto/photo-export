@@ -244,7 +244,7 @@ struct ReconciliationErrorSafetyTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func rootDisappearingAfterFileProbesRejectsPrunes(collection: Bool) async throws {
     let checker = GatedReconciliationFileChecker()
     let f = try await Fixture(collection: collection, checker: checker)

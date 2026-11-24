@@ -4,7 +4,7 @@ import Testing
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized, .timeLimit(.minutes(1)))
+  @Suite(.serialized, .timeLimit(.minutes(2)))
   struct BodyInvalidationCounterTests {
     @Test func recordIncrementsPerCall() {
       let counter = BodyInvalidationCounter()

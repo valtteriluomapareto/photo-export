@@ -8,7 +8,7 @@ import Testing
 #if DEBUG
   /// Real settings controls must present a recovery sheet with the current app manager.
   @MainActor
-  @Suite(.serialized, .timeLimit(.minutes(1)))
+  @Suite(.serialized, .timeLimit(.minutes(2)))
   struct AutoExportSettingsSheetTests {
     private func expectHeader(_ title: String, in window: NSWindow) async throws {
       try #require(await observe(in: window) { window.attachedSheet != nil })

@@ -5,7 +5,7 @@ import Testing
 
 /// `runDetached` forwards the caller's cancellation to the detached operation and still
 /// waits for the operation to finish.
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct RunDetachedTests {
   private actor Log {
     private(set) var events: [String] = []

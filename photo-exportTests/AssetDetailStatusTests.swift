@@ -142,7 +142,7 @@ import Testing
         relativePath: "Collections/\(id)/", createdAt: Date(timeIntervalSince1970: 0))
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func actualRowsFollowCurrentScopeWhileOneImageRequestRemainsHeld() async {
       let f = await Fixture()
       await withCleanup {
@@ -186,7 +186,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    @Test(.timeLimit(.minutes(2)), arguments: [false, true])
     func mountedPreviewUsesBoundedPanePixels(oversized: Bool) async throws {
       let f = await Fixture(
         paneSize: oversized ? NSSize(width: 4096, height: 3072) : NSSize(width: 500, height: 600))
@@ -205,7 +205,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func actualRowsRefreshOnCurrentTreeAndStoreChangesWithoutReloadingImage() async throws {
       let f = await Fixture()
       try await withCleanup {

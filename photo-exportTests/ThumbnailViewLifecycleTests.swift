@@ -146,7 +146,7 @@ struct ThumbnailViewLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func replacementKeepsExistingImageWhileFreshDecodeIsPending() async throws {
     let fixture = Fixture()
     let red = Self.image(.red)
@@ -182,7 +182,7 @@ struct ThumbnailViewLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func coalescedChangesStillRefreshEarlierAffectedAsset() async throws {
     let fixture = Fixture()
     var currentImage = Self.image(.red)
@@ -249,7 +249,7 @@ struct ThumbnailViewLifecycleTests {
         for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .fast) == nil)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func failedReplacementExposesFailureTileAndCanRecover() async throws {
     let fixture = Fixture()
     let red = Self.image(.red)

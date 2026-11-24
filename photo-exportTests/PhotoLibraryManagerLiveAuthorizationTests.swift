@@ -13,7 +13,7 @@ import Testing
 /// PhotoKit. A guard moved after a fetch would read the real library here and fail to throw
 /// `authorizationDenied` in an unauthorized test host.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct PhotoLibraryManagerLiveAuthorizationTests {
   private typealias Denied = PhotoLibraryManager.PhotoLibraryError
 

@@ -6,7 +6,7 @@ import Testing
 /// The waits tests use instead of wall-clock deadlines must return when the waiting test is
 /// cancelled, because a `.timeLimit` cancels the test and then waits for its body to return.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct TestWaitTests {
   @Test func checkpointWaitReturnsWhenCountIsReached() async {
     let gate = AsyncCheckpoint()

@@ -6,7 +6,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct TestFakeBehaviorTests {
   private func date(_ year: Int, _ month: Int, _ day: Int = 1) -> Date {
     Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!

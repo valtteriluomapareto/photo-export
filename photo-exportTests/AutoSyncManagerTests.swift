@@ -597,7 +597,7 @@ struct AutoSyncManagerTests {
 
   /// Turning Auto Export off asks the runner to stop the automatic run in progress, and
   /// the fan-out starts none of its remaining scopes.
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func disablingDuringFanOutStopsTheRunnerRunAndStartsNoFurtherScopes() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()

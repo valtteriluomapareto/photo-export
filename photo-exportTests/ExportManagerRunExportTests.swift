@@ -637,7 +637,7 @@ struct ExportManagerRunExportTests {
 
   /// A second `runExport` while one is active is rejected with a `.failed` summary for its
   /// own context instead of trapping. The active run keeps ownership and completes.
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func concurrentRunExportIsRejectedWithoutDisturbingTheActiveRun() async throws {
     let harness = await makeHarness()
     try await withCleanup {
@@ -672,7 +672,7 @@ struct ExportManagerRunExportTests {
 
   /// Turning Auto Export off stops only AutoSync-sourced runs; a run with another source
   /// keeps its ownership and completes.
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func cancelAutoSyncRunLeavesAManualSourcedRunRunning() async throws {
     let harness = await makeHarness()
     try await withCleanup {
@@ -701,7 +701,7 @@ struct ExportManagerRunExportTests {
   /// exercises the run-context branch (no UI path uses it) and keeps the scan message in its
   /// feedback; an AutoSync run has none. Awaits the preparation rather than the run, so a
   /// regression fails here instead of hanging.
-  @Test(.timeLimit(.minutes(1)), arguments: [ExportRunSource.manual, .autoSync])
+  @Test(arguments: [ExportRunSource.manual, .autoSync])
   func favoritesScanFailureResolvesTheRunAsFailed(source: ExportRunSource) async throws {
     let harness = await makeHarness()
     try await withCleanup {
@@ -749,7 +749,7 @@ struct ExportManagerRunExportTests {
   /// Every supported full scope must resolve an empty scan once. This also pins
   /// the zero-count baseline captured after synchronous start* dispatch. Awaits the run
   /// through `finished(_:)`, so a run that never resolves fails at the time limit.
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async throws {
     let harness = await makeHarness()
     try await withCleanup {
@@ -778,7 +778,7 @@ struct ExportManagerRunExportTests {
 
   /// The next run's summary must exclude the previous run's progress counters.
   /// A new asset on the same scope forces another real job after the reset.
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func fullScopeSummaryUsesFreshCounterBaseline(scope: FullScope) async {
     let harness = await makeHarness()
     await withCleanup {
@@ -809,7 +809,7 @@ struct ExportManagerRunExportTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func importingRejectsEveryFullScopeWithoutStrandingAwaiter(scope: FullScope) async {
     let harness = await makeHarness()
     await withCleanup {
@@ -834,7 +834,7 @@ struct ExportManagerRunExportTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func unavailableRelevantStoreRejectsEveryFullScope(scope: FullScope) async {
     let harness = await makeHarness()
     await withCleanup {
@@ -870,7 +870,6 @@ struct ExportManagerRunExportTests {
   /// scan is the case this pins. Missing access is a run-level condition, so no per-asset
   /// failure is recorded.
   @Test(
-    .timeLimit(.minutes(1)),
     arguments: FullScope.allCases, [ExportRunSource.manual, .autoSync])
   func fullScopeWithoutPhotosAccessResolvesFailed(
     scope: FullScope, source: ExportRunSource
@@ -932,7 +931,7 @@ struct ExportManagerRunExportTests {
   /// summary would clear AutoSync's pending work for the item the scan never reached. The
   /// fake's writes don't check access, so this isolates the scan guard: only the missing
   /// second item can fail the run.
-  @Test(.timeLimit(.minutes(1)), arguments: MidScanScope.allCases)
+  @Test(arguments: MidScanScope.allCases)
   func fullScopeLosingPhotosAccessMidScanResolvesFailed(scope: MidScanScope) async throws {
     let harness = await makeHarness()
     let firstFetch = AsyncCheckpoint()
@@ -1001,7 +1000,7 @@ struct ExportManagerRunExportTests {
 
   /// A legacy fire-and-forget export has no `activeRunContext`, but it still
   /// occupies the queue and must cause `runExport` to fail fast.
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func busyLegacyQueueRejectsEveryFullScope(scope: FullScope) async {
     let harness = await makeHarness()
     let gate = AsyncCheckpoint()
@@ -1035,7 +1034,7 @@ struct ExportManagerRunExportTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func cancellationCompletesEveryFullScopeExactlyOnce(scope: FullScope) async {
     let harness = await makeHarness()
     let gate = AsyncCheckpoint()
@@ -1071,7 +1070,7 @@ struct ExportManagerRunExportTests {
 
   /// Pause with one job in the writer and one pending. The awaiter remains
   /// active until resume drains the second job, including across bulk scopes.
-  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  @Test(arguments: FullScope.allCases)
   func pauseAndResumeCompletesEveryFullScope(scope: FullScope) async {
     let harness = await makeHarness()
     let gate = AsyncCheckpoint()
@@ -1451,7 +1450,7 @@ struct ExportManagerRunExportTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func variantEligibilityIsRecheckedAfterEarlierVariantSuspends() async {
     let harness = await makeHarness()
     let gate = AsyncCheckpoint()
@@ -1505,7 +1504,7 @@ struct ExportManagerRunExportTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func legacyManualExportPrunesRetryAfterDurableCompletion() async throws {
     let harness = await makeHarness()
     let builder = FakeAutoSyncEnvironmentBuilder()

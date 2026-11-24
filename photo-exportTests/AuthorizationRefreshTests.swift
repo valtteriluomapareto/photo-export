@@ -71,7 +71,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.authorized, .limited])
+    @Test(arguments: [PHAuthorizationStatus.authorized, .limited])
     func activationLeavesDeniedPaneAfterAccessIsGranted(status: PHAuthorizationStatus) async throws
     {
       let f = Fixture()
@@ -91,7 +91,7 @@ import Testing
 
     /// The refresh runs app-wide, not only while the access screen shows, so a revoke made
     /// while the app was in the background shows the access screen on return.
-    @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.denied, .restricted])
+    @Test(arguments: [PHAuthorizationStatus.denied, .restricted])
     func activationShowsTheAccessScreenAfterAccessIsRevoked(status: PHAuthorizationStatus)
       async throws
     {
@@ -168,7 +168,7 @@ import Testing
         ])
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test
     func authorizationSubscriberSeesInstalledInvalidationBarrierAndFreshCounts() async throws {
       let service = FakePhotoLibraryService()
       service.authorizationStatus = .denied

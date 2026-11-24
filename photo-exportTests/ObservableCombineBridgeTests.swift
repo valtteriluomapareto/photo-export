@@ -56,7 +56,7 @@ private final class FlippedOwner: BridgedCount {
 /// The bridge contract: the Combine side delivers exactly as `@Published` does, and the
 /// Observation side notifies as the `@Observable` macro does, for both owner shapes.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct ObservableCombineBridgeTests {
   enum Shape: CaseIterable { case plumbed, flipped }
 

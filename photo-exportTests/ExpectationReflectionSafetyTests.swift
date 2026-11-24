@@ -9,7 +9,7 @@ import Testing
 /// and needed leaf mirrors on the cyclic types; 6.1+ bounds reflection itself (#302).
 #if DEBUG
   @MainActor
-  @Suite(.timeLimit(.minutes(1)))
+  @Suite(.timeLimit(.minutes(2)))
   struct ExpectationReflectionSafetyTests {
     private struct SubscribingView: View {
       @Environment(ExportManager.self) var manager

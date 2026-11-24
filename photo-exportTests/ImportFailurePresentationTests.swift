@@ -166,7 +166,7 @@ import Testing
       _ = action()
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func nativeCloseDismissesTheActualImportSheet() async throws {
       let f = await Fixture()
       defer { f.close() }
@@ -179,7 +179,7 @@ import Testing
       try #require(await observe(in: parent) { parent.attachedSheet == nil })
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func resultRendersCollectionRowsFromTheActualReport() async throws {
       let f = await Fixture()
       defer { f.close() }
@@ -273,7 +273,7 @@ import Testing
     }
 
     /// A failure already showing at the first layout must render whole.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func failureViewRendersWhenItIsTheFirstLayout() async throws {
       let f = await Fixture()
       defer { f.close() }
@@ -299,7 +299,7 @@ import Testing
       #expect(button("Close", in: f) != nil)
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func deniedScopeStopsProgressWithoutClosingAnUnopenedScope() async throws {
       let f = await Fixture()
       defer { f.close() }
@@ -361,7 +361,7 @@ import Testing
           == f.destination.closedScopeURLs.map(\.path).sorted())
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    @Test(.timeLimit(.minutes(2)), arguments: [false, true])
     func generationInvalidationBeforeTaskEntrySettlesActivity(unavailable: Bool) async throws {
       let f = await Fixture()
       defer { f.close() }

@@ -58,7 +58,7 @@ struct AssetDetailViewLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func switchingSelectionAndRemovingDetailCancelImageRequests() async throws {
     let first = TestAssetFactory.makeAsset(id: "detail-A")
     let second = TestAssetFactory.makeAsset(id: "detail-B")

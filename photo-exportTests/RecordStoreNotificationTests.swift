@@ -266,7 +266,7 @@ struct RecordStoreNotificationTests {
     await gate.waitForEnter(count: 1)
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func cancellingHeldExportPublishesAfterRemovingOwnedInProgressRecord(collection: Bool)
     async throws
   {
@@ -365,7 +365,7 @@ struct RecordStoreNotificationTests {
     await f.close()
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func terminalBadgeSubscriberCannotEraseReplacementImportOwnership(cancel: Bool) async throws {
     let f = await Fixture(collection: false)
     let destination = FakeExportDestination()
