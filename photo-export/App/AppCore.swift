@@ -30,6 +30,7 @@ final class AppCore {
 
   private let persistentChangeSource: any StartablePhotoLibraryChangeProviding
   private var hasStarted = false
+  private var destinationActivation: AnyCancellable?
 
   init(composition: AppComposition) {
     self.composition = composition
@@ -224,8 +225,18 @@ final class AppCore {
     // After the lifecycle coordinator, so the record stores are configured for the current
     // destination before the monitor reads their counts; it waits for a store still loading.
     destinationSafetyMonitor.attach()
+    destinationActivation = Self.observeDestinationActivation(exportDestinationManager)
     applyScreenshotWindowSizeIfRequested()
     AppDiagnostics.endLaunch()
+  }
+
+  static func observeDestinationActivation(
+    _ manager: ExportDestinationManager, center: NotificationCenter = .default
+  ) -> AnyCancellable {
+    center.publisher(for: NSApplication.didBecomeActiveNotification).sink { [weak manager] _ in
+      dispatchPrecondition(condition: .onQueue(.main))
+      MainActor.assumeIsolated { manager?.revalidate(whenReadOnly: true) }
+    }
   }
 
   /// In screenshot mode with a requested size, resize the main window so the capture

@@ -710,18 +710,17 @@ Matched completion prunes only sparse retry tuples that `AutoSyncExportRunning.i
 
 ### AutoSync resume after a destination stop
 
-The work-preservation hook reschedules pending work when a run goes idle, and production
-publishes that idle state before the run's summary. A run that stopped on a
-destination-wide failure (`stoppedBy` set) while the destination still looks available
-would stop the same way again, every 30 seconds. So the hook records the exact
-`(reason, fireAt)` it scheduled, and a `stoppedBy` summary arriving while the destination
-is available cancels that schedule only if it is still the current one; any other
-schedule clears the record. A summary that arrives while the reducer is still `.running`
-suppresses the hook for that run instead.
+The work-preservation hook waits for the Auto Export fan-out to finish or pause. An
+individual scope publishes idle before its summary, even if more scopes are coming.
+A run that stopped on a destination-wide failure (`stoppedBy` set) while the destination
+still looks available suppresses the hook to avoid another stop every 30 seconds.
+If the hook has already scheduled work, only the exact `(reason, fireAt)` it scheduled is
+cancelled. Any other schedule clears the record.
 
 - Dirty work is kept and waits for the next real trigger: a Photos change,
   `destinationBecameAvailable`, Export Now, launch, Photos access returning, or a scope or
-  settings change. Freeing space or restoring destination access fires no trigger by itself.
+  settings change. A successful recheck of a known read-only folder can detect restored
+  write access and trigger Auto Export. Freeing space fires no trigger by itself.
 - An Export Now pressed during the run is exempt and still runs. A later trigger during
   the run does not replace it as the pending reason. Switching destinations drops any
   pending reason, Export Now included; the new destination gets its own trigger.

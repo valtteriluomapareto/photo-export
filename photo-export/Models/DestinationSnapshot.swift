@@ -1,5 +1,13 @@
 import Foundation
 
+/// Destination manager's coherent access evidence, before adding Auto Export safety decisions.
+struct DestinationAccess: Sendable {
+  let identity: DestinationIdentity
+  let isAvailable: Bool
+  let isWritable: Bool
+  var isValidating: Bool
+}
+
 /// Snapshot of the destination state the reducer reacts to. Combines what the lifecycle
 /// coordinator publishes (the **stable id** + fingerprint) with the availability and safety
 /// signals AutoSync needs.
@@ -18,6 +26,8 @@ struct DestinationSnapshot: Equatable, Sendable {
   let stableId: String?
   let fingerprint: DestinationFingerprint?
   let isAvailable: Bool
+  let isWritable: Bool
+  let isValidating: Bool
   let safety: DestinationSafetyState
 
   static let none = DestinationSnapshot(
@@ -26,15 +36,23 @@ struct DestinationSnapshot: Equatable, Sendable {
   /// Convenience: the destination's keying id, or `nil` when no destination is selected.
   var id: String? { stableId }
 
+  var canExport: Bool {
+    id != nil && isAvailable && isWritable && !isValidating && safety == .safe
+  }
+
   init(
     stableId: String?,
     fingerprint: DestinationFingerprint?,
     isAvailable: Bool,
+    isWritable: Bool = true,
+    isValidating: Bool = false,
     safety: DestinationSafetyState
   ) {
     self.stableId = stableId
     self.fingerprint = fingerprint
     self.isAvailable = isAvailable
+    self.isWritable = isAvailable && isWritable
+    self.isValidating = isValidating
     self.safety = safety
   }
 
@@ -44,12 +62,16 @@ struct DestinationSnapshot: Equatable, Sendable {
   init(
     fingerprint: DestinationFingerprint?,
     isAvailable: Bool,
+    isWritable: Bool = true,
+    isValidating: Bool = false,
     safety: DestinationSafetyState
   ) {
     self.init(
       stableId: fingerprint?.id,  // keying-id-ok: no-drift convenience
       fingerprint: fingerprint,
       isAvailable: isAvailable,
+      isWritable: isWritable,
+      isValidating: isValidating,
       safety: safety)
   }
 }

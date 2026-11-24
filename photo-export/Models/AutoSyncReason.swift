@@ -40,7 +40,7 @@ enum AutoSyncReason: String, Codable, Equatable, Sendable {
     switch self {
     case .appLaunch: return "app launch"
     case .destinationSelected: return "destination selected"
-    case .destinationBecameAvailable: return "drive reconnected"
+    case .destinationBecameAvailable: return "destination ready"
     case .scopeSelectionChanged: return "scope changed"
     case .versionSelectionChanged: return "version changed"
     case .convertHEICToJPEGChanged: return "HEIC conversion changed"
@@ -62,6 +62,7 @@ extension AutoSyncBlockedReason {
     case .photosAccessMissing: return "Photos access needed"
     case .destinationMissing: return "no destination"
     case .destinationUnavailable: return "drive disconnected"
+    case .destinationReadOnly: return "export folder is read-only"
     case .destinationChecking: return "checking the destination"
     case .destinationUnsafe: return "destination needs review"
     case .noScopesSelected: return "pick what to export"

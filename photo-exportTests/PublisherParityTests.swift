@@ -278,8 +278,8 @@ struct PublisherParityTests {
 
   // MARK: - DestinationSnapshotAdapter
 
-  /// AutoSync's destination contract: `CombineLatest4` over identity, availability, migration
-  /// conflict and safety confirmation, without repeats.
+  /// AutoSync observes validation holds and accepted access evidence, with unchanged
+  /// safety or history updates suppressed.
   @Test func adapterDestinationSnapshot() async throws {
     let folder = try Self.folder("ParitySnapshot")
     let root = TestScratch.directory("ParitySnapshotRecords")
@@ -308,6 +308,15 @@ struct PublisherParityTests {
         await eventually("destination checked") {
           monitor.verdict.stableId == manager.identity.stableId
         })
+      var snapshots: [DestinationSnapshot] = []
+      let validation = adapter.destinationSnapshotPublisher.sink { snapshots.append($0) }
+      await manager.revalidateAndWait()
+      validation.cancel()
+      #expect(snapshots.map(\.isValidating) == [false, true, false])
+      #expect(
+        snapshots.allSatisfy {
+          $0.id == manager.identity.stableId && $0.isAvailable && $0.isWritable
+        })
       await assertPublishedParity(
         { adapter.destinationSnapshotPublisher },
         value: {
@@ -317,14 +326,13 @@ struct PublisherParityTests {
             : monitor.needsSafetyConfirmation ? .unsafeNeedsConfirmation : .safe
           return DestinationSnapshot(
             stableId: manager.identity.stableId, fingerprint: manager.identity.fingerprint,
-            isAvailable: manager.isAvailable, safety: safety)
+            isAvailable: manager.isAvailable, isWritable: manager.isWritable, safety: safety)
         },
         change: {
           result = .migrationConflict(newId: "new", legacyId: "legacy")
           lifecycle.apply(destination: Self.snapshot("C"))
         },
-        // Revalidating an unchanged folder stores the same availability again.
-        unchangedWrite: .before { await manager.revalidateAndWait() },
+        unchangedWrite: .before { monitor.confirmCurrentDestination() },
         unchangedWriteDelivery: .isDropped)
     } cleanup: {
       timeline.drainSynchronously()

@@ -393,7 +393,8 @@ final class AutoSyncManager: ObservableObject {
       return
     }
     let now = environment.clock.now()
-    let (next, effects) = AutoSyncReducer.reduce(event, in: reducerState, now: now)
+    let (next, effects) = AutoSyncReducer.reduce(
+      event, in: reducerState, now: now, fanOutActive: activeRunFanOutID != nil)
     reducerState = next
     // Equatable guard: skip the `@Published` assignment when the value is
     // unchanged. Prevents the willChange storm during attach (5+ initial replays
@@ -604,17 +605,9 @@ final class AutoSyncManager: ObservableObject {
         runEffects([.persistDirtyState(dirty, destinationId: destinationId)])
       }
     }
-    // Cancel any prior fan-out before starting a new one. The reducer's
-    // single-active-run invariants should already prevent overlap, but
-    // belt-and-braces: a misroute would never silently chain two fan-outs.
     cancelActiveFanOut()
 
-    // For an `.autoExport(scopes)` spec, fan out to one `runExport` call per
-    // enabled scope and dispatch `autoSyncRunCompleted` after each. The
-    // reducer clears only the dirty for the scope each summary covers, so
-    // sequential per-scope runs keep dirty-state correctness intact even if a
-    // later scope fails. ExportManager's `runExport` doesn't implement
-    // `.autoExport` directly — translating here keeps the runner narrow.
+    // Each scope gets its own run and acknowledges its own dirty work.
     let runScopes = Self.expand(scope: spec.scope)
 
     guard let destinationId = reducerState.destination.id else { return }
@@ -633,15 +626,20 @@ final class AutoSyncManager: ObservableObject {
           {
             self.dispatch(.retryTimerFired)
           }
+          self.dispatch(.fanOutFinished)
         }
       }
       for runScope in runScopes {
         guard !Task.isCancelled, self?.activeRunFanOutID == fanOutID else { return }
-        // Access revoked during the previous scope would leave this scope's scan reading
-        // the cached flag, finding nothing and acknowledging its pending work. Stop instead;
-        // the reducer is blocked and the scope's dirty state stays.
+        // Recheck access after the timer-to-task hop and between scopes.
         environment.photosAuthorization.refreshAuthorization()
-        guard self?.reducerState.photosAuthorized == true else { return }
+        guard self?.reducerState.photosAuthorized == true,
+          let destination = self?.reducerState.destination, destination.id == destinationId
+        else { return }
+        guard destination.canExport else {
+          self?.dispatch(.runDeferred(spec.reason))
+          return
+        }
         let context = ExportRunContext(
           runId: UUID(),
           source: spec.source,

@@ -107,7 +107,8 @@ enum AutoSyncReducer {
   static func reduce(
     _ event: AutoSyncEvent,
     in state: State,
-    now: Date
+    now: Date,
+    fanOutActive: Bool = false
   ) -> (State, [AutoSyncEffect]) {
     var newState = state
     var effects: [AutoSyncEffect] = []
@@ -133,57 +134,7 @@ enum AutoSyncReducer {
       }
 
     case .destinationChanged(let destination):
-      // No-op when the snapshot is byte-identical — id+availability+safety+fingerprint
-      // metadata all match. Without this guard, a publisher republish (same drive,
-      // same state) would cancel the active debounce and re-arm a fresh one.
-      if destination == state.destination {
-        break
-      }
-      if destination.id != state.destination.id {
-        // A reason pending for the old destination, Export Now included, doesn't carry over;
-        // the new destination gets its own trigger below.
-        newState.pendingTriggerReason = nil
-        newState.consumedRetryEntries.removeAll()
-        if let boundary = state.runDirtyBoundary {
-          newState.invalidatedRunIds.insert(boundary.context.runId)
-        }
-        if let activeContext = state.exportRunState.activeContext {
-          newState.invalidatedRunIds.insert(activeContext.runId)
-        }
-        newState.runDirtyBoundary = nil
-      }
-      newState.destination = destination
-      // Same stable id with only fingerprint metadata drifting (availability + safety unchanged)
-      // is a *metadata refresh*, not new work — e.g. a remount that kept the stable id. The
-      // stores stay correctly keyed (dirty state is preserved because the key is unchanged), so
-      // update the snapshot but do NOT trigger a debounce/run. Mirrors
-      // AppLifecycleCoordinator's same-stable-id branch. A real remount that passed through
-      // unavailable still triggers via `.destinationBecameAvailable` below (availability changed).
-      let sameId = destination.id != nil && destination.id == state.destination.id
-      let availabilityOrSafetyChanged =
-        destination.isAvailable != state.destination.isAvailable
-        || destination.safety != state.destination.safety
-      if sameId && !availabilityOrSafetyChanged {
-        break
-      }
-      // The end of a safety check is not new work: the trigger that started the wait (launch,
-      // pick, Export Now) is still pending and is served below.
-      if sameId, destination.isAvailable == state.destination.isAvailable,
-        state.destination.safety == .checking
-      {
-        break
-      }
-      let wasUnavailableOrMissing =
-        !state.destination.isAvailable || state.destination.id == nil
-      if destination.id != nil && destination.isAvailable {
-        // A destination becoming reachable, or a fresh destination being selected.
-        // Either way it can host a run, so schedule a debounce.
-        triggerReason =
-          wasUnavailableOrMissing
-          ? (state.destination.id == destination.id
-            ? .destinationBecameAvailable : .destinationSelected)
-          : .destinationSelected
-      }
+      triggerReason = applyDestinationChange(destination, to: &newState)
 
     case .scopeSelectionChanged(let scopes):
       let scopesAdded = scopes.enabledScopes.contains { !state.scopeSelection.includes($0) }
@@ -294,6 +245,14 @@ enum AutoSyncReducer {
       noteDestinationStop(
         summary, previous: state.current, in: &newState, cancelsHook: &cancelsResumeHookSchedule)
 
+    case .fanOutFinished:
+      break
+
+    case .runDeferred(let reason):
+      if newState.pendingTriggerReason == nil || reason == .userExportNow {
+        newState.pendingTriggerReason = reason
+      }
+
     case .debounceFired(let reason):
       // Honor the timer only if the state still expects this reason. A debounce
       // that fires after the user has disabled / unmounted / re-enabled scopes is
@@ -302,8 +261,7 @@ enum AutoSyncReducer {
       if case .scheduled(let scheduledReason, _) = state.current,
         scheduledReason == reason
       {
-        let environmentSupportsRun = environmentAllowsRun(state: newState)
-        if environmentSupportsRun {
+        if !fanOutActive && environmentAllowsRun(state: newState) {
           effects.append(
             .startRun(
               StartRunSpec(
@@ -450,7 +408,7 @@ enum AutoSyncReducer {
     // trigger is preserved for resume.
     if let triggerReason,
       !keepsPendingExportNow(
-        pending: newState.pendingTriggerReason, incoming: triggerReason, previous: state.current)
+        pending: newState.pendingTriggerReason, incoming: triggerReason, previous: state)
     {
       newState.pendingTriggerReason = triggerReason
     }
@@ -468,7 +426,7 @@ enum AutoSyncReducer {
     }
     let nextCurrent = recomputeCurrent(
       from: newState, previous: state.current,
-      triggerReason: servedTrigger, now: now,
+      triggerReason: servedTrigger, now: now, fanOutActive: fanOutActive,
       effects: &effects)
     newState.current = nextCurrent
     // A new schedule is not the hook's, even when it lands on the same reason and instant;
@@ -492,7 +450,10 @@ enum AutoSyncReducer {
       reason != .photosChanged, reason != .photosChangeFallback
     {
       switch newState.current {
-      case .waiting(.importActive), .waiting(.manualExportActive), .blocked(.photosAccessMissing):
+      case .waiting(.importActive), .waiting(.manualExportActive), .waiting(.destinationReadOnly),
+        .blocked(.photosAccessMissing):
+        newState.pendingTriggerReason = reason
+      case .waiting(.destinationChecking) where newState.destination.isValidating:
         newState.pendingTriggerReason = reason
       default:
         break
@@ -535,9 +496,8 @@ enum AutoSyncReducer {
       }
     }
 
-    // Production publishes idle before the summary, so the hook above has usually already
-    // rescheduled the stopped run. Cancel that exact schedule; an Export Now pressed during
-    // the run keeps its run.
+    // If a runner's idle observation already rescheduled a stopped run, cancel that exact
+    // schedule. An Export Now pressed during the run keeps its run.
     if cancelsResumeHookSchedule, let hook = newState.resumeHookSchedule,
       hook.reason != .userExportNow,
       newState.current == .scheduled(reason: hook.reason, fireAt: hook.fireAt)
@@ -577,11 +537,13 @@ enum AutoSyncReducer {
     }
   }
 
-  /// During a run a destination stop can end, a later trigger doesn't replace Export Now.
+  /// Keep an explicit request when the active run or destination readiness holds it.
   private static func keepsPendingExportNow(
-    pending: AutoSyncReason?, incoming: AutoSyncReason, previous: AutoSyncState
+    pending: AutoSyncReason?, incoming: AutoSyncReason, previous: State
   ) -> Bool {
-    pending == .userExportNow && incoming != .userExportNow && suppressibleRunInProgress(previous)
+    pending == .userExportNow && incoming != .userExportNow
+      && (suppressibleRunInProgress(previous.current) || previous.destination.isValidating
+        || (previous.destination.isAvailable && !previous.destination.isWritable))
   }
 
   /// An export not yet idle: an Auto Export run, whose destination-stop summary can come first,
@@ -694,16 +656,8 @@ enum AutoSyncReducer {
   }
 
   private static func environmentAllowsRun(state: State) -> Bool {
-    // `!isAutoSyncActive` prevents a second run during a multi-scope fan-out:
-    // a debounce that fires while a multi-scope AutoSync fan-out is mid-flight
-    // (e.g. scope #1 finished, scope #2's `runExport` is suspended) would
-    // otherwise emit a fresh `.startRun` and trip
-    // `ExportManager.runExport`'s single-active-run precondition. The fan-out's
-    // own `await runExport` is already keeping `activeRunContext != nil`; we
-    // must not start a second concurrent run.
     state.enabled && !state.importActive && state.photosAuthorized && !state.scopeSelection.isEmpty
-      && state.destination.id != nil && state.destination.isAvailable
-      && state.destination.safety == .safe
+      && state.destination.canExport
       && !state.exportRunState.isManualActive
       && !state.exportRunState.isAutoSyncActive
   }
@@ -716,6 +670,7 @@ enum AutoSyncReducer {
     previous: AutoSyncState,
     triggerReason: AutoSyncReason?,
     now: Date,
+    fanOutActive: Bool,
     effects: inout [AutoSyncEffect]
   ) -> AutoSyncState {
     if !state.enabled {
@@ -760,12 +715,18 @@ enum AutoSyncReducer {
       break
     }
 
-    // Disabling stops the runner's AutoSync run synchronously, but keep this guard: until
-    // an old run really reports idle, preserve pending triggers on a quick re-enable.
-    if state.exportRunState.isAutoSyncActive {
+    // The runner publishes idle between scopes, while the manager still owns the fan-out.
+    // Also respect an active runner left over from a cancelled fan-out on quick re-enable.
+    if fanOutActive || state.exportRunState.isAutoSyncActive {
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       if case .running(let reason) = previous { return .running(reason: reason) }
       return .running(reason: state.exportRunState.activeContext?.reason ?? .appLaunch)
+    }
+
+    if !state.destination.isWritable || state.destination.isValidating {
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .waiting(
+        state.destination.isWritable ? .destinationChecking : .destinationReadOnly)
     }
 
     // Eligibility met. Decide between scheduled / running / idle based on the
