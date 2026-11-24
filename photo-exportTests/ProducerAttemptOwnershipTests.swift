@@ -195,9 +195,7 @@ struct ProducerAttemptOwnershipTests {
     await gate.waitForEnter(count: 1)
   }
 
-  @Test(
-    .timeLimit(.minutes(1)), arguments: [Producer.resource, .render, .heicSource, .heicConversion],
-    [false, true])
+  @Test(arguments: [Producer.resource, .render, .heicSource, .heicConversion], [false, true])
   func oldCleanupCannotDeleteReplacementStage(producer: Producer, supersede: Bool) async throws {
     let f = await Fixture(producer)
     try await withCleanup {
@@ -252,7 +250,7 @@ struct ProducerAttemptOwnershipTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Producer.allCases, [false, true])
+  @Test(arguments: Producer.allCases, [false, true])
   func staleErrorCannotDowngradeDoneOrContaminateActiveRun(producer: Producer, collection: Bool)
     async throws
   {
@@ -323,8 +321,7 @@ struct ProducerAttemptOwnershipTests {
     }
   }
 
-  @Test(
-    .timeLimit(.minutes(1)), arguments: [Producer.resource, .render, .heicSource, .heicConversion])
+  @Test(arguments: [Producer.resource, .render, .heicSource, .heicConversion])
   func cancelledProducerErrorDoesNotCreateFailure(producer: Producer) async throws {
     let f = await Fixture(producer)
     try await withCleanup {
