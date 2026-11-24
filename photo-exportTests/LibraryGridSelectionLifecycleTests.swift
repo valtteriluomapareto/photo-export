@@ -122,7 +122,7 @@ struct LibraryGridSelectionLifecycleTests {
 
     /// The grid's ScrollView lists no accessibility children; hit-testing reaches each tile.
     func selected(_ label: String) -> Bool? {
-      NativeViewAccess.hitTestButton(label, in: window)?.isAccessibilitySelected?()
+      NativeViewAccess.hitTestElement(labeled: label, in: window)?.isAccessibilitySelected?()
     }
 
     func close() {
