@@ -374,6 +374,7 @@ CI installs and verifies both tools before running the guard suite. See the [mat
 | `setup-keychain-appstore.sh` | `release-app-store.yml` |
 | `install-provisioning-profile.sh` | `release-app-store.yml` |
 | `upload-appstore-connect.sh` | `release-app-store.yml` |
+| `appstore-connect.py` | `app-store-connect.yml` (after a successful App Store upload) |
 | `cleanup-appstore.sh` | `release-app-store.yml` (always runs) |
 
 ## Design assets

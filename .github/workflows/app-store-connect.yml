@@ -1,0 +1,63 @@
+name: App Store Connect (prepare version)
+
+# Runs after a successful App Store release upload from a stable tag push: waits for
+# processing, attaches the build to the App Store version and fills What's New from
+# ReleaseNotesCatalog.swift. Submission for review and the release stay manual.
+# Kept apart from release-app-store.yml so it never changes how a release builds.
+on:
+  workflow_run:
+    workflows: ['Release (App Store)']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Marketing version, e.g. 1.6.6'
+        required: true
+        type: string
+      build:
+        description: 'Build number shown in App Store Connect, e.g. 412.1'
+        required: true
+        type: string
+      catalog_ref:
+        description: 'Git ref for the release notes (default: the v<version> tag)'
+        required: false
+        type: string
+
+concurrency:
+  group: app-store-connect
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-version:
+    # A manual App Store upload from a dispatch is prepared by dispatching this workflow.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
+    runs-on: ubuntu-latest
+    environment: app-store-release
+    timeout-minutes: 60
+    env:
+      # The release workflow numbers App Store builds run_number.run_attempt.
+      VERSION: ${{ inputs.version || github.event.workflow_run.head_branch }}
+      BUILD_NUMBER: ${{ inputs.build || format('{0}.{1}', github.event.workflow_run.run_number, github.event.workflow_run.run_attempt) }}
+      APP_STORE_APP_APPLE_ID: ${{ secrets.APP_STORE_APP_APPLE_ID }}
+      APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+    steps:
+      # The script comes from the default branch (or the dispatched ref), so a fix merged
+      # there reaches an already-tagged release through a dispatch. The release notes
+      # always come from the release tag.
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prepare App Store version
+        env:
+          CATALOG_REF: ${{ github.event.workflow_run.head_sha || inputs.catalog_ref }}
+        run: python3 -B scripts/ci/appstore-connect.py prepare --version "$VERSION" --build "$BUILD_NUMBER" --catalog-ref "$CATALOG_REF"
