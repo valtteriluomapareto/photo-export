@@ -1,9 +1,12 @@
 """Exercise the driver's wire handling without launching the app."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +17,65 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_discovers_a_valid_run_directory(self):
+        with tempfile.TemporaryDirectory(prefix=driver.PREFIX) as root:
+            read_fd, write_fd = os.pipe()
+            with os.fdopen(write_fd, "wb") as writer:
+                writer.write(os.fsencode(root) + b"\n")
+            with os.fdopen(read_fd, "rb") as pipe:
+                self.assertEqual(driver.read_directory(pipe, 1), Path(root).resolve())
+
+    def test_partial_discovery_line_respects_deadline(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd, "rb") as pipe, os.fdopen(write_fd, "wb") as writer:
+            writer.write(b"/partial/path")
+            writer.flush()
+            with self.assertRaisesRegex(driver.DriverError, "Timed out"):
+                driver.read_directory(pipe, 0.02)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin process exit events")
+    def test_stop_waits_for_the_verified_process(self):
+        script = (
+            "import signal, sys\n"
+            "signal.signal(signal.SIGTERM, lambda *_: sys.exit(42))\n"
+            "print('ready', flush=True)\n"
+            "signal.pause()\n"
+        )
+        with subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE) as child:
+            try:
+                self.assertEqual(child.stdout.readline(), b"ready\n")
+                run = SimpleNamespace(pid=child.pid, read=lambda: {}, record={
+                    "process": driver.identity(child.pid),
+                })
+                run.verify = lambda: driver.Run.verify(run)
+                driver.stop(run, timeout=1)
+                self.assertEqual(child.poll(), 42)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin process exit events")
+    def test_stop_times_out_if_same_process_remains_alive(self):
+        script = (
+            "import signal\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('ready', flush=True)\n"
+            "signal.pause()\n"
+        )
+        with subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE) as child:
+            try:
+                self.assertEqual(child.stdout.readline(), b"ready\n")
+                run = SimpleNamespace(pid=child.pid, read=lambda: {}, record={
+                    "process": driver.identity(child.pid),
+                })
+                run.verify = lambda: driver.Run.verify(run)
+                with self.assertRaisesRegex(driver.DriverError, "Timed out"):
+                    driver.stop(run, timeout=0.02)
+                self.assertIsNone(child.poll())
+            finally:
+                if child.poll() is None:
+                    child.kill()
+
     def test_contract_paths_null_and_boolean_are_strict(self):
         state = {"export": {"running": False}, "import": {"result": None}}
         self.assertEqual(driver.unmet(state, driver.predicates(
@@ -89,8 +151,6 @@ class DriverTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "darwin", "requires Darwin process identity")
     def test_process_identity_reads_own_start_and_executable(self):
-        import os
-
         result = driver.identity(os.getpid())
         self.assertEqual(result["pid"], os.getpid())
         self.assertTrue(Path(result["executable"]).name.lower().startswith("python"))

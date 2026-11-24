@@ -3,6 +3,15 @@ import SwiftUI
   import AppKit
 #endif
 
+enum ControlLaunchFlag: String {
+  case fixture = "-PEFixture"
+  case runDirectory = "-PERunDirectory"
+  case snapshot = "-PESnapshot"
+  case surface = "-PESurface"
+  case dark = "-PEDark"
+  case size = "-PESize"
+}
+
 /// The process entry point. Hosted unit tests run inside this app, so under XCTest it
 /// starts `TestHostApp` instead of composing `PhotoExportApp`: no destination bookmark,
 /// record stores, AutoSync stores or Photos observers are built from the real app state.
@@ -48,7 +57,9 @@ enum AppEntry {
           ControlRuntime.fail(error)
         }
       #else
-        if arguments.dropFirst().contains(where: { $0.hasPrefix("-PE") }) {
+        if arguments.dropFirst().contains(where: { ControlLaunchFlag(rawValue: $0) != nil }) {
+          FileHandle.standardError.write(
+            Data("Photo Export control flags require a Debug build.\n".utf8))
           exit(64)
         }
       #endif

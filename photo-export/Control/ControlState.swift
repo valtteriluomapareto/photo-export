@@ -1,8 +1,25 @@
 #if DEBUG
   import Foundation
+  import Observation
 
   extension ExportManager {
-    var controlExportIdle: Bool { !hasActiveExportWork && activeRunContext == nil }
+    var controlExportActive: Bool { hasActiveExportWork || activeRunContext != nil }
+    var controlExportIdle: Bool { !controlExportActive && controlSettlingWork?.isPending != true }
+  }
+
+  /// Cancellation clears the app's visible activity before its physical work has returned.
+  @Observable @MainActor
+  final class ControlSettlingWork {
+    private var pending = 0
+    var isPending: Bool { pending > 0 }
+
+    func track(_ work: @escaping @MainActor () async -> Void) {
+      pending += 1
+      Task {
+        await work()
+        pending -= 1
+      }
+    }
   }
 
   /// Redacted snapshot of core-owned state. The mailbox adds only run and sequencing metadata.
@@ -14,7 +31,7 @@
       let timeline = core.exportRecordStore
       let collections = core.collectionExportRecordStore
       let autoSync = core.autoSyncManager
-      let exportIdle = manager.controlExportIdle
+      let exportActive = manager.controlExportActive
       let isImporting = manager.isImporting
       let timelineFlushing = timeline.controlIsFlushing
       let collectionsFlushing = collections.controlIsFlushing
@@ -29,10 +46,11 @@
           } as Any? ?? NSNull(),
         ],
         "export": [
-          "running": !exportIdle,
+          "running": exportActive,
           "paused": manager.isPaused,
           "queueCount": manager.queueCount,
-          "runSource": (manager.activeRunContext?.source.rawValue ?? (exportIdle ? nil : "manual"))
+          "runSource":
+            (manager.activeRunContext?.source.rawValue ?? (exportActive ? "manual" : nil))
             as Any? ?? NSNull(),
           "enqueued": manager.totalJobsEnqueued,
           "completed": manager.totalJobsCompleted,
@@ -61,7 +79,8 @@
           "timelineHistoryRecovery": timeline.state.needsRecovery,
           "collectionHistoryRecovery": collections.state.needsRecovery,
         ],
-        "idle": exportIdle && !isImporting && !timelineFlushing && !collectionsFlushing
+        "idle": manager.controlExportIdle && !isImporting && !timelineFlushing
+          && !collectionsFlushing
           && timeline.state.isSettled && collections.state.isSettled
           && autoSyncPhase(autoSyncState) != "running",
       ]

@@ -1,6 +1,7 @@
 #if DEBUG
   import AppKit
   import Combine
+  import Darwin
   import Foundation
   import Observation
   import SwiftUI
@@ -16,7 +17,11 @@
     private var revision = 0
     private var seq: Int?
     private var settledSeq: Int?
-    private var windowNumber: Int?
+    private let mainWindows = NSHashTable<NSWindow>.weakObjects()
+    private weak var currentWindow: NSWindow?
+    private var windowNumber: Int? {
+      currentWindow?.windowNumber
+    }
     private var started = false
     private var publicationScheduled = false
     private var mailbox: ControlMailbox?
@@ -37,7 +42,7 @@
           try await ControlSnapshot.capture(
             core: core, options: options, to: fixture.root.appending(path: snapshot))
           try write(snapshotState())
-          publishDirectory()
+          try publishDirectory()
           exit(EXIT_SUCCESS)
         }
         seq = 0
@@ -52,20 +57,26 @@
           }, fail: { Self.fail($0) })
         subscribeToCombine()
         try observe()
-        publishDirectory()
+        try publishDirectory()
         mailbox?.check()
       } catch {
         Self.fail(error)
       }
     }
 
-    func attach(_ window: NSWindow?, publishesWindowNumber: Bool) {
-      if let window {
-        window.isRestorable = false
-        window.setFrameAutosaveName("")
-      }
-      guard publishesWindowNumber else { return }
-      windowNumber = window.flatMap { $0.windowNumber > 0 ? $0.windowNumber : nil }
+    func attach(_ window: NSWindow, publishesWindowNumber: Bool) {
+      window.isRestorable = false
+      window.setFrameAutosaveName("")
+      guard publishesWindowNumber, window.windowNumber > 0 else { return }
+      mainWindows.add(window)
+      currentWindow = window
+      if mailbox != nil { schedulePublication() }
+    }
+
+    func detach(_ window: NSWindow) {
+      mainWindows.remove(window)
+      guard currentWindow === window else { return }
+      currentWindow = mainWindows.allObjects.first { $0.windowNumber > 0 }
       if mailbox != nil { schedulePublication() }
     }
 
@@ -118,8 +129,13 @@
       try data.write(to: fixture.root.appending(path: "state.json"), options: .atomic)
     }
 
-    private func publishDirectory() {
-      FileHandle.standardOutput.write(Data((fixture.root.path + "\n").utf8))
+    private func publishDirectory() throws {
+      let descriptor = dup(STDOUT_FILENO)
+      guard descriptor >= 0 else { throw POSIXError(.EBADF) }
+      let discovery = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+      // Subsequent app stdout belongs in the log, even after the driver closes the pipe.
+      guard dup2(STDERR_FILENO, STDOUT_FILENO) >= 0 else { throw POSIXError(.EBADF) }
+      try discovery.write(contentsOf: Data((fixture.root.path + "\n").utf8))
     }
 
     static func fail(_ error: any Error) -> Never {
@@ -135,9 +151,28 @@
     final class WindowView: NSView {
       weak var runtime: ControlRuntime?
       var publishesWindowNumber = true
+      private weak var attachedWindow: NSWindow?
+
       override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if let attachedWindow { detach(attachedWindow) }
+        guard let window else { return }
+        attachedWindow = window
+        NotificationCenter.default.addObserver(
+          self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification,
+          object: window)
         runtime?.attach(window, publishesWindowNumber: publishesWindowNumber)
+      }
+
+      @objc private func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { detach(window) }
+      }
+
+      private func detach(_ window: NSWindow) {
+        NotificationCenter.default.removeObserver(
+          self, name: NSWindow.willCloseNotification, object: window)
+        attachedWindow = nil
+        if publishesWindowNumber { runtime?.detach(window) }
       }
     }
 
@@ -150,7 +185,7 @@
 
     func updateNSView(_ view: WindowView, context: Context) {
       if let window = view.window, !window.frameAutosaveName.isEmpty {
-        runtime.attach(window, publishesWindowNumber: publishesWindowNumber)
+        runtime.attach(window, publishesWindowNumber: false)
       }
     }
   }

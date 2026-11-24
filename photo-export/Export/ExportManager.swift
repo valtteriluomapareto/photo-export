@@ -460,6 +460,27 @@ final class ExportManager {
     [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
   private enum ScanEnd { case finished, failed }
 
+  #if DEBUG
+    @ObservationIgnored var controlSettlingWork: ControlSettlingWork?
+
+    private func trackControlSettlement(of tasks: [Task<Void, Never>]) {
+      guard !tasks.isEmpty, let controlSettlingWork else { return }
+      controlSettlingWork.track {
+        [recordStoreRouter, exportRecordStore, collectionExportRecordStore] in
+        for task in tasks { await task.value }
+        await recordStoreRouter.waitForCancellationCleanup()
+        if exportRecordStore.state == .ready, !exportRecordStore.hasDurableRecords {
+          try? await exportRecordStore.flush()
+        }
+        if collectionExportRecordStore.state == .ready,
+          !collectionExportRecordStore.hasDurableRecords
+        {
+          try? await collectionExportRecordStore.flush()
+        }
+      }
+    }
+  #endif
+
   /// Runs one export scan. Its end is handled only after the preparation flag has dropped,
   /// so AutoSync never sees a resolved run as a manual one and an empty queue finalizes
   /// only once no scan is left. A failed scan still exports what it queued, as an
@@ -1350,6 +1371,15 @@ final class ExportManager {
   /// correct record store, then zeros queue + run + counter state. The call sites differ
   /// only in their log line and the `finalizeActiveRun` arguments.
   private func teardownActiveWork() {
+    #if DEBUG
+      if controlSettlingWork != nil {
+        var tasks = preparationTasks.values.map(\.task)
+        if queueCoordinator.isProcessing, let job = queueCoordinator.currentTask {
+          tasks.append(job)
+        }
+        trackControlSettlement(of: tasks)
+      }
+    #endif
     if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
       let inFlightPlacement = currentJobPlacement
     {
@@ -2479,7 +2509,8 @@ final class ExportManager {
   // MARK: - Import Existing Backup
 
   /// Starts the "Import Existing Backup…" flow. Forwarder to the `ImportCoordinator`.
-  func startImport() {
+  @discardableResult
+  func startImport() -> ImportCoordinator.StartRefusal? {
     importCoordinator.startImport()
   }
 
@@ -2528,6 +2559,11 @@ final class ExportManager {
 
   /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.
   func cancelImport() {
+    #if DEBUG
+      if isImporting, let task = importCoordinator.importTask {
+        trackControlSettlement(of: [task])
+      }
+    #endif
     importCoordinator.cancelImport()
   }
 

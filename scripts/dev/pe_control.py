@@ -3,6 +3,7 @@
 import argparse
 from contextlib import closing, contextmanager
 import ctypes
+import errno
 import fcntl
 import json
 import math
@@ -262,25 +263,45 @@ def fixture_environment():
     return environment
 
 
+def read_directory(pipe, timeout):
+    deadline = time.monotonic() + timeout
+    line = bytearray()
+    while len(line) < 4096:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([pipe], [], [], remaining)[0]:
+            raise DriverError("Timed out waiting for the fixture directory.")
+        chunk = os.read(pipe.fileno(), 4096 - len(line))
+        if not chunk:
+            break
+        line.extend(chunk)
+        if b"\n" in line:
+            return validate_run(os.fsdecode(bytes(line.split(b"\n", 1)[0])))
+    raise DriverError("Fixture exited or sent invalid directory discovery.")
+
+
+def link_log(startup_log, destination):
+    try:
+        os.link(startup_log.name, destination)
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+        # An explicit --app-log can reside on a different filesystem.
+        with destination.open("xb") as log:
+            log.write(os.pread(startup_log.fileno(), 256 * 1024, 0))
+
+
 def start_fixture(args):
     # Let the app create its root so a first signed launch can initialize its container.
     executable, flags = fixture_command(args)
-    log_file = args.app_log.open("x+b") if args.app_log else tempfile.TemporaryFile()
+    log_file = args.app_log.open("x+b") if args.app_log else tempfile.NamedTemporaryFile()
     with log_file as startup_log:
         child = subprocess.Popen(
             [executable, *flags], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=startup_log, env=fixture_environment(), start_new_session=True)
+            stderr=startup_log, env=fixture_environment(), start_new_session=not args.share_process_group)
         handed_off = False
         try:
-            if not select.select([child.stdout], [], [], args.timeout)[0]:
-                raise DriverError("Timed out waiting for the fixture directory.")
-            root_line = child.stdout.readline(4096)
-            if not root_line.endswith(b"\n"):
-                raise DriverError("Fixture exited before publishing its directory.")
-            root = validate_run(os.fsdecode(root_line.rstrip(b"\n")))
-            # Copy startup diagnostics without moving the shared descriptor's offset.
-            with (root / "app.log").open("xb") as log:
-                log.write(os.pread(startup_log.fileno(), 256 * 1024, 0))
+            root = read_directory(child.stdout, args.timeout)
+            link_log(startup_log, root / "app.log")
             if args.command == "snapshot":
                 if child.wait(timeout=args.timeout) != 0:
                     raise DriverError("Offscreen capture failed.")
@@ -466,6 +487,25 @@ def await_result(run, sequence, run_id, timeout):
     return result
 
 
+def stop(run, timeout):
+    if run.read() is None:
+        raise DriverError("Fixture process has no matching published state.")
+    with closing(select.kqueue()) as queue:
+        try:
+            queue.control([
+                select.kevent(run.pid, filter=select.KQ_FILTER_PROC,
+                              flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                              fflags=select.KQ_NOTE_EXIT),
+            ], 0)
+            # Confirm identity after registering the observer and just before sending the signal.
+            run.verify()
+            os.kill(run.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        if not queue.control(None, 1, timeout) and identity(run.pid) == run.record["process"]:
+            raise DriverError("Timed out waiting for the fixture process to exit.")
+
+
 def seconds(value):
     amount = float(value)
     if not math.isfinite(amount) or not 0 < amount <= 300:
@@ -485,9 +525,12 @@ def main(argv=None):
         command.add_argument("--dark", action="store_true")
         command.add_argument("--app-log", type=Path, help="write the live app stderr to a new file")
         command.add_argument("--timeout", type=seconds, default=30)
+        command.add_argument("--share-process-group", action="store_true", help=argparse.SUPPRESS)
     for name in ("state", "wait", "action", "shot", "stop"):
         command = commands.add_parser(name)
         command.add_argument("run", type=Path)
+        if name == "stop":
+            command.add_argument("--timeout", type=seconds, default=10)
         if name in ("wait", "action", "shot"):
             command.add_argument("--timeout", type=seconds, default=30)
         if name == "state":
@@ -525,9 +568,7 @@ def main(argv=None):
             shot(run, args.destination, args.timeout)
         elif args.command == "stop":
             with client_lock(run):
-                if run.read() is None:
-                    raise DriverError("Fixture process has no matching published state.")
-                os.kill(run.pid, signal.SIGTERM)
+                stop(run, args.timeout)
         return 0
     except (DriverError, OSError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
         print(f"Photo Export control: {error}", file=sys.stderr)

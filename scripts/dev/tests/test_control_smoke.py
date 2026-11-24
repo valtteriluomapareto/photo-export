@@ -1,10 +1,14 @@
 """Verify the hosted smoke rejects false positives and keeps failure evidence."""
+from io import StringIO
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import control_smoke
@@ -42,6 +46,21 @@ class ControlSmokeTests(unittest.TestCase):
                 self.repeat()
             return response
         return "{}"
+
+    def test_launch_timeout_terminates_the_fixture_process_group(self):
+        transcript = StringIO()
+        with patch.object(control_smoke.subprocess, "Popen") as popen, \
+             patch.object(control_smoke.os, "killpg") as killpg:
+            process = popen.return_value.__enter__.return_value
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired("launch", 40), ("", "startup diagnostic"),
+            ]
+            with self.assertRaises(subprocess.TimeoutExpired):
+                control_smoke.run_driver(transcript, "launch", "--app", "Debug.app")
+            self.assertIn("--share-process-group", popen.call_args.args[0])
+            self.assertTrue(popen.call_args.kwargs["start_new_session"])
+            killpg.assert_called_once_with(process.pid, signal.SIGKILL)
+            self.assertIn("startup diagnostic", transcript.getvalue())
 
     def test_smoke_waits_for_each_settled_request_and_stops(self):
         control_smoke.verify(self.driver, Path("Debug.app"), self.evidence)

@@ -72,6 +72,11 @@ final class AppCore {
       mediaRenderer: composition.mediaRenderer,
       fileSystem: composition.fileSystem,
       phAssetCacheControl: composition.phAssetCacheControl(plm), userDefaults: defaults)
+    #if DEBUG
+      if composition.makeControlDestination != nil {
+        em.controlSettlingWork = ControlSettlingWork()
+      }
+    #endif
     // Drive the PhotoLibraryManager `descriptor(from:)` Live Photo resource fallback from the
     // toggle ExportManager owns. Synchronous sink so the next fetch sees the current value;
     // the named bridge accessor synchronously replays its current value to new subscribers.

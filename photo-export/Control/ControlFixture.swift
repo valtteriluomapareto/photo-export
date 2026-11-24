@@ -125,13 +125,15 @@
         surface == .favorites
         ? nil : .init(section: .timeline, selection: .timelineMonth(year: 2025, month: 6))
       composition.makeControlDestination = {
-        ExportDestinationManager(
+        let manager = ExportDestinationManager(
           skipRestore: true, userDefaults: defaults,
           sameFolderEvidenceProvider: { _ in .noStoredBookmark },
           bookmarkSaver: { fixture.permitsDestination($0) },
           volumeNotificationCenter: NotificationCenter(),
           validationScopeAcquirer: { fixture.permitsDestination($0) },
-          validationScopeReleaser: { _ in }, localAccess: { fixture.permitsDestination($0) })
+          validationScopeReleaser: { _ in })
+        manager.restrictFixtureAccess(to: fixture.permitsDestination)
+        return manager
       }
       try fixture.validate(composition)
       return composition

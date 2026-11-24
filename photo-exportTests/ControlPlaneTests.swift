@@ -8,6 +8,8 @@
   @Suite(.timeLimit(.minutes(1)))
   struct ControlPlaneTests {
     @Test func strictLaunchAndWireFraming() throws {
+      #expect(ControlLaunchFlag(rawValue: "-PEUnknown") == nil)
+      #expect(ControlLaunchFlag(rawValue: "-PEFixture") == .fixture)
       #expect(try ControlLaunch.parse(["app", "-NSDocumentRevisionsDebugMode", "YES"]) == nil)
       for flags in [
         ["-PEUnknown"], ["-PEDark"], ["-PEFixture", "v1", "-PEDark", "-PEDark"],
@@ -63,6 +65,27 @@
       #expect(responses[0]["reason"] as? String == "invalidRequest")
       #expect(responses[1]["reason"] as? String == "staleRun")
       withExtendedLifetime(mailbox) {}
+    }
+
+    @Test func consecutiveImportStartsAcknowledgeOnlyTheAdmittedRequest() async throws {
+      let parent = TestScratch.directory("control-duplicate-import")
+      try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+      let fixture = try ControlFixture.prepare(runDirectory: nil, temporaryDirectory: parent)
+      let core = AppCore(composition: try .fixture(fixture, surface: .library))
+      try await withCleanup {
+        try await fixture.start(core)
+        let actions = ControlActions(core: core)
+        #expect(actions.perform(.startImport) == .accepted)
+        #expect(actions.perform(.startImport) == .refused(.unavailable))
+      } cleanup: {
+        let importTask = core.exportManager.importCoordinator.importTask
+        core.exportManager.cancelImport()
+        if let importTask { _ = await finished(importTask) }
+        core.autoSyncManager.setEnabled(false)
+        core.exportRecordStore.drainSynchronously()
+        core.collectionExportRecordStore.drainSynchronously()
+        try? FileManager.default.removeItem(at: parent)
+      }
     }
 
     @Test func compositionRefusesStateDirectoryOutsideRun() throws {

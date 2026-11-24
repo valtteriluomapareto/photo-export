@@ -60,6 +60,31 @@ struct PhotoExportApp: App {
     _destinationSafetyMonitor = StateObject(wrappedValue: core.destinationSafetyMonitor)
   }
 
+  private var menuBar: some Scene {
+    #if DEBUG
+      if control != nil {
+        return MenuBarExtra(isInserted: .constant(false)) {
+          menuBarContent
+        } label: {
+          menuBarLabel
+        }
+      }
+    #endif
+    return MenuBarExtra {
+      menuBarContent
+    } label: {
+      menuBarLabel
+    }
+  }
+
+  private var menuBarContent: some View {
+    AutoSyncMenuBarContent().photoExportEnvironment(core)
+  }
+
+  private var menuBarLabel: some View {
+    AutoSyncMenuBarLabel(state: autoSyncManager.state)
+  }
+
   var body: some Scene {
     // Empty title hides the inline "Photo Export" text from the unified
     // toolbar so the toolbar reads as one row of controls. macOS-level
@@ -141,12 +166,7 @@ struct PhotoExportApp: App {
     .windowStyle(.hiddenTitleBar)
     .restorationBehavior(restoration)
 
-    MenuBarExtra {
-      AutoSyncMenuBarContent()
-        .photoExportEnvironment(core)
-    } label: {
-      AutoSyncMenuBarLabel(state: autoSyncManager.state)
-    }
+    menuBar
 
     Settings {
       SettingsRootView()

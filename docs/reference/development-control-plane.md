@@ -31,8 +31,8 @@ ls "$run/Destination/2025/06"
 ```
 
 The first export writes `Harbor.png` and `Pines.png`. The second reads the same history
-and queues zero jobs. Stop terminates the matching fixture process and leaves its run
-directory available for inspection. `state RUN [PATH]` also reads a stopped run or
+and queues zero jobs. Stop signals the matching fixture process and waits for it to exit
+(up to 10 seconds by default). The run directory and app log remain available for inspection. `state RUN [PATH]` also reads a stopped run or
 offscreen snapshot. `wait RUN PATH=JSON ...` watches the directory and process until all
 predicates match. Quote strings as JSON, for example `'destination.status="ready"'`.
 Timeouts report the observed values of unmet predicates.
@@ -74,7 +74,8 @@ original JSON with `--seq N` to recover its response without replaying it.
 The atomically replaced `state.json` carries the run ID, revision, process/window ID,
 issued and settled sequence, and redacted destination, export, import, Auto Export,
 record and prompt state. `settledSeq` means the action has returned. Wait on `idle` and
-the operation's result fields for asynchronous completion. A scheduled Auto Export can
+the operation's result fields for asynchronous completion. After cancellation, `idle`
+waits for work already underway and its history writes to settle. A scheduled Auto Export can
 remain idle until `clock.advance` runs the due timer.
 
 ## Offscreen captures
@@ -97,6 +98,6 @@ Direct Debug launch supports `-PEFixture v1`, `-PESnapshot <filename.png>`, `-PE
 `-PEDark`, and `-PESize WxH` from 1000×700 to 4096×4096 logical points. Snapshot
 output is inside the run directory. `-PERunDirectory` accepts an absolute path to a
 fresh, user-owned `photo-export-control-*` directory with mode 0700 directly inside
-the app's temporary directory. Release builds refuse `-PE*` flags at entry. CI checks
+the app's temporary directory. Release builds refuse these control flags at entry. CI checks
 the control markers against Debug and checks their exclusion from both distribution
 builds.

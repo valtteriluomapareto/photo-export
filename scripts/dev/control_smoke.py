@@ -3,9 +3,11 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -82,23 +84,34 @@ def verify(driver, app, evidence):
 
 
 def run_driver(transcript, *args):
+    launching = args[0] == "launch"
     command = [sys.executable, "-B", str(DRIVER), *args]
+    if launching:
+        command.append("--share-process-group")
     print(shlex.join(command), file=transcript, flush=True)
     # Launch may spend 15 seconds in each of its two waits, then clean up its child.
-    try:
-        result = subprocess.run(command, capture_output=True, text=True,
-                                timeout=40 if args[0] == "launch" else 20)
-    except subprocess.TimeoutExpired as error:
-        for output in (error.stdout, error.stderr):
-            if output:
-                transcript.write(output.decode(errors="replace"))
-        raise
-    transcript.write(result.stdout)
-    transcript.write(result.stderr)
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, start_new_session=launching) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=40 if launching else 20)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            try:
+                if launching:
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+            transcript.write(stdout)
+            transcript.write(stderr)
+            raise
+    transcript.write(stdout)
+    transcript.write(stderr)
     transcript.flush()
-    if result.returncode:
-        raise SmokeError(result.stderr.strip() or f"{args[0]} exited {result.returncode}")
-    return result.stdout
+    if process.returncode:
+        raise SmokeError(stderr.strip() or f"{args[0]} exited {process.returncode}")
+    return stdout
 
 
 def main():

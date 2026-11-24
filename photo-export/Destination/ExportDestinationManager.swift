@@ -98,8 +98,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private var volumeObservers: [NSObjectProtocol] = []
   private let volumeNotificationCenter: NotificationCenter
-  // App-owned destinations can access a private folder without obtaining a security scope.
-  private let localAccess: ((URL) -> Bool)?
+  #if DEBUG
+    private var fixtureAccess: ((URL) -> Bool)?
+
+    func restrictFixtureAccess(to permits: @escaping (URL) -> Bool) {
+      fixtureAccess = permits
+    }
+  #endif
   private let validationScopeAcquirer: ((URL) -> Bool)?
   private let validationScopeReleaser: ((URL) -> Void)?
 
@@ -299,7 +304,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     volumeNotificationCenter: NotificationCenter? = nil,
     validationScopeAcquirer: ((URL) -> Bool)? = nil,
     validationScopeReleaser: ((URL) -> Void)? = nil,
-    localAccess: ((URL) -> Bool)? = nil,
     fileSystem: any FileSystemService = FileIOService(),
     validationProbe: any DestinationValidationProbing = ProductionDestinationValidationProbe()
   ) {
@@ -308,7 +312,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       "Validation scope acquisition and release must be injected together")
     self.volumeNotificationCenter =
       volumeNotificationCenter ?? NSWorkspace.shared.notificationCenter
-    self.localAccess = localAccess
     self.validationScopeAcquirer = validationScopeAcquirer
     self.validationScopeReleaser = validationScopeReleaser
     self.fileSystem = fileSystem
@@ -498,12 +501,17 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// The caller MUST pass the returned URL to `endScopedAccess(for:)` when done.
   func beginScopedAccess() -> URL? {
     guard let url = selectedFolderURL else { return nil }
-    if let localAccess { return localAccess(url) ? url : nil }
+    #if DEBUG
+      if let fixtureAccess { return fixtureAccess(url) ? url : nil }
+    #endif
     return url.startAccessingSecurityScopedResource() ? url : nil
   }
 
   func endScopedAccess(for url: URL) {
-    if localAccess == nil { url.stopAccessingSecurityScopedResource() }
+    #if DEBUG
+      if fixtureAccess != nil { return }
+    #endif
+    url.stopAccessingSecurityScopedResource()
   }
 
   /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.
@@ -544,7 +552,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     _ url: URL, decision: FolderSelectionDecision,
     onValidated: @escaping @MainActor () -> Void = {}
   ) -> Bool {
-    guard localAccess?(url) != false, saveSelection(url, decision: decision) else { return false }
+    #if DEBUG
+      if fixtureAccess?(url) == false { return false }
+    #endif
+    guard saveSelection(url, decision: decision) else { return false }
     validate(url: url, onValidated: onValidated)
     return true
   }

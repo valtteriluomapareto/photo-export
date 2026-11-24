@@ -17,13 +17,12 @@
         guard manager.isPaused else { return .noop }
         manager.resume()
       case .cancel:
-        guard !manager.controlExportIdle else { return .noop }
+        guard manager.controlExportActive else { return .noop }
         ExportCommands.cancel(manager, autoSync: core.autoSyncManager)
       case .startImport:
         guard core.exportDestinationManager.canImportNow, manager.controlExportIdle
         else { return .refused(.unavailable) }
-        manager.startImport()
-        guard manager.isImporting else { return .refused(.unavailable) }
+        guard manager.startImport() == nil else { return .refused(.unavailable) }
       case .cancelImport:
         guard manager.isImporting else { return .noop }
         manager.cancelImport()
