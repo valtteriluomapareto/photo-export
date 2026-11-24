@@ -12,8 +12,11 @@ enum AutoSyncEvent: Sendable {
   /// User toggled Enable Auto Export.
   case enabledChanged(Bool)
 
-  /// Destination identity, availability, or safety state changed.
+  /// Destination identity, access, or safety state changed.
   case destinationChanged(DestinationSnapshot)
+
+  /// A queued scope encountered a destination hold before launch.
+  case runDeferred(AutoSyncReason)
 
   /// Auto Export scope checkboxes changed in Settings.
   case scopeSelectionChanged(AutoExportScopeSelection)
@@ -51,6 +54,9 @@ enum AutoSyncEvent: Sendable {
   /// The stable destination captured before `runExport` suspended. It is transient
   /// event metadata, not part of the persisted summary or run context format.
   case autoSyncRunCompleted(ExportRunSummary, destinationId: String)
+
+  /// The manager completed or paused its fan-out. A scope can publish idle earlier.
+  case fanOutFinished
 
   /// Whether Photo Export can read the Photos library, as last refreshed. Auto Export is
   /// blocked while it can't; access returning schedules a full-scope catch-up.

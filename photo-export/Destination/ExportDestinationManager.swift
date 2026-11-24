@@ -96,6 +96,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private var validationGeneration = 0
   private var validationTask: Task<Void, Never>?
   private var isValidating = false
+  private let access = CurrentValueSubject<DestinationAccess, Never>(
+    .init(identity: .unavailable, isAvailable: false, isWritable: false, isValidating: false))
+  var accessPublisher: AnyPublisher<DestinationAccess, Never> { access.eraseToAnyPublisher() }
+
   private struct ValidationPresentation {
     let available: Bool
     let writable: Bool
@@ -108,11 +112,25 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     validationTask = nil
   }
 
+  private func beginValidation() {
+    guard !isValidating else { return }
+    isValidating = true
+    var pending = access.value
+    pending.isValidating = true
+    access.send(pending)
+  }
+
   private func publishValidation(_ next: ValidationPresentation) {
+    let generation = validationGeneration
     isAvailable = next.available
     isWritable = next.writable
     status = next.status
     if identity != next.identity { identity = next.identity }
+    guard validationGeneration == generation else { return }
+    access.send(
+      .init(
+        identity: next.identity, isAvailable: next.available, isWritable: next.writable,
+        isValidating: false))
   }
 
   /// The **persisted** stable id, kept privately across launches for reuse. Distinct from the
@@ -567,7 +585,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
     invalidateValidation()
     let generation = validationGeneration
-    isValidating = true
+    beginValidation()
     guard generation == validationGeneration else { return false }
     selectedFolderURL = url
     guard generation == validationGeneration else { return false }
@@ -595,15 +613,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     if let stashed = stashedLegacyDestinationId { return stashed }
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return nil }
     return Self.legacyDestinationId(from: data)
-  }
-
-  /// Publishes the unavailable identity (no active stable id, no fingerprint). The *persisted*
-  /// stable id is intentionally left untouched for reuse when the destination returns; only the
-  /// published active id is cleared. Publishing the persisted id while unavailable would make
-  /// the lifecycle coordinator see an unchanged id on unplug and skip its
-  /// destination-unavailable handling.
-  private func publishUnavailableIdentity() {
-    if identity != .unavailable { identity = .unavailable }
   }
 
   /// Legacy low-confidence id for the currently selected folder. Returns the
@@ -691,11 +700,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   private func restoreBookmarkIfAvailable() {
-    guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
-      status = .noSelection
-      publishUnavailableIdentity()
-      return
-    }
+    guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return }
     // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
     // The coordinator relies on this to find existing `ExportRecords/<oldId>/` directories
     // written by previous app versions; refreshing the bookmark would otherwise change the
@@ -740,8 +745,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
   }
 
-  func revalidate() {
-    guard let url = selectedFolderURL else { return }
+  func revalidate(whenReadOnly: Bool = false) {
+    guard !whenReadOnly || (status == .readOnly && !isValidating),
+      let url = selectedFolderURL
+    else { return }
     validate(url: url)
   }
 
@@ -756,7 +763,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private func validate(url: URL, onValidated: @escaping @MainActor () -> Void = {}) {
     invalidateValidation()
     let generation = validationGeneration
-    isValidating = true
+    beginValidation()
+    guard generation == validationGeneration, selectedFolderURL == url else { return }
     let started = validationScopeAcquirer?(url) ?? url.startAccessingSecurityScopedResource()
     guard generation == validationGeneration, selectedFolderURL == url else {
       if started { releaseValidationScope(url) }
@@ -821,26 +829,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private func observeVolumeChanges() {
     let center = volumeNotificationCenter
-    let mountObs = center.addObserver(
-      forName: NSWorkspace.didMountNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] _ in
-      guard let self else { return }
-      Task { @MainActor in
-        self.revalidate()
+    volumeObservers = [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification].map {
+      center.addObserver(forName: $0, object: nil, queue: .main) { [weak self] _ in
+        Task { @MainActor in self?.revalidate() }
       }
     }
-    let unmountObs = center.addObserver(
-      forName: NSWorkspace.didUnmountNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] _ in
-      guard let self else { return }
-      Task { @MainActor in
-        self.revalidate()
-      }
-    }
-    volumeObservers = [mountObs, unmountObs]
   }
 }

@@ -1,25 +1,20 @@
 import Combine
 import Foundation
 
-/// Production `AutoSyncDestinationProviding` wiring. Combines four signals
+/// Production `AutoSyncDestinationProviding` wiring. Combines three signals
 /// AutoSync needs into a single `DestinationSnapshot` stream:
 ///
-/// 1. `identity` from `ExportDestinationManager` — the stable logical id plus the
-///    advisory fingerprint, published as one atomic value. A `nil` `stableId` means
-///    "no destination selected" or the drive is currently unavailable.
-/// 2. `isAvailable` from `ExportDestinationManager` — the folder can be reached. It says
-///    nothing about whether the folder is writable.
-/// 3. `migrationConflict` from `AppLifecycleCoordinator`: non-nil → safety
+/// 1. Coherent destination access from `ExportDestinationManager`, published after
+///    the identity and its record stores have adopted the validation result.
+/// 2. `migrationConflict` from `AppLifecycleCoordinator`: non-nil → safety
 ///    becomes `.unsafeMigrationConflict`.
-/// 4. `verdict` from `DestinationSafetyMonitor`: a verdict for another stable id means this
+/// 3. `verdict` from `DestinationSafetyMonitor`: a verdict for another stable id means this
 ///    destination has not been checked yet → `.checking`; otherwise needing confirmation →
 ///    `.unsafeNeedsConfirmation`. Migration conflict takes precedence — both being true is
 ///    rare (a fresh destination with legacy records is itself a rare collision) but if it
 ///    ever happens the migration conflict UX leads.
 ///
-/// `Publishers.CombineLatest4` waits for all four sources to publish before
-/// emitting; each is an `@Published` that fires an initial value, so the first
-/// emission is synchronous during subscription once all four initial values arrive.
+/// Each source replays its initial value, so the first snapshot is synchronous.
 @MainActor
 final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
   private let destinationManager: ExportDestinationManager
@@ -50,13 +45,13 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
     lifecycleCoordinator: AppLifecycleCoordinator,
     safetyMonitor: DestinationSafetyMonitor
   ) -> AnyPublisher<DestinationSnapshot, Never> {
-    Publishers.CombineLatest4(
-      destinationManager.identityPublisher,
-      destinationManager.isAvailablePublisher,
+    Publishers.CombineLatest3(
+      destinationManager.accessPublisher,
       lifecycleCoordinator.migrationConflictPublisher,
       safetyMonitor.verdictPublisher
     )
-    .map { identity, isAvailable, conflict, verdict in
+    .map { access, conflict, verdict in
+      let identity = access.identity
       let safety: DestinationSafetyState
       if conflict != nil {
         safety = .unsafeMigrationConflict
@@ -70,7 +65,8 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
       // Key on the stable id; carry the fingerprint for the safety gate's confidence read.
       return DestinationSnapshot(
         stableId: identity.stableId, fingerprint: identity.fingerprint,
-        isAvailable: isAvailable, safety: safety)
+        isAvailable: access.isAvailable, isWritable: access.isWritable,
+        isValidating: access.isValidating, safety: safety)
     }
     .removeDuplicates()
     .eraseToAnyPublisher()

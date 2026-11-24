@@ -33,13 +33,15 @@ Three places surface Auto Export status, all reading the same state:
 
 You don't kick Auto Export manually for normal usage. A run starts on its own when:
 
-- The app launches and the destination is reachable.
+- The app launches and the destination is ready for export.
 - The destination drive becomes available again after being unplugged.
 - Photos reports new or edited photos in your library.
 - You change which categories are selected, or toggle **Include originals**.
 - A **periodic safety-net check** (every ~15 minutes) and an **on-app-active check** (whenever you switch back to Photo Export) catch newly-synced iCloud photos that macOS didn't otherwise notify Photo Export about. This matters most in long-running sessions where Photos.app isn't open — iCloud's change notifications to third-party apps can lag by tens of minutes in that case.
 
 Photo Export waits a short while after each trigger before actually starting — so it doesn't fire mid-import or mid-edit. The wait is about 30 seconds for Photos library changes (the most common trigger), 10 seconds for app launch, 2–3 seconds for the smaller triggers, and up to 2 minutes for the rare "Photos catch-up" recovery path.
+
+If the export folder is read-only, Auto Export keeps its pending work and **Export Now** requests. Restore write access and return to Photo Export to recheck the folder and resume. A reachable read-only folder can still be used to import an existing backup.
 
 If you want to run a backup right now without waiting:
 

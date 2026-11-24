@@ -28,7 +28,7 @@ From [Trigger and Debounce Rules](../project/archive/auto-sync-background-sync-p
 
 - app launch: 10 seconds after the app coordinator finishes initial destination/store configuration,
 - destination selected: 3 seconds after successful validation and safety check,
-- destination became available: 3 seconds after false-to-true `canExportNow`,
+- destination ready: 3 seconds when the same destination returns or becomes writable without a pending trigger,
 - auto-export scope selection changed: 2 seconds,
 - export-version selection changed: 2 seconds,
 - Photos persistent changes with inserted/updated asset identifiers: 30 seconds after the last relevant change,
@@ -139,6 +139,13 @@ runs as itself once the check passes.
 [DestinationSnapshotAdapter](../../photo-export/Destination/DestinationSnapshotAdapter.swift)
 gives migration conflicts precedence over the check and confirmation. Neither confirmation nor a fingerprint
 is a substitute for the [stable destination identity](architecture-conventions.md#destination-identity).
+
+A reachable read-only destination keeps its stable ID and waits in
+`.waiting(.destinationReadOnly)` once any active run ends. Accumulated Photos changes and
+an explicit Export Now request survive the wait.
+Returning to the app revalidates a known read-only folder through the existing background
+probe. Auto Export consumes the accepted identity, reachability and writability together
+after destination publication, and checks readiness again before each scope starts.
 
 ## Persistence and token authority
 
