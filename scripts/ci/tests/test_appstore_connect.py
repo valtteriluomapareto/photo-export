@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import http.client
 import subprocess
 import urllib.error
 import tempfile
@@ -349,11 +350,14 @@ class ClientTests(unittest.TestCase):
         return result, tokens, sleeps
 
     def test_server_errors_and_dropped_connections_are_retried_with_fresh_tokens(self):
-        outcomes = [http_error(503), ConnectionResetError(), TimeoutError(), {"data": []}]
-        result, tokens, sleeps = self.send("GET", outcomes)
-        self.assertEqual(result, {"data": []})
-        self.assertEqual(tokens, [f"Bearer token-{n}" for n in range(4)])
-        self.assertEqual(sleeps, [2, 4, 8])
+        failures = [ConnectionResetError(), TimeoutError(), http.client.IncompleteRead(b"")]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                result, tokens, sleeps = self.send(
+                    "GET", [http_error(503), failure, http_error(502), {"data": []}])
+                self.assertEqual(result, {"data": []})
+                self.assertEqual(tokens, [f"Bearer token-{n}" for n in range(4)])
+                self.assertEqual(sleeps, [2, 4, 8])
 
     def test_client_errors_are_not_retried(self):
         with self.assertRaisesRegex(connect.ConnectError, "404: Problem: code 404"):
@@ -376,6 +380,21 @@ class CommandLineTests(unittest.TestCase):
             status = connect.main(["prepare", "--version", "2.0.0", "--build", "1.1"])
         self.assertEqual(status, 1)
         self.assertIn("APP_STORE_CONNECT_API_KEY_BASE64", stderr.getvalue())
+
+    def test_release_notes_default_to_the_version_tag(self):
+        key = base64.b64encode(b"key").decode()
+        credentials = {"APP_STORE_APP_APPLE_ID": "1", "APP_STORE_CONNECT_API_KEY_BASE64": key,
+                       "APP_STORE_CONNECT_API_KEY_ID": "id", "APP_STORE_CONNECT_API_ISSUER_ID": "i"}
+        for extra, expected in (([], "refs/tags/v2.0.0"), (["--catalog-ref", "main"], "main")):
+            with self.subTest(expected=expected), \
+                    mock.patch.dict(os.environ, credentials, clear=True), \
+                    mock.patch.object(connect, "read_catalog", return_value="") as read, \
+                    mock.patch.object(connect, "prepare") as prepare, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                status = connect.main(["prepare", "--version", "v2.0.0", "--build", "1.1", *extra])
+            self.assertEqual(status, 0)
+            read.assert_called_once_with(expected)
+            self.assertEqual(prepare.call_args.args[1:4], ("1", "2.0.0", "1.1"))
 
     def test_tags_are_accepted_and_prereleases_refused(self):
         self.assertEqual(connect.store_version("v1.6.6"), "1.6.6")

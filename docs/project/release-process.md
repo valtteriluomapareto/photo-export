@@ -100,7 +100,7 @@ The same `v*` tag also triggers `release-app-store.yml`, which archives, signs, 
 
 It stops before writing anything if the catalog entry can't be read or is too long, or if that version is already waiting for or past review, since its build can no longer change. Then review the version in App Store Connect and submit it for App Review manually.
 
-An upload from a manual `release-app-store.yml` run with `skip_upload: false` is not prepared automatically. Run **Actions > App Store Connect (prepare version)** from `main` with the version and the build number that run printed; the release notes still come from the `v<version>` tag. Re-run a failed job after a temporary failure; after merging a fix to the script, use the dispatch instead, since a re-run keeps the code it first ran with.
+An upload from a manual `release-app-store.yml` run with `skip_upload: false` is not prepared automatically. Run **Actions > App Store Connect (prepare version)** from `main` with the version and the build number that run printed. The release notes come from the `v<version>` tag; for an upload from a branch, set `catalog_ref` to that branch. Re-run a failed job after a temporary failure; after merging a fix to the script, use the dispatch instead, since a re-run keeps the code it first ran with.
 
 If you ever need to archive locally (CI down, secret rotation, etc.):
 

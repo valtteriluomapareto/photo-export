@@ -10,7 +10,7 @@ Subcommands:
                       manual.
 
 `prepare` takes --version (a tag such as v1.2.3, or 1.2.3), --build (CFBundleVersion) and
-optionally --catalog-ref, a git ref whose catalog to use (for example the release tag), and
+optionally --catalog-ref, the git ref whose catalog to use (default: the v<version> tag), and
 reads these environment variables:
   APP_STORE_APP_APPLE_ID               numeric Apple ID of the app record
   APP_STORE_CONNECT_API_KEY_BASE64     base64 of the AuthKey_<id>.p8 file
@@ -337,8 +337,8 @@ def run_prepare(arguments, temporary):
     client = Client(key_path, environment("APP_STORE_CONNECT_API_KEY_ID"),
                     environment("APP_STORE_CONNECT_API_ISSUER_ID"))
     print(f"App {app_id}, version {arguments.version}, build {arguments.build}", flush=True)
-    prepare(client, app_id, arguments.version, arguments.build,
-            read_catalog(arguments.catalog_ref))
+    catalog_ref = arguments.catalog_ref or f"refs/tags/v{arguments.version}"
+    prepare(client, app_id, arguments.version, arguments.build, read_catalog(catalog_ref))
 
 
 def main(argv=None):
