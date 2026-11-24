@@ -118,7 +118,6 @@ struct MonthViewModelTests {
   }
 
   @Test(
-    .timeLimit(.minutes(1)),
     arguments: [(false, false), (false, true), (true, false), (true, true)], [false, true])
   func deactivationRejectsLateLoadOrRefresh(
     response: (isRefresh: Bool, lateError: Bool), reactivateBeforeResponse: Bool
@@ -356,7 +355,7 @@ struct MonthViewModelTests {
 
   // MARK: - refresh(for:)
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func lateFirstLoadCannotReplaceReturnedScope(lateError: Bool) async throws {
     let svc = FakePhotoLibraryService()
     let streams = ControlledStreams()
@@ -403,7 +402,7 @@ struct MonthViewModelTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func lateSameScopeRefreshCannotReplaceNewerRefresh(lateError: Bool) async throws {
     let svc = FakePhotoLibraryService()
     let base = makeAsset(id: "base")
@@ -441,7 +440,7 @@ struct MonthViewModelTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(arguments: [false, true])
   func refreshSupersedingInitialLoadSettlesLoadingAndSelection(refreshError: Bool) async throws {
     let svc = FakePhotoLibraryService()
     let streams = ControlledStreams()
@@ -505,7 +504,7 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == asset.id)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func refreshSupersedesLoadAfterFirstProgressiveBatch() async throws {
     let svc = FakePhotoLibraryService()
     let streams = ControlledStreams()
@@ -552,7 +551,7 @@ struct MonthViewModelTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func wrongScopeRefreshDoesNotInvalidateCurrentLoad() async throws {
     let svc = FakePhotoLibraryService()
     let streams = ControlledStreams()

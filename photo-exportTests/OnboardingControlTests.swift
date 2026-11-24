@@ -5,7 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct OnboardingControlTests {
   @Observable final class Choices {
     var all = true

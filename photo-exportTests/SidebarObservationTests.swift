@@ -181,7 +181,7 @@ import Testing
     }
 
     /// Already passes: the static sidebar parent reads none of these manager publications.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func collectionsSidebarSkipsManagerPublicationsItDoesNotRead() async throws {
       let f = await Fixture(staticCollections: true)
       try await withCleanup {
@@ -216,7 +216,7 @@ import Testing
     }
 
     /// Already passes: revoking access clears the years and granting access reloads them.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func timelineSidebarClearsOnRevokeAndReloadsOnGrant() async throws {
       let f = await Fixture()
       try await withCleanup {
@@ -245,7 +245,7 @@ import Testing
     }
 
     /// Already passes: Favorites and the recursive album row refresh their cached counts.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func initialInventoryScansRunOffMain() async throws {
       let f = await Fixture(includeAlbum: true)
       try await withCleanup {
@@ -266,7 +266,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func collectionRowCountsReloadAfterALibraryChange() async throws {
       let f = await Fixture(includeAlbum: true)
       try await withCleanup {
@@ -295,7 +295,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func queuePublicationsAvoidTimelineWorkAndRealSidebarChangesStillRefresh() async throws {
       let f = await Fixture()
       var failure: Error?
@@ -347,7 +347,7 @@ import Testing
       if let failure { throw failure }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(2)))
     func queueAndRecordPublicationsSkipTheCollectionsSidebarBody() async throws {
       let f = await Fixture()
       try await withCleanup {

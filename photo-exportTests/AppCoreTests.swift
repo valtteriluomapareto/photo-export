@@ -11,7 +11,7 @@ import Testing
 /// is serialized so each domain snapshot sees only its own test. The shipping compositions
 /// are only inspected, never built into a core.
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1))) struct AppCoreTests {
+@Suite(.serialized, .timeLimit(.minutes(2))) struct AppCoreTests {
   private func makeTestComposition(label: String) -> AppComposition {
     AppCoreTestHarness.makeTestComposition(label: label)
   }

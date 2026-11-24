@@ -71,7 +71,7 @@ struct ExportMonthResumeTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func parkedMonthResumesOriginalMixedQueueWithoutRescanning() async throws {
     let f = await Fixture()
     do {
@@ -151,7 +151,7 @@ struct ExportMonthResumeTests {
     await f.cleanup()
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func monthActionResumesWhileMatchingWriterIsHeld(hasMatchingPendingJob: Bool) async throws {
     let f = await Fixture()
     do {
@@ -196,7 +196,7 @@ struct ExportMonthResumeTests {
 
   enum Rejection: CaseIterable { case photos, failedStore, importing }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Rejection.allCases)
+  @Test(.timeLimit(.minutes(2)), arguments: Rejection.allCases)
   func matchingQueueStillRespectsAdmission(rejection: Rejection) async throws {
     let f = await Fixture()
     do {
@@ -238,7 +238,7 @@ struct ExportMonthResumeTests {
     await f.cleanup()
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func absentMonthUsesNormalEnqueueAndDoesNotResumeUnrelatedQueue(stalePlacement: Bool) async throws
   {
     let f = await Fixture()

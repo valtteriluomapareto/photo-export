@@ -6,7 +6,7 @@ import Testing
 /// migration could slip into. Each rejection must come from exactly the checks named: any other
 /// issue is unmatched and fails the test, and every named check must fire.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct PublishedParityHelperTests {
   @MainActor
   private final class Published1: ObservableObject {

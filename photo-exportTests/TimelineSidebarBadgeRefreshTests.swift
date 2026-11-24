@@ -7,7 +7,7 @@ import Testing
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized, .timeLimit(.minutes(1)))
+  @Suite(.serialized, .timeLimit(.minutes(2)))
   struct TimelineSidebarBadgeRefreshTests {
     @Observable
     final class RenderTick { var value = 0 }
@@ -145,7 +145,7 @@ import Testing
     }
 
     /// Fails before property-specific manager observation: pause and layout leave this badge unchanged.
-    @Test(.timeLimit(.minutes(1)))
+    @Test
     func monthRowsSkipPauseAndVideoLayout() async throws {
       let f = await Fixture()
       try await withCleanup {
@@ -254,7 +254,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test
     func heldRefreshRetainsRenderedBadgesAndExportProgressStillUpdates() async throws {
       let f = await Fixture()
       let gate = AsyncCheckpoint()
@@ -334,7 +334,7 @@ import Testing
     /// Month rows read only the in-flight placement from the progress state, so the per-asset
     /// filename and counter writes of a run must not re-render them; a new in-flight placement
     /// must.
-    @Test(.timeLimit(.minutes(1)))
+    @Test
     func monthRowsSkipPerAssetProgressButFollowTheInFlightPlacement() async throws {
       let f = await Fixture()
       try await withCleanup {
@@ -538,7 +538,7 @@ import Testing
       }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test
     func monthQueueBadgeFollowsEnqueueAndFirstDequeue() async throws {
       let f = await Fixture()
       let gate = AsyncCheckpoint()

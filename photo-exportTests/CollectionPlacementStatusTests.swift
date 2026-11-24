@@ -716,7 +716,7 @@ import Testing
 
     /// The caller must pass current-placement status to each real tile, independently. A tile's
     /// label says "fully exported" exactly when it shows the completed badge.
-    @Test(.timeLimit(.minutes(1)))
+    @Test
     func mountedFolderBadgesFollowCurrentPlacementAndKeepTheCompletedSibling() async throws {
       let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }

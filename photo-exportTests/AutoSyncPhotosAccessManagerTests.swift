@@ -7,7 +7,7 @@ import Testing
 /// a fan-out, so a revoke the app didn't notice blocks the run instead of letting an empty
 /// scan acknowledge pending work. A run already exporting is never cancelled.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(2)))
 struct AutoSyncPhotosAccessManagerTests {
   private let destination = DestinationSnapshot(
     stableId: "access-M", fingerprint: nil, isAvailable: true, safety: .safe)

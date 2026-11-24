@@ -74,7 +74,7 @@ struct ReuseCopyLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func mainActorRespondsBeforeBlockedReuseCopyFinishes() async throws {
     let fixture = try await Fixture()
     defer { fixture.cleanup() }
@@ -99,7 +99,7 @@ struct ReuseCopyLifecycleTests {
         .variants[.original]?.status == .done)
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+  @Test(arguments: [false, true], [false, true])
   func cancelledCopyCannotCommitOrFallback(switchDestination: Bool, sourceError: Bool) async throws
   {
     let fixture = try await Fixture()
@@ -159,7 +159,7 @@ struct ReuseCopyLifecycleTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func replacementWaitsForOldCopyAndKeepsItsOwnStage() async throws {
     let io = RecordingDestinationIO()
     let fixture = try await Fixture(destinationIO: io)

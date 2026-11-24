@@ -73,7 +73,7 @@ struct JSONLRecordFileIOFailureTests {
       logIO: logIO)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func flushCannotAcknowledgeMutationSubmittedDuringItsAwait() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

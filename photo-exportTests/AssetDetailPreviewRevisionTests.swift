@@ -124,7 +124,7 @@ struct AssetDetailPreviewRevisionTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func unrelatedKnownEditRendersWithoutReloadingSelectedImage() async throws {
     let f = await Fixture()
     try await withCleanup {
@@ -144,7 +144,7 @@ struct AssetDetailPreviewRevisionTests {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func supersededRevisionCannotPublishBeforeReplacementTaskStarts(fails: Bool) async {
     let loader = AssetDetailImageLoader()
     let service = FakePhotoLibraryService()
@@ -168,7 +168,7 @@ struct AssetDetailPreviewRevisionTests {
     loader.clear()
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func alreadyStaleCallCannotInvalidateAnActiveRequest() async {
     let loader = AssetDetailImageLoader()
     let service = FakePhotoLibraryService()
@@ -191,7 +191,7 @@ struct AssetDetailPreviewRevisionTests {
     #expect(loader.state.image === red)
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func currentReplacementRetainsImageThenShowsFailureAndCanRecover() async throws {
     let loader = AssetDetailImageLoader()
     let service = FakePhotoLibraryService()

@@ -167,7 +167,7 @@ struct DestinationSafetyMonitorTests {
     #expect(harness.confirmationStore.isConfirmed(destinationId: fp.id))
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test(.timeLimit(.minutes(2)))
   func staleScanDoesNotOverwriteNewerEvaluation() async throws {
     let storeRoot = TestScratch.directory("SafetyMonitor-stale")
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)

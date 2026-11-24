@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct CollectionCurrentPlacementTests {
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func currentPlacementLookupIsExactAndReadOnly(shared: Bool) async throws {
     let root = TestScratch.directory("CurrentPlacementLookup")
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)

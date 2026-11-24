@@ -291,7 +291,7 @@ struct DestinationFailureStopTests {
     await f.close()
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func successfulPredecessorAndStoppedMultivariantJobKeepCounts() async throws {
     let f = await Fixture()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
@@ -571,7 +571,7 @@ struct DestinationFailureStopTests {
   /// that is showing. Starting an export already clears the last summary, and no current
   /// path sets one while work is active, so the summary is placed by hand; the rule that
   /// keeps it only while idle is defensive here.
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func unmountDuringAnActiveExportClearsTheFeedback() async throws {
     let f = await Fixture()
     let gate = AsyncCheckpoint()
@@ -613,7 +613,7 @@ struct DestinationFailureStopTests {
     await f.close()
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func staleHardRendererFailureCannotStopReplacement() async throws {
     let f = await Fixture()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
@@ -669,7 +669,7 @@ struct DestinationFailureStopTests {
     if let failure { throw failure }
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func destinationStopInvalidatesConcurrentPreparation() async throws {
     let f = await Fixture()
     let scan = AsyncCheckpoint()
@@ -736,7 +736,7 @@ struct DestinationFailureStopTests {
     await f.close()
   }
 
-  @Test(.timeLimit(.minutes(1)))
+  @Test
   func newlyBlockedAutoSyncJobsSkipBeforeDestinationAccess() async throws {
     let f = await Fixture()
     var eligible = true

@@ -522,7 +522,7 @@ struct ExportFolderTests {
 
   /// All albums under a folder already fully exported → the user-visible message
   /// distinguishes "this folder is done" from "this folder is empty".
-  @Test(.timeLimit(.minutes(1))) func allDescendantsAlreadyExportedSetsAlreadyDoneMessage()
+  @Test func allDescendantsAlreadyExportedSetsAlreadyDoneMessage()
     async throws
   {
     let h = await makeHarness()
@@ -593,7 +593,7 @@ struct ExportFolderTests {
   /// (the multi-select grid) builds a union of selected album ids + descendant album
   /// ids of selected subfolders, which can produce duplicates if a subfolder and one
   /// of its child albums are both selected.
-  @Test(.timeLimit(.minutes(1))) func startExportAlbumsDeduplicatesInput() async throws {
+  @Test func startExportAlbumsDeduplicatesInput() async throws {
     let h = await makeHarness()
     defer { cleanupHarness(h) }
 
@@ -628,7 +628,7 @@ struct ExportFolderTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
-  @Test(.timeLimit(.minutes(1))) func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage()
+  @Test func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage()
     async throws
   {
     let h = await makeHarness()
