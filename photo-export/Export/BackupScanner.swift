@@ -546,7 +546,7 @@ struct BackupScanner {
         continue
       }
 
-      let matchOutcome = matchSingleFile(
+      let matchOutcome = try await matchSingleFile(
         file,
         fingerprints: fingerprints,
         assetById: assetById,
@@ -599,7 +599,7 @@ struct BackupScanner {
     assetById: [String: AssetDescriptor],
     stemsWithOrigSibling: Set<String>,
     filenamesWithSubfolderSplit: Set<String> = []
-  ) -> SingleMatchOutcome {
+  ) async throws -> SingleMatchOutcome {
     // Step 1: `_orig` companion. Filename ends with `_orig` (with optional ` (N)`).
     if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
       let origCandidates = fingerprints.filter { fp in
@@ -613,7 +613,7 @@ struct BackupScanner {
           || stems.contains(parsed.canonicalOriginalStem.lowercased())
       }
       if !origCandidates.isEmpty {
-        return narrow(
+        return try await narrow(
           file: file, candidates: origCandidates,
           assetById: assetById, variant: .original)
       }
@@ -648,7 +648,7 @@ struct BackupScanner {
       {
         let editedFromSplit = originalExactCandidates.filter { $0.hasAdjustments }
         if !editedFromSplit.isEmpty {
-          return narrow(
+          return try await narrow(
             file: file, candidates: editedFromSplit,
             assetById: assetById, variant: .edited)
         }
@@ -663,12 +663,12 @@ struct BackupScanner {
           return editedExts.contains(file.fileExtension)
         }
         if !editedFromPair.isEmpty {
-          return narrow(
+          return try await narrow(
             file: file, candidates: editedFromPair,
             assetById: assetById, variant: .edited)
         }
       }
-      return narrow(
+      return try await narrow(
         file: file, candidates: originalExactCandidates,
         assetById: assetById, variant: .original)
     }
@@ -689,12 +689,12 @@ struct BackupScanner {
             return editedExts.contains(file.fileExtension)
           }
           if !editedFromPair.isEmpty {
-            return narrow(
+            return try await narrow(
               file: file, candidates: editedFromPair,
               assetById: assetById, variant: .edited)
           }
         }
-        return narrow(
+        return try await narrow(
           file: file, candidates: baseCandidates,
           assetById: assetById, variant: .original)
       }
@@ -733,7 +733,7 @@ struct BackupScanner {
       return !originalExts.contains(file.fileExtension)
     }
     if !editedCandidates.isEmpty {
-      return narrow(
+      return try await narrow(
         file: file, candidates: editedCandidates, assetById: assetById, variant: .edited)
     }
 
@@ -757,7 +757,7 @@ struct BackupScanner {
             || stems.contains(parsed.canonicalOriginalStem.lowercased())
         }
         if !pairedOrigCandidates.isEmpty {
-          return narrow(
+          return try await narrow(
             file: file, candidates: pairedOrigCandidates,
             assetById: assetById, variant: .originalPairedVideo)
         }
@@ -770,7 +770,7 @@ struct BackupScanner {
       if !pairedCandidates.isEmpty {
         let variant: ExportVariant =
           hasOrigSibling ? .editedPairedVideo : .originalPairedVideo
-        return narrow(
+        return try await narrow(
           file: file, candidates: pairedCandidates,
           assetById: assetById, variant: variant)
       }
@@ -786,7 +786,7 @@ struct BackupScanner {
     candidates: [AssetFingerprint],
     assetById: [String: AssetDescriptor],
     variant: ExportVariant
-  ) -> SingleMatchOutcome {
+  ) async throws -> SingleMatchOutcome {
     func wrap(_ fp: AssetFingerprint) -> SingleMatchOutcome {
       if let asset = assetById[fp.localIdentifier] {
         return .matched(
@@ -801,7 +801,7 @@ struct BackupScanner {
       // Single filename candidate whose creation date does not align with the file's mod
       // date — require a stronger metadata confirmation before claiming a match, matching the
       // pre-variant behaviour around the filename-only fallback.
-      let confirmed = discriminateByFileMetadata(file: file, candidates: [only])
+      let confirmed = try await discriminateByFileMetadata(file: file, candidates: [only])
       if confirmed.count == 1 { return wrap(only) }
       return .ambiguous
     }
@@ -825,7 +825,7 @@ struct BackupScanner {
       }
     }
 
-    let discriminated = discriminateByFileMetadata(file: file, candidates: candidates)
+    let discriminated = try await discriminateByFileMetadata(file: file, candidates: candidates)
     if discriminated.count == 1 { return wrap(discriminated[0]) }
     if discriminated.count > 1 { return .ambiguous }
     return .ambiguous
@@ -938,7 +938,7 @@ struct BackupScanner {
   /// Lazy discriminator: reads file dimensions/duration ONCE and checks all candidates.
   private static func discriminateByFileMetadata(
     file: ScannedFile, candidates: [AssetFingerprint]
-  ) -> [AssetFingerprint] {
+  ) async throws -> [AssetFingerprint] {
     // Read file metadata once
     var fileDimensions: (width: Int, height: Int)?
     var fileDuration: TimeInterval?
@@ -947,7 +947,7 @@ struct BackupScanner {
     if mediaType == .image {
       fileDimensions = imagePixelDimensions(at: file.url)
     } else if mediaType == .video {
-      fileDuration = videoDuration(at: file.url)
+      fileDuration = try await videoDuration(at: file.url)
     }
 
     return candidates.filter { fp in
@@ -1008,15 +1008,20 @@ struct BackupScanner {
     return (width, height)
   }
 
-  /// Reads the duration of a video file.
-  /// Uses the legacy synchronous `duration` property since this is only called
-  /// for the rare ambiguous-file fallback path, not the hot loop.
-  private static func videoDuration(at url: URL) -> TimeInterval {
+  private static func videoDuration(at url: URL) async throws -> TimeInterval {
+    try Task.checkCancellation()
     let avAsset = AVURLAsset(
       url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-    let duration = (avAsset as any SynchronousDuration).duration
-    guard duration.timescale > 0 else { return 0 }
-    return CMTimeGetSeconds(duration)
+    do {
+      let duration = try await avAsset.load(.duration)
+      try Task.checkCancellation()
+      return duration.timescale > 0 ? CMTimeGetSeconds(duration) : 0
+    } catch let error as CancellationError {
+      throw error
+    } catch {
+      try Task.checkCancellation()
+      return 0
+    }
   }
 
   // MARK: - Filesystem helpers
@@ -1075,13 +1080,3 @@ struct BackupScanner {
     return month
   }
 }
-
-/// Silences the `AVAsset.duration` deprecation (macOS 13) so the warnings-as-errors build passes.
-/// The deprecation is real: `duration` is a blocking load, and `videoDuration(at:)` runs it on a
-/// cooperative-pool thread during `matchFiles`, on the ambiguous-file path. Keep this
-/// synchronous compatibility shim separate from the preferred async duration-loading API.
-private protocol SynchronousDuration {
-  var duration: CMTime { get }
-}
-
-extension AVURLAsset: SynchronousDuration {}
