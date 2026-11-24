@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 import os
+#if DEBUG
+  import Observation
+#endif
 import Synchronization
 
 /// Shared only with the serial IO queue. A failure stays latched until a complete snapshot
@@ -114,6 +117,21 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// A ready store may still contain pending writes. A flush acknowledges only
   /// mutations submitted before its await, never newer mutations queued during it.
   var hasUnflushedChanges: Bool { submittedRevision != flushedRevision }
+
+  #if DEBUG
+    private let controlObservation = ObservationRegistrar()
+    private var controlFlushCount = 0
+    var controlIsFlushing: Bool {
+      controlObservation.access(self, keyPath: \.controlIsFlushing)
+      return controlFlushCount > 0
+    }
+
+    private func changeControlFlushCount(by delta: Int) {
+      controlObservation.withMutation(of: self, keyPath: \.controlIsFlushing) {
+        controlFlushCount += delta
+      }
+    }
+  #endif
 
   // MARK: - Init
 
@@ -439,6 +457,10 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// `fsync` calls have completed. Failure delivery is synchronous on the main actor
   /// before throwing, so the owner cannot report success while its state is still ready.
   func flush() async throws {
+    #if DEBUG
+      changeControlFlushCount(by: 1)
+      defer { changeControlFlushCount(by: -1) }
+    #endif
     let revision = submittedRevision
     let state = ioFailureState
     let failure: (any Error)? = await withCheckedContinuation { continuation in
@@ -524,3 +546,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   }
 
 }
+
+#if DEBUG
+  extension JSONLRecordFile: Observable {}
+#endif

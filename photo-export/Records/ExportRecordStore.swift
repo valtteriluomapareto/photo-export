@@ -649,6 +649,14 @@ final class ExportRecordStore {
     state == .ready && jsonl?.hasUnflushedChanges == false
   }
 
+  #if DEBUG
+    var controlIsFlushing: Bool {
+      let active = jsonl?.controlIsFlushing == true
+      let captured = finalCommitContext?.file.controlIsFlushing == true
+      return active || captured
+    }
+  #endif
+
   /// Acknowledges all preceding record writes, including their synchronization.
   func flush() async throws {
     guard let file = jsonl else { throw RecordPersistenceUnavailable() }

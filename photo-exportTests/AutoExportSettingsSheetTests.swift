@@ -44,7 +44,7 @@ import Testing
       window.contentView = nil
       window.close()
       core.autoSyncManager.setEnabled(false)
-      core.autoSyncPhotoChangeAdapter.stop()
+      core.autoSyncPhotoChangeAdapter?.stop()
       core.exportManager.cancelAndClear()
       counter.reset()
       try? await core.exportRecordStore.flush()

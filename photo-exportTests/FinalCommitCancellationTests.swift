@@ -185,6 +185,36 @@ struct FinalCommitCancellationTests {
     }
   }
 
+  #if DEBUG
+    @Test(.timeLimit(.minutes(2)))
+    func controlIdleWaitsForCancelledFinalCommitAndHistory() async throws {
+      let f = try await Fixture(collection: false, phase: .move)
+      f.manager.controlSettlingWork = ControlSettlingWork()
+      try await withCleanup {
+        f.start()
+        try #require(await f.gate.entered.waitForEnter(count: 1))
+        let old = try #require(f.manager.currentTask)
+        f.manager.cancelAndClear()
+
+        #expect(!f.manager.hasActiveExportWork)
+        #expect(!f.manager.controlExportIdle)
+        let idle = ObservedValues { f.manager.controlExportIdle }
+
+        f.gate.release()
+        _ = await finished(old)
+        #expect(
+          await eventually("control observed the cancelled export finishing") {
+            f.manager.controlExportIdle
+          })
+        #expect(idle.values == [true])
+        #expect(f.variants()[.original]?.status == .done)
+        #expect(f.timeline.hasDurableRecords)
+      } cleanup: {
+        await f.cleanup()
+      }
+    }
+  #endif
+
   @Test(.timeLimit(.minutes(2)), arguments: Phase.allCases, [false, true])
   func cancelThenRetryRecognizesCommittedOutput(phase: Phase, collection: Bool) async throws {
     let f = try await Fixture(collection: collection, phase: phase)

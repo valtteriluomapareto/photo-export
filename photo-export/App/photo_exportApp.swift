@@ -12,13 +12,29 @@ import SwiftUI
 /// scenes.
 struct PhotoExportApp: App {
   private let core: AppCore
+  #if DEBUG
+    private let control: ControlRuntime?
+  #endif
+
+  private var windowSize: CGSize {
+    #if DEBUG
+      if let control { return control.options.size }
+    #endif
+    return CGSize(width: 1280, height: 800)
+  }
+
+  private var restoration: SceneRestorationBehavior {
+    #if DEBUG
+      if control != nil { return .disabled }
+    #endif
+    return .automatic
+  }
   // AppCore owns the shared graph. These wrappers retain its ObservableObject services;
   // Observation owners are injected directly through photoExportEnvironment(core).
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
-  @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
   init() {
@@ -26,15 +42,47 @@ struct PhotoExportApp: App {
     // `--screenshot-mode` swaps the real Photos backing for a curated synthetic library so
     // marketing screenshots don't leak the maintainer's personal Photos library. See
     // scripts/README.md for the capture workflow.
-    let core = AppCore(
-      composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
+    #if DEBUG
+      let control = ControlRuntime.launch
+      self.control = control
+      let core =
+        control?.core
+        ?? AppCore(
+          composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
+    #else
+      let core = AppCore(composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
+    #endif
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
     _autoSyncManager = StateObject(wrappedValue: core.autoSyncManager)
     _autoSyncScopeStore = StateObject(wrappedValue: core.autoSyncScopeStore)
     _destinationSafetyMonitor = StateObject(wrappedValue: core.destinationSafetyMonitor)
-    _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: core.autoSyncPhotoChangeAdapter)
+  }
+
+  private var menuBar: some Scene {
+    #if DEBUG
+      if control != nil {
+        return MenuBarExtra(isInserted: .constant(false)) {
+          menuBarContent
+        } label: {
+          menuBarLabel
+        }
+      }
+    #endif
+    return MenuBarExtra {
+      menuBarContent
+    } label: {
+      menuBarLabel
+    }
+  }
+
+  private var menuBarContent: some View {
+    AutoSyncMenuBarContent().photoExportEnvironment(core)
+  }
+
+  private var menuBarLabel: some View {
+    AutoSyncMenuBarLabel(state: autoSyncManager.state)
   }
 
   var body: some Scene {
@@ -50,7 +98,15 @@ struct PhotoExportApp: App {
       )
       .recordStoreAlertHost()
       .photoExportEnvironment(core)
+      #if DEBUG
+        .background {
+          if let control { ControlWindowReader(runtime: control) }
+        }
+      #endif
       .task {
+        #if DEBUG
+          if control != nil { return }
+        #endif
         // PhotoKit is first touched here, after the window has rendered, not in App.init.
         // Every window runs this; the core starts once.
         core.start()
@@ -60,7 +116,8 @@ struct PhotoExportApp: App {
     // ideal widths set in `LibraryRootView`, leaving ~520 for the detail pane.
     // The user can resize either column past these defaults; new windows
     // start at this size.
-    .defaultSize(width: 1280, height: 800)
+    .defaultSize(width: windowSize.width, height: windowSize.height)
+    .restorationBehavior(restoration)
     // Make the window's minimum track its content minimum explicitly rather
     // than relying on `.automatic`'s implicit resolution, which has shifted
     // across macOS releases (surfaced on Tahoe 26.5). Each routed
@@ -84,7 +141,7 @@ struct PhotoExportApp: App {
           timelineStore: core.exportRecordStore,
           collectionStore: core.collectionExportRecordStore,
           destinationManager: exportDestinationManager,
-          photoChangeAdapter: autoSyncPhotoChangeAdapter)
+          photoChangeAdapter: core.autoSyncPhotoChangeAdapter)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -99,22 +156,29 @@ struct PhotoExportApp: App {
 
     Window("About Photo Export", id: "about") {
       AboutView()
+        #if DEBUG
+          .background {
+            if let control { ControlWindowReader(runtime: control, publishesWindowNumber: false) }
+          }
+        #endif
     }
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
+    .restorationBehavior(restoration)
 
-    MenuBarExtra {
-      AutoSyncMenuBarContent()
-        .photoExportEnvironment(core)
-    } label: {
-      AutoSyncMenuBarLabel(state: autoSyncManager.state)
-    }
+    menuBar
 
     Settings {
       SettingsRootView()
         .photoExportEnvironment(core)
+        #if DEBUG
+          .background {
+            if let control { ControlWindowReader(runtime: control, publishesWindowNumber: false) }
+          }
+        #endif
     }
     .windowResizability(.contentMinSize)
+    .restorationBehavior(restoration)
   }
 }
 
@@ -190,7 +254,7 @@ private struct SaveDiagnosticReportCommand: View {
   let timelineStore: ExportRecordStore
   let collectionStore: CollectionExportRecordStore
   let destinationManager: ExportDestinationManager
-  let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter?
 
   var body: some View {
     Button("Save Diagnostic Report\u{2026}") {
@@ -210,7 +274,7 @@ private struct SaveDiagnosticReportCommand: View {
     timelineStore: ExportRecordStore,
     collectionStore: CollectionExportRecordStore,
     destinationManager: ExportDestinationManager,
-    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter?
   ) {
     let info = Bundle.main.infoDictionary
     let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
@@ -221,7 +285,7 @@ private struct SaveDiagnosticReportCommand: View {
       destinationId: destinationManager.destinationId,
       appVersion: appVersion,
       buildNumber: buildNumber,
-      lastCatchUpSummary: photoChangeAdapter.lastCatchUpSummary
+      lastCatchUpSummary: photoChangeAdapter?.lastCatchUpSummary
     )
     let report = reporter.makeReport()
     let panel = NSSavePanel()

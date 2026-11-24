@@ -23,6 +23,12 @@ final class AutoSyncManager: ObservableObject {
   /// toggle as on so the user can see what to fix).
   @Published private(set) var isEnabled: Bool = false
 
+  #if DEBUG
+    var controlStateChanges: AnyPublisher<Void, Never> {
+      Publishers.Merge($state.map { _ in () }, $isEnabled.map { _ in () }).eraseToAnyPublisher()
+    }
+  #endif
+
   /// Per-destination retry state for the *currently selected* destination.
   /// Surfaced for the Export Issues UI and refreshed after every
   /// `.recordRetryFailures` effect plus on destination change. Empty for a

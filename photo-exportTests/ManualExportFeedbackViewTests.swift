@@ -114,7 +114,7 @@ import Testing
       }
 
       func close() {
-        core.autoSyncPhotoChangeAdapter.stop()
+        core.autoSyncPhotoChangeAdapter?.stop()
         window?.contentView = nil
         window?.close()
         hosted = nil

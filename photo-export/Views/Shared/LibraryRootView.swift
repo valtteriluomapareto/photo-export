@@ -32,18 +32,15 @@ struct LibraryRootView: View {
   @State private var lastTimeline: PersistedSidebarSelection = .empty
   @State private var lastCollections: PersistedSidebarSelection = .empty
 
-  /// `screenshotSurfaceKey` is the launch's `--screenshot-surface=<key>`, so the capture
-  /// script can land each marketing capture on a specific view without UI scripting. In
-  /// production launches it is `nil` and the defaults below apply (Timeline / current
-  /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
-  /// instantiating SwiftUI views.
+  /// The launch surface can override the normal Timeline / current month landing.
   init(
     screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState,
+    initialSurface: ScreenshotSurfaceResolver.Surface? = nil,
     assetSelection: AssetSelectionModel? = nil
   ) {
     _assetSelection = State(initialValue: assetSelection ?? AssetSelectionModel())
     self.timelineHistoryState = timelineHistoryState
-    let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
+    let surface = initialSurface ?? ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)
     let currentMonth = Calendar.current.component(.month, from: now)

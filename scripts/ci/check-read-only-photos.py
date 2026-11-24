@@ -23,15 +23,19 @@ def main():
         default=pathlib.Path(__file__).resolve().parents[2] / "photo-export",
     )
     args = parser.parse_args()
+    default_source = pathlib.Path(__file__).resolve().parents[2] / "photo-export"
     try:
         if not args.source_root.is_dir():
             raise ValueError(f"missing production source directory: {args.source_root}")
         sources = sorted(args.source_root.rglob("*.swift"))
         if not sources:
             raise ValueError(f"no Swift sources under {args.source_root}")
+        if args.source_root.resolve() == default_source:
+            sources += sorted((default_source.parent / "scripts/dev").rglob("*.py"))
         violations = []
         for path in sources:
-            code = code_only(path.read_text())
+            contents = path.read_text()
+            code = code_only(contents) if path.suffix == ".swift" else contents
             for match in FORBIDDEN.finditer(code):
                 line = code.count("\n", 0, match.start()) + 1
                 violations.append(f"{path}:{line}: forbidden PhotoKit mutation identifier: {match[0]}")
@@ -41,7 +45,7 @@ def main():
     if violations:
         print("\n".join(violations), file=sys.stderr)
         return 1
-    print(f"Read-only Photos guard passed ({len(sources)} Swift files).")
+    print(f"Read-only Photos guard passed ({len(sources)} source files).")
     return 0
 
 

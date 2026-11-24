@@ -143,8 +143,7 @@ struct ExportToolbarView: ToolbarContent {
         titleVisibility: .visible
       ) {
         Button("Run \(presentation.label) Now", role: .destructive) {
-          exportManager.supersedeForManualRun()
-          startManualExport()
+          ExportCommands.startManual(exportManager, confirm: true, perform: startManualExport)
         }
         Button("Cancel", role: .cancel) {}
       } message: {
@@ -189,8 +188,7 @@ struct ExportToolbarView: ToolbarContent {
           // user like "pause for 30 seconds." Treating Cancel as "stop, and
           // don't restart automatically" matches the button's plain-language
           // meaning. The user can re-enable Auto Export from Settings.
-          autoSyncManager.setEnabled(false)
-          exportManager.cancelAndClear()
+          ExportCommands.cancel(exportManager, autoSync: autoSyncManager)
         } label: {
           Label("Cancel", systemImage: "xmark.circle")
         }
@@ -220,10 +218,8 @@ struct ExportToolbarView: ToolbarContent {
   }
 
   private func handlePrimaryAction() {
-    if exportManager.manualExportShouldConfirmSupersede {
+    if !ExportCommands.startManual(exportManager, perform: startManualExport) {
       isShowingSupersedeConfirm = true
-    } else {
-      startManualExport()
     }
   }
 

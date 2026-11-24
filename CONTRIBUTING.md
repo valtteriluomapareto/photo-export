@@ -191,6 +191,9 @@ BUILT_PRODUCTS_DIR="$(xcodebuild -project photo-export.xcodeproj -scheme photo-e
 "$BUILT_PRODUCTS_DIR/Photo Export.app/Contents/MacOS/Photo Export" --force-onboarding
 ```
 
+For deterministic exports or offscreen captures from the Debug app, use the
+[development control plane](docs/reference/development-control-plane.md).
+
 Docs website setup:
 
 ```bash

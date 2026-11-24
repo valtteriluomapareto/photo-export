@@ -45,6 +45,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// unavailable invariant (see `validate`).
   var destinationId: String? { identity.stableId }
 
+  #if DEBUG
+    var controlStateChanges: AnyPublisher<Void, Never> {
+      Publishers.Merge4(
+        $selectedFolderURL.map { _ in () }, $isAvailable.map { _ in () },
+        $status.map { _ in () }, $identity.map { _ in () }
+      ).eraseToAnyPublisher()
+    }
+  #endif
+
   private let fileSystem: any FileSystemService
   private var directoryGeneration: Int?
   private var directoryAccess: DestinationDirectoryAccess?
@@ -89,6 +98,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private var volumeObservers: [NSObjectProtocol] = []
   private let volumeNotificationCenter: NotificationCenter
+  #if DEBUG
+    private var fixtureAccess: ((URL) -> Bool)?
+
+    func restrictFixtureAccess(to permits: @escaping (URL) -> Bool) {
+      fixtureAccess = permits
+    }
+  #endif
   private let validationScopeAcquirer: ((URL) -> Bool)?
   private let validationScopeReleaser: ((URL) -> Void)?
 
@@ -485,10 +501,16 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// The caller MUST pass the returned URL to `endScopedAccess(for:)` when done.
   func beginScopedAccess() -> URL? {
     guard let url = selectedFolderURL else { return nil }
+    #if DEBUG
+      if let fixtureAccess { return fixtureAccess(url) ? url : nil }
+    #endif
     return url.startAccessingSecurityScopedResource() ? url : nil
   }
 
   func endScopedAccess(for url: URL) {
+    #if DEBUG
+      if fixtureAccess != nil { return }
+    #endif
     url.stopAccessingSecurityScopedResource()
   }
 
@@ -530,6 +552,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     _ url: URL, decision: FolderSelectionDecision,
     onValidated: @escaping @MainActor () -> Void = {}
   ) -> Bool {
+    #if DEBUG
+      if fixtureAccess?(url) == false { return false }
+    #endif
     guard saveSelection(url, decision: decision) else { return false }
     validate(url: url, onValidated: onValidated)
     return true

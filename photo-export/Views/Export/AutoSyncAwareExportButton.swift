@@ -44,8 +44,7 @@ struct AutoSyncAwareExportButton<Label: View>: View {
         titleVisibility: .visible
       ) {
         Button("Run \(actionName) Now", role: .destructive) {
-          exportManager.supersedeForManualRun()
-          action()
+          ExportCommands.startManual(exportManager, confirm: true, perform: action)
         }
         Button("Cancel", role: .cancel) {}
       } message: {
@@ -56,10 +55,8 @@ struct AutoSyncAwareExportButton<Label: View>: View {
   }
 
   private func dispatch() {
-    if exportManager.manualExportShouldConfirmSupersede {
+    if !ExportCommands.startManual(exportManager, perform: action) {
       isShowingSupersedeConfirm = true
-    } else {
-      action()
     }
   }
 }

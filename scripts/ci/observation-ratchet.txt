@@ -28,6 +28,6 @@ external-publisher|photo-export/Export/ExportManager.swift|9
 total|published|24
 total|environment-object|10
 total|environment-object-property|24
-total|state-object|6
+total|state-object|5
 total|observed-object|0
 total|object-will-change|0

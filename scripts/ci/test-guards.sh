@@ -4,5 +4,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 python3 -B -m unittest discover -s scripts/ci/tests -p 'test_*.py'
+python3 -B -m unittest discover -s scripts/dev/tests -p 'test_*.py'
 python3 -B -m unittest discover -s scripts/release/tests -p 'test_*.py'
 ./scripts/ci/check-fingerprint-id-keying.sh --self-test

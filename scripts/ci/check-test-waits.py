@@ -15,6 +15,7 @@ This is a lexical guard over comment- and string-masked source:
 import pathlib
 import re
 import sys
+import tokenize
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from swift_source import code_only  # noqa: E402
@@ -32,7 +33,9 @@ TIME_LIMIT = re.compile(r"\.timeLimit\s*\(")
 
 def problems(root):
     found = []
-    for path in sorted((root / TESTS).rglob("*.swift")):
+    swift_files = list((root / TESTS).rglob("*.swift"))
+    swift_files += list((root / "photo-export/Control").rglob("*.swift"))
+    for path in sorted(swift_files):
         relative = path.relative_to(root)
         code = code_only(path.read_text())
         if relative not in DEADLINE_ALLOWED:
@@ -45,6 +48,13 @@ def problems(root):
             if not TIME_LIMIT.search(code):
                 found.append(
                     f"{relative}: calls eventually( but declares no .timeLimit( backstop")
+    for path in sorted((root / "scripts/dev").rglob("*.py")):
+        with tokenize.open(path) as stream:
+            tokens = list(tokenize.generate_tokens(stream.readline))
+        for index, token in enumerate(tokens[:-1]):
+            if token.type == tokenize.NAME and token.string == "sleep" and tokens[index + 1].string == "(":
+                found.append(
+                    f"{path.relative_to(root)}:{token.start[0]}: fixed sleep; wait for state or process events")
     return found
 
 
