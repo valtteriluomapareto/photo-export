@@ -338,6 +338,7 @@ import Testing
     #expect(production.wiresAutoSync)
     #expect(!production.isScreenshotMode)
     #expect(production.screenshotWindowSize == nil)
+    #expect(production.screenshotWindowFile == nil)
   }
 
   @Test func screenshotModeKeepsProductionStorageAndServices() {
@@ -378,6 +379,38 @@ import Testing
       "--screenshot-mode", "--screenshot-width=1440",
     ])
     #expect(widthOnly.screenshotWindowSize == nil)
+  }
+
+  @Test func screenshotWindowFileIsReadOnlyInScreenshotMode() {
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let captured = AppComposition.forLaunch(arguments: [
+      "Photo Export", "--screenshot-mode", "--screenshot-window-file=/tmp/run/window.json",
+    ])
+    #expect(captured.screenshotWindowFile == URL(fileURLWithPath: "/tmp/run/window.json"))
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let plain = AppComposition.forLaunch(arguments: [
+      "Photo Export", "--screenshot-window-file=/tmp/run/window.json",
+    ])
+    #expect(plain.screenshotWindowFile == nil)
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let relative = AppComposition.forLaunch(arguments: [
+      "Photo Export", "--screenshot-mode", "--screenshot-window-file=window.json",
+    ])
+    #expect(relative.screenshotWindowFile == nil)
+  }
+
+  @Test func screenshotWindowRecordNamesTheWindowAndTheSurfaceThatOpened() throws {
+    func decoded(_ key: String?) throws -> [String: Any] {
+      let data = AppCore.screenshotWindowRecord(windowNumber: 42, surfaceKey: key)
+      return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+    let known = try decoded("collections-favorites")
+    #expect(known["window"] as? Int == 42)
+    #expect(known["surface"] as? String == "collections-favorites")
+    // An unknown key lands on the default Timeline, so the record says no surface opened.
+    let unknown = try decoded("collections-typo")
+    #expect(unknown["window"] as? Int == 42)
+    #expect(unknown["surface"] is NSNull)
   }
 
   @Test func screenshotSurfaceIsReadFromTheLaunchArgumentsInEveryMode() {
@@ -520,13 +553,10 @@ import Testing
       var composition = makeTestComposition(label: "app-core-screenshot")
       composition.isScreenshotMode = true
       composition.wiresAutoSync = false
-      let splitViewKey = "NSSplitView Subview Frames main"
-      composition.defaults.set(["0, 0, 240, 800"], forKey: splitViewKey)
 
       let core = makeCore(composition)
 
       #expect(composition.defaults.bool(forKey: "hasCompletedOnboarding"))
-      #expect(composition.defaults.object(forKey: splitViewKey) == nil)
       #expect(core.exportDestinationManager.selectedFolderURL?.lastPathComponent == "Backup Folder")
     }
   }

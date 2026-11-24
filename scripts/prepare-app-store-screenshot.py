@@ -7,14 +7,15 @@ The Mac App Store requires screenshots in exact sizes:
 Re-shot screenshots often come out with transparent borders (e.g. macOS
 window-only captures) and at near-but-not-spec dimensions. This script:
 
-  - picks the smallest spec the input fits into,
+  - picks the smallest spec the input fits into, or the one passed with --size,
   - centers the image on a solid-colour canvas at that spec,
   - flattens any alpha channel against that colour,
   - writes a PNG with no transparency.
 
 Usage:
-  scripts/prepare-app-store-screenshot.py design/app-store-screenshot.png
+  scripts/prepare-app-store-screenshot.py screenshot.png
   scripts/prepare-app-store-screenshot.py raw.png -o out.png --background FFFFFF
+  scripts/prepare-app-store-screenshot.py raw.png -o out.png --size 2880x1800
 
 Requires Pillow:  python3 -m pip install Pillow
 """
@@ -83,6 +84,11 @@ def main() -> int:
             "window chrome."
         ),
     )
+    parser.add_argument(
+        "--size",
+        choices=[f"{w}x{h}" for w, h in SPECS],
+        help="Canvas size (default: the smallest spec the input fits into).",
+    )
     args = parser.parse_args()
 
     if not args.input.is_file():
@@ -93,7 +99,12 @@ def main() -> int:
 
     img = Image.open(args.input).convert("RGBA")
     width, height = img.size
-    spec_w, spec_h = pick_spec(width, height)
+    if args.size:
+        spec_w, spec_h = (int(value) for value in args.size.split("x"))
+        if width > spec_w or height > spec_h:
+            raise SystemExit(f"error: input {width}x{height} does not fit in {args.size}")
+    else:
+        spec_w, spec_h = pick_spec(width, height)
 
     canvas = Image.new("RGB", (spec_w, spec_h), bg)
     offset = ((spec_w - width) // 2, (spec_h - height) // 2)

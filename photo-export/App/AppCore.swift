@@ -40,18 +40,10 @@ final class AppCore {
     let edm = Self.makeDestinationManager(for: composition)
     if composition.isScreenshotMode {
       // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without this it would
-      // show OnboardingView on a fresh machine and the capture script would never reach the
-      // marketing surfaces. The change persists, but screenshot mode is only used on the
-      // maintainer's machine, where the value is already true.
+      // show OnboardingView and the capture script would never reach the marketing surfaces.
+      // The capture script builds under its own bundle id and clears that domain before each
+      // launch, so this never reaches a real install's preferences.
       defaults.set(true, forKey: "hasCompletedOnboarding")
-      // macOS persists `NSSplitView Subview Frames …` divider positions across launches via
-      // `NSWindow.frameAutosaveName`. The persisted values win over
-      // `navigationSplitViewColumnWidth(min:ideal:max:)`, so a prior resize would survive
-      // into the capture. Clearing them lets the declarative widths apply.
-      for key in defaults.dictionaryRepresentation().keys
-      where key.hasPrefix("NSSplitView Subview Frames ") {
-        defaults.removeObject(forKey: key)
-      }
     }
     // With an override (the curated screenshot library, or a test fake) the manager forwards
     // every `PhotoLibraryService` method to it; without one it runs its PhotoKit code.
@@ -224,49 +216,43 @@ final class AppCore {
     // After the lifecycle coordinator, so the record stores are configured for the current
     // destination before the monitor reads their counts; it waits for a store still loading.
     destinationSafetyMonitor.attach()
-    applyScreenshotWindowSizeIfRequested()
+    prepareScreenshotWindow()
     AppDiagnostics.endLaunch()
   }
 
-  /// In screenshot mode with a requested size, resize the main window so the capture
-  /// script can grab a predictable frame. No-op outside screenshot mode.
-  private func applyScreenshotWindowSizeIfRequested() {
-    guard composition.isScreenshotMode else { return }
-    guard let size = composition.screenshotWindowSize else {
-      // No requested size: still publish the window id so the capture script can grab
-      // whatever window the system gives us.
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-        Self.publishScreenshotWindowID()
-      }
-      return
+  /// In screenshot mode, resize the main window to the requested size and, when the capture
+  /// script passed a window file, write the window's number and the surface that opened to
+  /// it. The script captures by window number (`screencapture -l`), which needs only Screen
+  /// Recording, not AppleScript, System Events or Accessibility.
+  private func prepareScreenshotWindow() {
+    // The titled window, not the menu bar item's. `canBecomeMain` would miss it: it is
+    // false until the window is on screen, which may be after `start()`.
+    guard composition.isScreenshotMode,
+      let window = NSApplication.shared.windows.first(where: { $0.styleMask.contains(.titled) })
+    else { return }
+    if let size = composition.screenshotWindowSize {
+      let screenFrame = window.screen?.visibleFrame ?? .zero
+      let origin = NSPoint(
+        x: screenFrame.midX - size.width / 2, y: screenFrame.midY - size.height / 2)
+      window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
     }
-    guard let window = NSApplication.shared.windows.first else { return }
-    let screenFrame = window.screen?.visibleFrame ?? .zero
-    let origin = NSPoint(
-      x: screenFrame.midX - size.width / 2,
-      y: screenFrame.midY - size.height / 2
-    )
-    window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
-    // After the resize settles, publish the window's CGWindowID to a well-known temp file.
-    // The capture script calls `screencapture -l<windowID>`: pixel-exact, no coordinate
-    // math, and correct on whichever display the window lives on. This needs only Screen
-    // Recording, not AppleScript, System Events or Accessibility.
+    guard let file = composition.screenshotWindowFile else { return }
+    let record = Self.screenshotWindowRecord(
+      windowNumber: window.windowNumber, surfaceKey: composition.screenshotSurfaceKey)
+    // After the resize settles. The script waits for stable pixels before it captures.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-      Self.publishScreenshotWindowID()
+      try? record.write(to: file, options: .atomic)
     }
   }
 
-  /// Writes the main window's CGWindowID to `$TMPDIR/photo-export-screenshot-window-id.txt`
-  /// as a single integer line. Removed if no window is available. Screenshot mode only.
-  private static func publishScreenshotWindowID() {
-    let url = URL(fileURLWithPath: NSTemporaryDirectory())
-      .appendingPathComponent("photo-export-screenshot-window-id.txt")
-    guard let window = NSApplication.shared.windows.first else {
-      try? FileManager.default.removeItem(at: url)
-      return
+  /// `{"window": N, "surface": key}`. `surface` is null when the key resolves to no surface,
+  /// because the window then opens on the default Timeline month.
+  static func screenshotWindowRecord(windowNumber: Int, surfaceKey: String?) -> Data {
+    var object: [String: Any] = ["window": windowNumber, "surface": NSNull()]
+    if let surfaceKey, ScreenshotSurfaceResolver.resolve(key: surfaceKey) != nil {
+      object["surface"] = surfaceKey
     }
-    let line = String(window.windowNumber)
-    try? line.write(to: url, atomically: true, encoding: .utf8)
+    return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
   }
 
   /// "Same Folder" for a pick that couldn't be compared with the previous destination checks

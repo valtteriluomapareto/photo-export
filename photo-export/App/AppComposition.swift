@@ -41,6 +41,9 @@ struct AppComposition {
   /// `ScreenshotSurfaceResolver` when the view is built. Read in every mode, as it always
   /// has been; `nil` lands on the default Timeline month.
   var screenshotSurfaceKey: String?
+  /// `--screenshot-window-file=<absolute path>`, screenshot mode only: where `AppCore` writes
+  /// the main window's number and the surface that opened, for the capture script.
+  var screenshotWindowFile: URL?
 
   #if DEBUG
     var makeControlDestination: (() -> ExportDestinationManager)?
@@ -89,6 +92,17 @@ struct AppComposition {
 
   private static func launchComposition(arguments: [String]) -> AppComposition {
     guard arguments.contains("--screenshot-mode") else { return production() }
+    var composition = screenshotComposition(arguments: arguments)
+    let windowFilePrefix = "--screenshot-window-file="
+    if let path = arguments.first(where: { $0.hasPrefix(windowFilePrefix) })?
+      .dropFirst(windowFilePrefix.count), path.hasPrefix("/")
+    {
+      composition.screenshotWindowFile = URL(fileURLWithPath: String(path))
+    }
+    return composition
+  }
+
+  private static func screenshotComposition(arguments: [String]) -> AppComposition {
     func value(for prefix: String) -> CGFloat? {
       guard
         let arg = arguments.first(where: { $0.hasPrefix(prefix) }),
