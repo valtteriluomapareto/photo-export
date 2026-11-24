@@ -227,11 +227,17 @@ import Testing
       f.show()
       let button = try await rebuildButton(f)
       #expect(button.isEnabled)
-      button.performClick(nil)
-      try #require(await observe { f.timeline.state == .ready })
-      #expect(
-        f.manager.isImporting, "Reset must claim import in the turn that publishes ready history")
-      await f.manager.waitForImportCompletion()
+      let matching = AsyncCheckpoint()
+      f.photos.fetchAssetsCheckpointByYear[2026] = matching
+      try await withCleanup {
+        button.performClick(nil)
+        try #require(await observe { f.timeline.state == .ready })
+        #expect(
+          f.manager.isImporting, "Reset must claim import in the turn that publishes ready history")
+      } cleanup: {
+        await matching.releaseAll()
+        await f.manager.waitForImportCompletion()
+      }
       #expect(f.manager.importResult?.matchedCount == 1)
       #expect(f.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
       #expect(f.collections.exportInfo(assetId: "keep", placement: favorites) == collectionBefore)

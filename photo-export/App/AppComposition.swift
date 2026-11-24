@@ -18,6 +18,7 @@ struct AppComposition {
   /// the PhotoKit-backed `PhotoLibraryPersistentChangeAdapter`.
   var persistentChangeSource: (any StartablePhotoLibraryChangeProviding)?
   var assetResourceWriter: any AssetResourceWriter
+  var mediaRenderer: (any MediaRenderer)?
   /// Export-only metadata reader; UI queries remain on the library service.
   var photoKitReader: any PhotoKitReading
   /// What `ExportManager` calls to drop cached PHAssets during bulk exports, given the
@@ -40,6 +41,11 @@ struct AppComposition {
   /// `ScreenshotSurfaceResolver` when the view is built. Read in every mode, as it always
   /// has been; `nil` lands on the default Timeline month.
   var screenshotSurfaceKey: String?
+
+  #if DEBUG
+    var makeControlDestination: (() -> ExportDestinationManager)?
+    var controlLibrarySurface: ScreenshotSurfaceResolver.Surface?
+  #endif
 
   /// The shipping app.
   static func production() -> AppComposition {

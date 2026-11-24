@@ -49,6 +49,7 @@ RULES = [
     ("photo-export/Export/ExportManager.swift", EVERY_ROW),
     ("photo-export/App/photo_exportApp.swift", ("authorization", "destination", "autoexport")),
     ("photo-export/App/AppCore.swift", ("authorization", "destination", "autoexport")),
+    ("photo-export/App/ExportCommands.swift", ("local", "autoexport", "cancel")),
     ("photo-export/App/AppComposition.swift", ("authorization", "destination", "autoexport")),
     ("photo-export/PhotoLibrary/PhotoLibraryManager.swift",
      ("local", "edited", "preview", "icloud", "livephoto", "collections", "authorization",
@@ -208,6 +209,7 @@ ROW_KEYWORDS = {
 # Covered by the core smoke alone: changes here need no extra row.
 CORE_ONLY = [
     "photo-export/App/AppEntry.swift",
+    "photo-export/Control/**",
     "photo-export/Assets.xcassets/**",
     "photo-export/Resources/**",
     "photo-export/Helpers/**",

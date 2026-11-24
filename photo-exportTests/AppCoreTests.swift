@@ -413,7 +413,7 @@ import Testing
       #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
       defer {
         core.autoSyncManager.setEnabled(false)
-        core.autoSyncPhotoChangeAdapter.stop()
+        core.autoSyncPhotoChangeAdapter?.stop()
         core.exportManager.cancelAndClear()
         try? FileManager.default.removeItem(at: composition.appStateRoot)
       }
@@ -427,6 +427,50 @@ import Testing
   }
 
   // MARK: - Isolation
+
+  #if DEBUG
+    @Test func fixtureExportsAndRepeatsThroughAppCore() async throws {
+      try await withAppDomainUntouched {
+        let root = TestScratch.directory("control-core")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fixture = try ControlFixture.prepare(runDirectory: nil, temporaryDirectory: root)
+        let core = AppCore(composition: try .fixture(fixture, surface: .library))
+        try await fixture.start(core)
+        #expect(core.autoSyncPhotoChangeAdapter == nil)
+        #expect(core.photoLibraryManager.thumbnailReader is FixturePhotoLibraryService)
+        #expect(core.composition.assetResourceWriter is FixtureResourceWriter)
+        #expect(core.autoSyncEnvironment.photos is FixtureChangeSource)
+        #expect(core.exportDestinationManager.canExportNow)
+        #expect(core.composition.mediaRenderer is FixtureMediaRenderer)
+        #expect(core.composition.photoKitReader is PhotoLibraryServiceReader)
+        let otherFolder = try makeDestinationFolder("control-rejected-destination")
+        #expect(
+          !core.exportDestinationManager.applyFolderSelection(
+            otherFolder, decision: .newDestination))
+        #expect(core.exportDestinationManager.selectedFolderURL == fixture.destination)
+        let manager = core.exportManager
+        let actions = ControlActions(core: core)
+        let export = ControlAction.export(.timelineMonth(year: 2025, month: 6), confirm: false)
+        for _ in 0..<2 {
+          #expect(actions.perform(export) == .accepted)
+          #expect(
+            await eventually("export and record writes settle") {
+              manager.controlExportIdle && !core.exportRecordStore.controlIsFlushing
+            })
+          #expect(core.exportRecordStore.hasDurableRecords)
+          let month = fixture.destination.appending(path: "2025/06")
+          #expect(
+            try FileManager.default.contentsOfDirectory(atPath: month.path).sorted() == [
+              "Harbor.png", "Pines.png",
+            ])
+          for id in ["harbor", "pines"] {
+            #expect(
+              core.exportRecordStore.exportInfo(assetId: id)?.variants[.original]?.status == .done)
+          }
+        }
+      }
+    }
+  #endif
 
   @Test func testCompositionKeepsAllStateUnderItsRootAndSuite() async throws {
     try await withAppDomainUntouched {

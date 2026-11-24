@@ -27,6 +27,12 @@ struct ContentView: View {
   let timelineHistoryState: RecordStoreState
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
+  #if DEBUG
+    @Environment(\.controlLibrarySurface) private var initialLibrarySurface
+  #else
+    private let initialLibrarySurface: ScreenshotSurfaceResolver.Surface? = nil
+  #endif
+
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
 
   // Debug-only: launch with `--force-onboarding` to route straight to `OnboardingView`,
@@ -54,7 +60,8 @@ struct ContentView: View {
         }
       } else if photoLibraryManager.isAuthorized {
         LibraryRootView(
-          screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: timelineHistoryState)
+          screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: timelineHistoryState,
+          initialSurface: initialLibrarySurface)
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }

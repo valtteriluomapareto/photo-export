@@ -19,6 +19,13 @@ Small development utilities for this project. CI-only steps live under [`ci/`](c
 | [`screenshots/optimize-bundle.sh`](screenshots/optimize-bundle.sh) | Batch-resizes + re-encodes the stock photos under `photo-export/Resources/screenshots/` as JPEG at quality 85, capped at 1600px on the long edge. PNGs typically shrink to ~25% of their original size. Skips files that already have a `.jpg` / `.heic` sibling. Run after dropping new PNGs into the bundle. |
 | [`xccov2lcov.sh`](xccov2lcov.sh) | Converts an `.xcresult` coverage bundle into `lcov.info` for tools that consume LCOV. Used by the coverage commands in [`README.md`](../README.md). |
 
+## Development control plane
+
+[`dev/pe_control.py`](dev/pe_control.py) drives a Debug fixture run over a private
+file mailbox and captures the library and Settings offscreen. See the
+[control-plane guide](../docs/reference/development-control-plane.md) for commands
+and the version 1 contract.
+
 ## Export measurements
 
 The single measurement tool captures numeric export events or replays saved numeric and

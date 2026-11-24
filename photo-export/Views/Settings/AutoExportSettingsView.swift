@@ -8,7 +8,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @Environment(LoginItemController.self) private var loginItemController
-  @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  @Environment(\.photoChangeAdapter) private var photoChangeAdapter
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
@@ -75,9 +75,10 @@ struct AutoExportSettingsView: View {
 
       Section {
         StatusSummaryRow(state: autoSyncManager.state)
-        LastReconciledRow(timestamp: photoChangeAdapter.lastSuccessfulReconciliation)
-        if let catchUp = photoChangeAdapter.lastCatchUpSummary {
-          LastCatchUpRow(summary: catchUp)
+        if let photoChangeAdapter {
+          PhotoChangeStatusRows().environmentObject(photoChangeAdapter)
+        } else {
+          LastReconciledRow(timestamp: nil)
         }
         if let summary = autoSyncManager.lastRunSummary {
           LastRunRow(summary: summary)
@@ -323,3 +324,14 @@ private struct LastCatchUpRow: View {
 // Per-view label extensions removed — surface uses
 // `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
 // directly. See `AutoSyncReason.swift`.
+
+private struct PhotoChangeStatusRows: View {
+  @EnvironmentObject private var adapter: PhotoLibraryPersistentChangeAdapter
+
+  var body: some View {
+    LastReconciledRow(timestamp: adapter.lastSuccessfulReconciliation)
+    if let summary = adapter.lastCatchUpSummary {
+      LastCatchUpRow(summary: summary)
+    }
+  }
+}

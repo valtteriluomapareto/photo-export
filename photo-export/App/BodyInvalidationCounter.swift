@@ -6,10 +6,12 @@ import SwiftUI
   final class BodyInvalidationCounter {
     private(set) var tasks: [Task<Void, Never>] = []
     private var countsByKey: [String: Int] = [:]
+    var onRecord: (() -> Void)?
     init() {}
 
     func record(_ key: String) {
       countsByKey[key, default: 0] += 1
+      onRecord?()
     }
 
     func recordTask(_ task: Task<Void, Never>) { tasks.append(task) }

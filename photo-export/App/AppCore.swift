@@ -23,7 +23,7 @@ final class AppCore {
   let whatsNewState: WhatsNewState
   /// Observed by Settings and the diagnostic report even when AutoSync watches another
   /// change source.
-  let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter?
   let destinationSafetyMonitor: DestinationSafetyMonitor
   /// What `start()` attaches AutoSync to.
   let autoSyncEnvironment: AutoSyncEnvironment
@@ -37,13 +37,7 @@ final class AppCore {
 
     // Screenshot mode skips bookmark restoration and overrides the displayed folder name, so
     // the maintainer's real backup folder name never shows in a marketing capture.
-    let edm: ExportDestinationManager
-    if composition.isScreenshotMode {
-      edm = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
-      edm.configureForScreenshotMode()
-    } else {
-      edm = ExportDestinationManager(userDefaults: defaults)
-    }
+    let edm = Self.makeDestinationManager(for: composition)
     if composition.isScreenshotMode {
       // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without this it would
       // show OnboardingView on a fresh machine and the capture script would never reach the
@@ -75,6 +69,7 @@ final class AppCore {
       exportDestination: edm, exportRecordStore: ers,
       collectionExportRecordStore: cers,
       assetResourceWriter: composition.assetResourceWriter,
+      mediaRenderer: composition.mediaRenderer,
       fileSystem: composition.fileSystem,
       phAssetCacheControl: composition.phAssetCacheControl(plm), userDefaults: defaults)
     // Drive the PhotoLibraryManager `descriptor(from:)` Live Photo resource fallback from the
@@ -110,12 +105,17 @@ final class AppCore {
     // The bridge callback wakes `PhotoLibraryManager` whenever the safety-net reconcile turns
     // up changes that PhotoKit's normal observer missed, so the timeline grid and sidebar
     // counts refresh alongside AutoSync. `[weak plm]` to avoid pinning the manager.
-    let photoAdapter = PhotoLibraryPersistentChangeAdapter(
-      tokenStore: tokenStore,
-      authorizationStatusPublisher: plm.authorizationStatusPublisher,
-      clock: clock,
-      onPotentialLibraryChange: { [weak plm] in plm?.invalidateCache() }
-    )
+    let photoAdapter: PhotoLibraryPersistentChangeAdapter?
+    if Self.usesPhotoChangeAdapter(in: composition) {
+      photoAdapter = PhotoLibraryPersistentChangeAdapter(
+        tokenStore: tokenStore,
+        authorizationStatusPublisher: plm.authorizationStatusPublisher,
+        clock: clock,
+        onPotentialLibraryChange: { [weak plm] in plm?.invalidateCache() }
+      )
+    } else {
+      photoAdapter = nil
+    }
     let safetyConfirmationStore = FileBackedDestinationSafetyConfirmationStore(
       baseDirectoryURL: destinationsRoot)
     let safetyMonitor = DestinationSafetyMonitor(
@@ -138,7 +138,9 @@ final class AppCore {
         assetId: assetId, placement: placement, variant: variant, now: now) ?? true
     }
 
-    let changeSource = composition.persistentChangeSource ?? photoAdapter
+    guard let changeSource = composition.persistentChangeSource ?? photoAdapter else {
+      preconditionFailure("AppCore requires a Photos change source.")
+    }
 
     exportDestinationManager = edm
     photoLibraryManager = plm
@@ -165,6 +167,28 @@ final class AppCore {
       clock: clock,
       photosAuthorization: plm,
       userDefaults: defaults)
+  }
+
+  private static func makeDestinationManager(for composition: AppComposition)
+    -> ExportDestinationManager
+  {
+    #if DEBUG
+      if let makeControlDestination = composition.makeControlDestination {
+        return makeControlDestination()
+      }
+    #endif
+    let manager = ExportDestinationManager(
+      skipRestore: composition.isScreenshotMode, userDefaults: composition.defaults)
+    if composition.isScreenshotMode { manager.configureForScreenshotMode() }
+    return manager
+  }
+
+  private static func usesPhotoChangeAdapter(in composition: AppComposition) -> Bool {
+    #if DEBUG
+      return composition.makeControlDestination == nil
+    #else
+      return true
+    #endif
   }
 
   /// Runs the startup sequence once. Every window's `.task` calls this; later calls do
@@ -317,6 +341,10 @@ extension EnvironmentValues {
   @Entry var isScreenshotMode = false
   /// `AppComposition.screenshotSurfaceKey`: where the library window first lands.
   @Entry var screenshotSurfaceKey: String?
+  @Entry var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter?
+  #if DEBUG
+    @Entry var controlLibrarySurface: ScreenshotSurfaceResolver.Surface?
+  #endif
 }
 
 extension View {
@@ -324,7 +352,7 @@ extension View {
   /// screenshot-mode flag and surface, and its preferences suite as the default
   /// `@AppStorage` store.
   func photoExportEnvironment(_ core: AppCore) -> some View {
-    self.environmentObject(core.exportDestinationManager)
+    let root = self.environmentObject(core.exportDestinationManager)
       .environment(core.photoLibraryManager)
       .environment(core.exportManager)
       .environment(core.exportManager.progressState)
@@ -333,12 +361,17 @@ extension View {
       .environmentObject(core.lifecycleCoordinator)
       .environmentObject(core.autoSyncManager)
       .environmentObject(core.autoSyncScopeStore)
-      .environmentObject(core.autoSyncPhotoChangeAdapter)
+      .environment(\.photoChangeAdapter, core.autoSyncPhotoChangeAdapter)
       .environmentObject(core.destinationSafetyMonitor)
       .environment(core.loginItemController)
       .environment(core.whatsNewState)
       .environment(\.isScreenshotMode, core.composition.isScreenshotMode)
       .environment(\.screenshotSurfaceKey, core.composition.screenshotSurfaceKey)
       .defaultAppStorage(core.composition.defaults)
+    #if DEBUG
+      return root.environment(\.controlLibrarySurface, core.composition.controlLibrarySurface)
+    #else
+      return root
+    #endif
   }
 }

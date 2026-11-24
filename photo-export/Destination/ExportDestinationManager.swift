@@ -45,6 +45,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// unavailable invariant (see `validate`).
   var destinationId: String? { identity.stableId }
 
+  #if DEBUG
+    var controlStateChanges: AnyPublisher<Void, Never> {
+      Publishers.Merge4(
+        $selectedFolderURL.map { _ in () }, $isAvailable.map { _ in () },
+        $status.map { _ in () }, $identity.map { _ in () }
+      ).eraseToAnyPublisher()
+    }
+  #endif
+
   private let fileSystem: any FileSystemService
   private var directoryGeneration: Int?
   private var directoryAccess: DestinationDirectoryAccess?
@@ -89,6 +98,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private var volumeObservers: [NSObjectProtocol] = []
   private let volumeNotificationCenter: NotificationCenter
+  // App-owned destinations can access a private folder without obtaining a security scope.
+  private let localAccess: ((URL) -> Bool)?
   private let validationScopeAcquirer: ((URL) -> Bool)?
   private let validationScopeReleaser: ((URL) -> Void)?
 
@@ -288,6 +299,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     volumeNotificationCenter: NotificationCenter? = nil,
     validationScopeAcquirer: ((URL) -> Bool)? = nil,
     validationScopeReleaser: ((URL) -> Void)? = nil,
+    localAccess: ((URL) -> Bool)? = nil,
     fileSystem: any FileSystemService = FileIOService(),
     validationProbe: any DestinationValidationProbing = ProductionDestinationValidationProbe()
   ) {
@@ -296,6 +308,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       "Validation scope acquisition and release must be injected together")
     self.volumeNotificationCenter =
       volumeNotificationCenter ?? NSWorkspace.shared.notificationCenter
+    self.localAccess = localAccess
     self.validationScopeAcquirer = validationScopeAcquirer
     self.validationScopeReleaser = validationScopeReleaser
     self.fileSystem = fileSystem
@@ -485,11 +498,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// The caller MUST pass the returned URL to `endScopedAccess(for:)` when done.
   func beginScopedAccess() -> URL? {
     guard let url = selectedFolderURL else { return nil }
+    if let localAccess { return localAccess(url) ? url : nil }
     return url.startAccessingSecurityScopedResource() ? url : nil
   }
 
   func endScopedAccess(for url: URL) {
-    url.stopAccessingSecurityScopedResource()
+    if localAccess == nil { url.stopAccessingSecurityScopedResource() }
   }
 
   /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.
@@ -530,7 +544,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     _ url: URL, decision: FolderSelectionDecision,
     onValidated: @escaping @MainActor () -> Void = {}
   ) -> Bool {
-    guard saveSelection(url, decision: decision) else { return false }
+    guard localAccess?(url) != false, saveSelection(url, decision: decision) else { return false }
     validate(url: url, onValidated: onValidated)
     return true
   }

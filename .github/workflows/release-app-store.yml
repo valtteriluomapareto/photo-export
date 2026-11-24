@@ -94,6 +94,9 @@ jobs:
       - name: Check archived app
         run: bash scripts/ci/check-built-app.sh --app "${ARCHIVE_PATH}/Products/Applications/${APP_NAME}.app"
 
+      - name: Verify Release excludes the control plane
+        run: python3 -B scripts/ci/check-control-exclusion.py "${ARCHIVE_PATH}/Products/Applications/${APP_NAME}.app"
+
       # ── Export ────────────────────────────────────────────────────────
       - name: Export
         run: bash scripts/ci/export-appstore.sh
