@@ -6,7 +6,7 @@ Usage:
 
 The input is a `screencapture -o -l<window>` capture with transparent corners. The output
 is a 2880x1800 PNG without alpha: the app icon's blue-to-lavender gradient, the headline
-in SF Pro Bold (built into macOS) and the window scaled below it with a soft shadow.
+in SF Pro Semibold (built into macOS) and the window scaled below it with a soft shadow.
 
 Requires Pillow (`python3 -m pip install Pillow`).
 """
@@ -22,7 +22,7 @@ CANVAS = (2880, 1800)
 GRADIENT = ((0xB9, 0xD4, 0xF8), (0xE2, 0xD3, 0xF6))
 HEADLINE_COLOR = (0x1D, 0x2B, 0x4F)
 FONT = Path("/System/Library/Fonts/SFNS.ttf")
-FONT_SIZE = 112
+FONT_SIZE = 92
 HEADLINE_CENTER_Y = 170
 WINDOW_TOP = 330
 BOTTOM_MARGIN = 70
@@ -42,7 +42,7 @@ def gradient() -> Image.Image:
 
 def headline_font() -> ImageFont.FreeTypeFont:
     font = ImageFont.truetype(str(FONT), FONT_SIZE)
-    font.set_variation_by_name("Bold")
+    font.set_variation_by_name("Semibold")
     return font
 
 
