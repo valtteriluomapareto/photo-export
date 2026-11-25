@@ -69,6 +69,13 @@ struct ScreenshotSurfaceResolverTests {
     #expect(result?.selection == .album(collectionId: "family"))
   }
 
+  @Test func collectionsSummerAlbumKey() {
+    let result = ScreenshotSurfaceResolver.resolve(
+      from: ["app", "--screenshot-surface=collections-album-summer"])
+    #expect(result?.section == .collections)
+    #expect(result?.selection == .album(collectionId: "summer"))
+  }
+
   @Test func collectionsPorvooAlbumKey() {
     let result = ScreenshotSurfaceResolver.resolve(
       from: ["app", "--screenshot-surface=collections-album-porvoo"])
@@ -146,7 +153,7 @@ struct ScreenshotSurfaceResolverTests {
   @Test func singleSelectSurfacesHaveNoAdditionalSelections() {
     let keys = [
       "timeline", "collections-favorites", "collections-album-family",
-      "collections-album-porvoo", "collections-folder-trips",
+      "collections-album-summer", "collections-album-porvoo", "collections-folder-trips",
       "collections-album-london", "collections-album-paris",
       "collections-shared-album-family-stream",
     ]

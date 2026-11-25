@@ -77,6 +77,8 @@ enum ScreenshotSurfaceResolver {
       return Surface(section: .collections, selection: .favorites)
     case "collections-album-family":
       return Surface(section: .collections, selection: .album(collectionId: "family"))
+    case "collections-album-summer":
+      return Surface(section: .collections, selection: .album(collectionId: "summer"))
     case "collections-album-porvoo":
       return Surface(section: .collections, selection: .album(collectionId: "porvoo"))
     case "collections-folder-trips":

@@ -1,14 +1,14 @@
 Bundled stock photos for screenshot mode
 ==========================================
 
-These 27 JPEGs are the curated content the app shows when launched with
+These 46 JPEGs are the curated content the app shows when launched with
 `--screenshot-mode` for marketing-screenshot capture. The plan and design
 notes live in `docs/project/plans/screenshot-automation-plan.md`.
 
 Files and sources
 -----------------
 
-family-1.jpeg .. family-6.jpeg
+family-1.jpg .. family-6.jpg
   Synthetic. Generated with OpenAI ChatGPT (image generation).
   Used here as illustrative "family album" content for the screenshot
   mode. AI-generated images are not copyrightable under current US
@@ -17,6 +17,9 @@ family-1.jpeg .. family-6.jpeg
 porvoo-1.jpeg .. porvoo-7.jpeg
 london-1.jpeg .. london-7.jpeg
 paris-1.jpeg  .. paris-7.jpeg
+summer-1.jpg  .. summer-12.jpg
+winter-1.jpg  .. winter-4.jpg
+tampere-1.jpg .. tampere-3.jpg
   Photographs taken by Valtteri Luoma (the maintainer), used here with
   permission. © Valtteri Luoma. Bundled inside the app target for the
   sole purpose of populating the screenshot-mode synthetic library;
@@ -35,7 +38,7 @@ into every build rather than `#if DEBUG`-gate them, so that:
   which means the reproducibility property survives across release
   cuts.
 
-The trade-off is ~10 MB of binary bloat shipped to App Store users who
+The trade-off is ~15 MB of binary bloat shipped to App Store users who
 never see these photos. Acceptable given the binary size.
 
 If file size becomes a concern, the gate is one `#if DEBUG` around the

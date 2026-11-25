@@ -43,7 +43,7 @@ PAD_SCRIPT = REPO / "scripts/prepare-app-store-screenshot.py"
 STORE_SURFACES = [
     "timeline",
     "timeline-multi-select",
-    "collections-album-family",
+    "collections-album-summer",
     "collections-folder-trips",
     "collections-favorites",
 ]
