@@ -4,7 +4,8 @@
 Builds Release under its own bundle id, then for each surface clears that bundle id's
 preferences and app data, launches the app with `--screenshot-mode` on the curated
 synthetic library, waits until the window's pixels stop changing, captures the window
-and pads it to 2880x1800 with no alpha. The installed app's settings and data are never
+and frames it with `frame.py`: a 2880x1800 image without alpha, with a gradient
+background and the surface's headline. The installed app's settings and data are never
 read or written, even while it is running.
 
 Usage:
@@ -36,24 +37,25 @@ DERIVED = REPO / "build/screenshots"
 APP = DERIVED / "Build/Products/Release/Photo Export.app"
 EXECUTABLE = APP / "Contents/MacOS/Photo Export"
 OUTPUT = REPO / "screenshots/app-store"
-PAD_SCRIPT = REPO / "scripts/prepare-app-store-screenshot.py"
+FRAME_SCRIPT = REPO / "scripts/screenshots/frame.py"
 
-# Keys from ScreenshotSurfaceResolver.resolve(key:), the source of truth. The app reports
-# the surface it opened, so a key that drifts from the resolver fails after the build.
-STORE_SURFACES = [
-    "timeline",
-    "timeline-multi-select",
-    "collections-album-summer",
-    "collections-folder-trips",
-    "collections-favorites",
-]
+# Keys from ScreenshotSurfaceResolver.resolve(key:), the source of truth, in store order,
+# with each image's headline. The app reports the surface it opened, so a key that drifts
+# from the resolver fails after the build.
+STORE_SURFACES = {
+    "timeline": "Every photo, backed up by month",
+    "timeline-multi-select": "Export years or months in one go",
+    "collections-album-summer": "Albums export as folders",
+    "collections-folder-trips": "Folders keep their structure",
+    "collections-favorites": "Your favorites, safe on your drive",
+}
 WINDOW_POINTS = (1360, 850)
 RAW_PIXELS = (WINDOW_POINTS[0] * 2, WINDOW_POINTS[1] * 2)
-STORE_SIZE = "2880x1800"
-BACKGROUND = "E5E5EA"
+STORE_SIZE = (2880, 1800)
 SURFACE_TIMEOUT = 30.0
 POLL_INTERVAL = 0.5
 MATCHING_FRAMES = 3
+CLOSE_BUTTON = (52, 52)  # pixel inside the red close button of a raw capture
 
 
 class Failure(Exception):
@@ -132,6 +134,15 @@ def same_pixels(first: Path, second: Path) -> bool:
         return ImageChops.difference(a.convert("RGBA"), b.convert("RGBA")).getbbox() is None
 
 
+def window_is_active(path: Path) -> bool:
+    """True when the close button is red; an inactive window draws it grey."""
+    from PIL import Image
+
+    with Image.open(path) as image:
+        red, green, _ = image.convert("RGB").getpixel(CLOSE_BUTTON)
+    return red - green > 60
+
+
 def wait_for_window(window_file: Path, key: str, deadline: float) -> int:
     while time.monotonic() < deadline:
         if window_file.exists():
@@ -172,9 +183,11 @@ def capture_surface(key: str, destination: Path) -> None:
                 raise Failure(f"[{key}] screencapture failed. Grant this terminal Screen "
                               "Recording permission in System Settings > Privacy & Security."
                               ) from error
-            # The window server applies the app's resize shortly after the window appears.
+            # The window server applies the app's resize shortly after the window appears,
+            # and the app takes focus from the app in front.
             size = image_size(shot)
-            if size != RAW_PIXELS:
+            active = size == RAW_PIXELS and window_is_active(shot)
+            if not active:
                 previous = None
             else:
                 matches = matches + 1 if previous and same_pixels(previous, shot) else 1
@@ -189,15 +202,17 @@ def capture_surface(key: str, destination: Path) -> None:
             f"[{key}] captured {size[0]}x{size[1]} pixels, expected "
             f"{RAW_PIXELS[0]}x{RAW_PIXELS[1]}. This needs a 2x display with room for a "
             f"{WINDOW_POINTS[0]}x{WINDOW_POINTS[1]}-point window.")
+    if not active:
+        raise Failure(f"[{key}] the window never became active. Another app kept focus; "
+                      "leave the Mac alone while the capture runs.")
     raise Failure(f"[{key}] the window was still changing after {SURFACE_TIMEOUT:.0f} s")
 
 
-def pad(raw: Path, output: Path) -> None:
-    run([sys.executable, str(PAD_SCRIPT), str(raw), "-o", str(output),
-         "--size", STORE_SIZE, "--background", BACKGROUND], stdout=subprocess.DEVNULL)
-    width, height = (int(value) for value in STORE_SIZE.split("x"))
-    if image_size(output) != (width, height) or has_alpha(output):
-        raise Failure(f"{output.name} is not a {STORE_SIZE} image without alpha")
+def frame(raw: Path, output: Path, headline: str) -> None:
+    run([sys.executable, str(FRAME_SCRIPT), str(raw), str(output), headline])
+    if image_size(output) != STORE_SIZE or has_alpha(output):
+        raise Failure(f"{output.name} is not a {STORE_SIZE[0]}x{STORE_SIZE[1]} image "
+                      "without alpha")
 
 
 def surfaces_from(arguments: list[str]) -> list[str]:
@@ -205,7 +220,7 @@ def surfaces_from(arguments: list[str]) -> list[str]:
     if unknown:
         raise SystemExit(f"Unknown surface: {', '.join(unknown)}\nStore surfaces:\n  "
                          + "\n  ".join(STORE_SURFACES))
-    return arguments or STORE_SURFACES
+    return arguments or list(STORE_SURFACES)
 
 
 def main(arguments: list[str]) -> int:
@@ -213,14 +228,15 @@ def main(arguments: list[str]) -> int:
     try:
         require_pillow()
         build()
-        if keys == STORE_SURFACES:
+        if keys == list(STORE_SURFACES):
             shutil.rmtree(OUTPUT, ignore_errors=True)
         OUTPUT.mkdir(parents=True, exist_ok=True)
         try:
             for key in keys:
                 raw = OUTPUT / f".raw-{key}.png"
                 capture_surface(key, raw)
-                pad(raw, OUTPUT / f"{STORE_SURFACES.index(key) + 1:02d}-{key}.png")
+                number = list(STORE_SURFACES).index(key) + 1
+                frame(raw, OUTPUT / f"{number:02d}-{key}.png", STORE_SURFACES[key])
                 raw.unlink()
         finally:
             quit_app()

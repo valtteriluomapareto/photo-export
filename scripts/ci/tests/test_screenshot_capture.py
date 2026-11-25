@@ -67,7 +67,7 @@ class CaptureSurfaceTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.clock = clock
 
-    def capture(self, app, size=capture.RAW_PIXELS, same=None, early_sizes=()):
+    def capture(self, app, size=capture.RAW_PIXELS, same=None, early_sizes=(), active=None):
         def compare(first, second):
             # Each capture is compared with the one just before it.
             self.assertEqual(frame_number(second), frame_number(first) + 1)
@@ -76,6 +76,8 @@ class CaptureSurfaceTests(unittest.TestCase):
         with mock.patch.object(capture, 'run', app.run), \
                 mock.patch.object(capture, 'image_size',
                                   side_effect=lambda path: next(sizes, size)), \
+                mock.patch.object(capture, 'window_is_active',
+                                  side_effect=lambda path: (active or (lambda: True))()), \
                 mock.patch.object(capture, 'same_pixels', side_effect=compare):
             capture.capture_surface('timeline', self.destination)
 
@@ -104,6 +106,16 @@ class CaptureSurfaceTests(unittest.TestCase):
     def test_captures_before_the_resize_lands_are_skipped(self):
         self.capture(FakeApp(), early_sizes=[(2724, 1704), (2724, 1704)])
         self.assertEqual(self.destination.read_text(), 'frame 5')
+
+    def test_inactive_captures_are_skipped_until_the_window_takes_focus(self):
+        states = iter([False, True])
+        self.capture(FakeApp(), active=lambda: next(states, True))
+        self.assertEqual(self.destination.read_text(), 'frame 4')
+
+    def test_a_window_that_never_takes_focus_fails(self):
+        with self.assertRaisesRegex(capture.Failure, 'never became active'):
+            self.capture(FakeApp(), active=lambda: False)
+        self.assertFalse(self.destination.exists())
 
     def test_a_window_that_never_reaches_the_size_fails(self):
         with self.assertRaisesRegex(capture.Failure, r'captured 5440x3400 .* 2x display'):
@@ -181,22 +193,27 @@ class SipsTests(unittest.TestCase):
             self.assertFalse(capture.has_alpha(Path('/tmp/shot.png')))
 
 
-class PadTests(unittest.TestCase):
-    def pad(self, alpha):
+class FrameTests(unittest.TestCase):
+    def frame(self, size=(2880, 1800), alpha=False):
         app = FakeApp()
         with mock.patch.object(capture, 'run', app.run), \
-                mock.patch.object(capture, 'image_size', return_value=(2880, 1800)), \
+                mock.patch.object(capture, 'image_size', return_value=size), \
                 mock.patch.object(capture, 'has_alpha', return_value=alpha):
-            capture.pad(Path('raw.png'), Path('01-timeline.png'))
+            capture.frame(Path('raw.png'), Path('01-timeline.png'), 'Headline')
         return app.commands[0]
 
-    def test_pads_to_the_store_size(self):
-        command = self.pad(alpha=False)
-        self.assertEqual(command[command.index('--size') + 1], '2880x1800')
+    def test_frames_with_the_headline(self):
+        command = self.frame()
+        self.assertEqual(command[1:], [str(capture.FRAME_SCRIPT), 'raw.png', '01-timeline.png',
+                                       'Headline'])
+
+    def test_an_image_of_another_size_fails(self):
+        with self.assertRaisesRegex(capture.Failure, '2880x1800 image without alpha'):
+            self.frame(size=(2560, 1600))
 
     def test_an_image_with_alpha_fails(self):
         with self.assertRaisesRegex(capture.Failure, 'without alpha'):
-            self.pad(alpha=True)
+            self.frame(alpha=True)
 
 
 class CommandLineTests(unittest.TestCase):
@@ -221,10 +238,12 @@ class CommandLineTests(unittest.TestCase):
                     mock.patch.object(capture, 'quit_app'), \
                     mock.patch.object(capture, 'capture_surface',
                                       side_effect=lambda key, raw: raw.write_text(key)), \
-                    mock.patch.object(capture, 'pad',
-                                      side_effect=lambda raw, out: captured.append(out.name)):
+                    mock.patch.object(capture, 'frame',
+                                      side_effect=lambda raw, out, headline: captured.append(
+                                          (out.name, headline))):
                 self.assertEqual(capture.main(['collections-favorites']), 0)
-            self.assertEqual(captured, ['05-collections-favorites.png'])
+            self.assertEqual(captured, [('05-collections-favorites.png',
+                                         capture.STORE_SURFACES['collections-favorites'])])
             self.assertEqual((output / '01-timeline.png').read_text(), 'kept')
 
 

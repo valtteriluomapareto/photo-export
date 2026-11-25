@@ -251,6 +251,9 @@ final class AppCore {
         x: screenFrame.midX - size.width / 2, y: screenFrame.midY - size.height / 2)
       window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
     }
+    // An inactive window captures with grey controls, so take focus from the app in front.
+    NSApp.activate()
+    window.makeKeyAndOrderFront(nil)
     writeScreenshotWindowFile(windowNumber: window.windowNumber)
   }
 
