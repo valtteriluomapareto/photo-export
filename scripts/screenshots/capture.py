@@ -102,6 +102,10 @@ def reset_domain() -> None:
     """Start every launch from empty preferences, app data and saved window state."""
     run(["defaults", "delete", BUNDLE_ID], check=False,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # The store listing is English, so dates and sizes must not follow this Mac's region.
+    # AppKit drops the window when these come as -Apple* launch arguments.
+    run(["defaults", "write", BUNDLE_ID, "AppleLocale", "en_US"])
+    run(["defaults", "write", BUNDLE_ID, "AppleLanguages", "-array", "en"])
     library = Path.home() / "Library"
     for path in (library / "Application Support" / BUNDLE_ID,
                  library / "Saved Application State" / f"{BUNDLE_ID}.savedState"):
@@ -111,7 +115,8 @@ def reset_domain() -> None:
 def image_size(path: Path) -> tuple[int, int]:
     output = run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
                  capture_output=True).stdout
-    values = dict(line.split(":", 1) for line in output.splitlines()[1:] if ":" in line)
+    values = dict((part.strip() for part in line.split(":", 1))
+                  for line in output.splitlines()[1:] if ":" in line)
     return int(values["pixelWidth"]), int(values["pixelHeight"])
 
 
@@ -167,20 +172,23 @@ def capture_surface(key: str, destination: Path) -> None:
                 raise Failure(f"[{key}] screencapture failed. Grant this terminal Screen "
                               "Recording permission in System Settings > Privacy & Security."
                               ) from error
+            # The window server applies the app's resize shortly after the window appears.
             size = image_size(shot)
             if size != RAW_PIXELS:
-                raise Failure(
-                    f"[{key}] captured {size[0]}x{size[1]} pixels, expected "
-                    f"{RAW_PIXELS[0]}x{RAW_PIXELS[1]}. This needs a 2x display with room for a "
-                    f"{WINDOW_POINTS[0]}x{WINDOW_POINTS[1]}-point window, and Screen Recording "
-                    "permission for this terminal.")
-            matches = matches + 1 if previous and same_pixels(previous, shot) else 1
-            if matches == MATCHING_FRAMES:
-                shutil.move(shot, destination)
-                print(f"==> [{key}] stable after {attempt} captures")
-                return
-            previous = shot
+                previous = None
+            else:
+                matches = matches + 1 if previous and same_pixels(previous, shot) else 1
+                if matches == MATCHING_FRAMES:
+                    shutil.move(shot, destination)
+                    print(f"==> [{key}] stable after {attempt} captures")
+                    return
+                previous = shot
             time.sleep(POLL_INTERVAL)
+    if size != RAW_PIXELS:
+        raise Failure(
+            f"[{key}] captured {size[0]}x{size[1]} pixels, expected "
+            f"{RAW_PIXELS[0]}x{RAW_PIXELS[1]}. This needs a 2x display with room for a "
+            f"{WINDOW_POINTS[0]}x{WINDOW_POINTS[1]}-point window.")
     raise Failure(f"[{key}] the window was still changing after {SURFACE_TIMEOUT:.0f} s")
 
 

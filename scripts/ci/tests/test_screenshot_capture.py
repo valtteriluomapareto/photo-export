@@ -67,13 +67,15 @@ class CaptureSurfaceTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.clock = clock
 
-    def capture(self, app, size=capture.RAW_PIXELS, same=None):
+    def capture(self, app, size=capture.RAW_PIXELS, same=None, early_sizes=()):
         def compare(first, second):
             # Each capture is compared with the one just before it.
             self.assertEqual(frame_number(second), frame_number(first) + 1)
             return (same or (lambda: True))()
+        sizes = iter(early_sizes)
         with mock.patch.object(capture, 'run', app.run), \
-                mock.patch.object(capture, 'image_size', return_value=size), \
+                mock.patch.object(capture, 'image_size',
+                                  side_effect=lambda path: next(sizes, size)), \
                 mock.patch.object(capture, 'same_pixels', side_effect=compare):
             capture.capture_surface('timeline', self.destination)
 
@@ -99,9 +101,14 @@ class CaptureSurfaceTests(unittest.TestCase):
             self.capture(app)
         self.assertEqual(app.frames, 0)
 
-    def test_a_capture_of_the_wrong_size_fails(self):
+    def test_captures_before_the_resize_lands_are_skipped(self):
+        self.capture(FakeApp(), early_sizes=[(2724, 1704), (2724, 1704)])
+        self.assertEqual(self.destination.read_text(), 'frame 5')
+
+    def test_a_window_that_never_reaches_the_size_fails(self):
         with self.assertRaisesRegex(capture.Failure, r'captured 5440x3400 .* 2x display'):
             self.capture(FakeApp(), size=(5440, 3400))
+        self.assertGreaterEqual(self.clock.now, capture.SURFACE_TIMEOUT)
         self.assertFalse(self.destination.exists())
 
     def test_a_failed_screencapture_names_screen_recording(self):
@@ -152,7 +159,26 @@ class IsolationTests(unittest.TestCase):
                     mock.patch.object(capture, 'run', app.run):
                 capture.reset_domain()
             self.assertEqual([path.exists() for path in paths], [False, False, True, True])
-            self.assertEqual(app.commands, [['defaults', 'delete', capture.BUNDLE_ID]])
+            self.assertEqual(app.commands, [
+                ['defaults', 'delete', capture.BUNDLE_ID],
+                ['defaults', 'write', capture.BUNDLE_ID, 'AppleLocale', 'en_US'],
+                ['defaults', 'write', capture.BUNDLE_ID, 'AppleLanguages', '-array', 'en']])
+
+
+class SipsTests(unittest.TestCase):
+    def sips(self, *lines):
+        output = '\n'.join(['/tmp/shot.png', *lines]) + '\n'
+        return mock.patch.object(capture, 'run', return_value=mock.Mock(stdout=output))
+
+    def test_reads_the_size_from_indented_sips_output(self):
+        with self.sips('  pixelWidth: 2720', '  pixelHeight: 1700'):
+            self.assertEqual(capture.image_size(Path('/tmp/shot.png')), (2720, 1700))
+
+    def test_reads_alpha_from_indented_sips_output(self):
+        with self.sips('  hasAlpha: yes'):
+            self.assertTrue(capture.has_alpha(Path('/tmp/shot.png')))
+        with self.sips('  hasAlpha: no'):
+            self.assertFalse(capture.has_alpha(Path('/tmp/shot.png')))
 
 
 class PadTests(unittest.TestCase):
