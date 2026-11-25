@@ -96,15 +96,15 @@ enum ScreenshotSurfaceResolver {
     case "timeline-multi-select":
       // Highlights two prior years + a month in
       // the current year so the sidebar shows three rows selected and the
-      // toolbar reads "Export 3 Items". Focus on the current month so the
-      // content pane renders MonthContentView's populated grid (the most
-      // photogenic preview for a marketing capture).
+      // toolbar reads "Export 3 Items". Focus on the previous month, so this
+      // capture shows a different grid from `timeline`; in January the
+      // current month, since December would sit inside a highlighted year.
       let cal = Calendar(identifier: .gregorian)
       let currentYear = cal.component(.year, from: now)
       let currentMonth = cal.component(.month, from: now)
       return Surface(
         section: .timeline,
-        selection: .timelineMonth(year: currentYear, month: currentMonth),
+        selection: .timelineMonth(year: currentYear, month: max(currentMonth - 1, 1)),
         additionalSelections: [
           .timelineYear(year: currentYear - 1),
           .timelineYear(year: currentYear - 2),

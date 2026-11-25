@@ -153,8 +153,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   /// Favorites surfaces 12 highlights mixed across the albums, interleaved so neighbouring
   /// tiles come from different albums. Low indices are each album's chosen "hero" shots.
   private static let favoriteAssetIds: [String] = [
-    "summer-1", "family-1", "winter-1", "porvoo-1",
-    "london-1", "summer-4", "paris-1", "tampere-1",
+    "summer-4", "family-1", "winter-1", "porvoo-1",
+    "london-1", "summer-1", "paris-1", "tampere-1",
     "winter-2", "summer-3", "family-2", "porvoo-2",
   ]
 
@@ -167,9 +167,10 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   /// Each timeline id's month (0 is the current month, counting back) and its position in it.
   /// The albums are interleaved so a run of consecutive ids comes from different albums, and
   /// every month holds distinct photos. Family stream repeats the Family ids, so it stays out.
-  /// The order puts a Summer photo first: the timeline surfaces select it for the detail pane.
+  /// Each month's first photo fills the detail pane; this order opens the current month on the
+  /// aurora and gives the store captures different main photos.
   private static let timelinePlacement: [String: (monthsBack: Int, position: Int)] = {
-    let albums = ["summer", "family", "winter", "porvoo", "london", "tampere", "paris"]
+    let albums = ["winter", "summer", "family", "porvoo", "london", "tampere", "paris"]
     let interleaved = (0..<assetsPerAlbum).flatMap { index in
       albums.compactMap { assetIdsByAlbum[$0]?[index] }
     }
