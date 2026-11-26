@@ -181,9 +181,13 @@ Settings. The former menu comment specified:
 
 > Add an `NSStatusItem` (menu bar item) **in MVP** with: Enable/Disable Auto Export, Export Now, current status, Open Issues, Open Settings. Required because launch-at-login starts the app without showing the main window.
 
-The shipped menu uses SwiftUI `MenuBarExtra` and has Open Settings, with no dedicated
-Open Issues action. The archived startup-presentation rationale
-is historical; this contract does not promise a hidden main window at login.
+The shipped menu uses SwiftUI `MenuBarExtra` and has Open Photo Export and Open Settings,
+with no dedicated Open Issues action. A hidden main window at launch is the separate,
+opt-in **Open in the menu bar** setting ([`MenuBarMode`](../../photo-export/App/MenuBarMode.swift)),
+independent of launch at login: such a launch restores no window and starts the core one
+main-queue turn after launch finishes; the app is `.accessory` while no window is open
+and Photos access is decided. With the setting on or off, the window caches are freed when
+the last window closes.
 
 The former supersession comment stated:
 
@@ -210,7 +214,10 @@ The former login-controller comments specified:
 > On `unregister()`, poll status when the Settings window becomes key; if status remains `.enabled`, surface a 'Still showing in Login Items? Open Login Items…' hint because System Settings does not notify the app.
 
 These are status/reporting instructions, not a promise of closed-app execution.
-Quitting the app stops Auto Export. Manual exports requested during automatic work use the
+Quitting the app stops Auto Export (`AppCore.stopForQuit`): it asks first during a manual
+export (not at logout or shutdown), stops an Auto Export run quietly without recording its
+summary, waits up to `AppCore.quitTimeout` for an already admitted final commit and the
+history flush, and keeps the saved setting and pending work so the next launch resumes. Manual exports requested during automatic work use the
 existing confirmation/supersession path. Detailed cancellation ownership remains in
 [architecture conventions](architecture-conventions.md#1-cancellation-contract).
 

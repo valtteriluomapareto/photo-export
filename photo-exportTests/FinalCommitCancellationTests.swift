@@ -702,4 +702,138 @@ struct FinalCommitCancellationTests {
       await f.cleanup()
     }
   }
+
+  // MARK: - Quit
+
+  /// Quitting during an export the user started asks first, also while it is paused, unless
+  /// the system is logging out. Declining leaves the export running. Accepting stops it, and
+  /// the quit replies only after the final commit that was already admitted has recorded its
+  /// file and the history is flushed, exactly once.
+  @Test(.timeLimit(.minutes(2)))
+  func quitWaitsForTheAdmittedFinalCommitThenRepliesOnce() async throws {
+    let f = try await Fixture(collection: false, phase: .move)
+    let clock = TestClock()
+    var replies = 0
+    var recordedAtReply = false
+    try await withCleanup {
+      f.start()
+      try #require(await f.gate.entered.waitForEnter(count: 1))
+      #expect(!AppCore.asksBeforeQuitting(exportManager: f.manager, isSystemQuit: true))
+      f.manager.pause()
+      #expect(AppCore.asksBeforeQuitting(exportManager: f.manager, isSystemQuit: false))
+      f.manager.resume()
+
+      var asked = 0
+      var stops = 0
+      let declined = AppCore.terminateReply(
+        exportManager: f.manager, isSystemQuit: false,
+        confirm: {
+          asked += 1
+          return false
+        }, stop: { stops += 1 })
+      #expect(declined == .terminateCancel)
+      #expect(asked == 1 && stops == 0)
+      #expect(f.manager.hasActiveExportWork)
+
+      let accepted = AppCore.terminateReply(
+        exportManager: f.manager, isSystemQuit: false, confirm: { true },
+        stop: {
+          AppCore.stopExportsForQuit(
+            exportManager: f.manager, timelineStore: f.timeline,
+            collectionStore: f.collections, clock: clock
+          ) {
+            replies += 1
+            recordedAtReply =
+              f.variants()[.original]?.status == .done && f.timeline.hasDurableRecords
+          }
+        })
+      #expect(accepted == .terminateLater)
+      #expect(!f.manager.hasActiveExportWork)
+      clock.advance(by: AppCore.quitTimeout - 1)
+      for _ in 0..<20 { await Task.yield() }
+      #expect(replies == 0)
+
+      f.gate.release()
+      #expect(await eventually("the quit replied") { replies == 1 })
+      #expect(recordedAtReply)
+      clock.advance(by: AppCore.quitTimeout)
+      #expect(replies == 1)
+    } cleanup: {
+      await f.cleanup()
+    }
+  }
+
+  /// A final commit that doesn't finish can't hold the quit past `quitTimeout`, and its late
+  /// completion doesn't reply again.
+  @Test(.timeLimit(.minutes(2)))
+  func quitRepliesOnceAtTheTimeoutWhenTheCommitHangs() async throws {
+    let f = try await Fixture(collection: false, phase: .timestamps)
+    let clock = TestClock()
+    var replies = 0
+    try await withCleanup {
+      f.start()
+      try #require(await f.gate.entered.waitForEnter(count: 1))
+      AppCore.stopExportsForQuit(
+        exportManager: f.manager, timelineStore: f.timeline, collectionStore: f.collections,
+        clock: clock
+      ) { replies += 1 }
+      clock.advance(by: AppCore.quitTimeout)
+      #expect(replies == 1)
+
+      f.gate.release()
+      await f.manager.waitForAdmittedFinalCommit()
+      try await f.flush()
+      #expect(f.variants()[.original]?.status == .done)
+      #expect(replies == 1)
+    } cleanup: {
+      await f.cleanup()
+    }
+  }
+
+  /// An Auto Export run stops without asking.
+  @Test(.timeLimit(.minutes(2)))
+  func quitDuringAutoExportDoesNotAsk() async throws {
+    let f = try await Fixture(collection: false, phase: .move)
+    var run: Task<ExportRunSummary, Never>?
+    try await withCleanup {
+      f.photos.yearCounts = [(2025, 1)]
+      let context = ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited)
+      run = Task { await f.manager.runExport(context: context) }
+      try #require(await f.gate.entered.waitForEnter(count: 1))
+      #expect(f.manager.hasActiveExportWork)
+      var asked = false
+      var stopped = false
+      let reply = AppCore.terminateReply(
+        exportManager: f.manager, isSystemQuit: false,
+        confirm: {
+          asked = true
+          return false
+        }, stop: { stopped = true })
+      #expect(reply == .terminateLater)
+      #expect(!asked && stopped)
+    } cleanup: {
+      await f.cleanup()
+      _ = await run?.value
+    }
+  }
+
+  /// With nothing exporting, a quit neither asks nor waits for the timeout.
+  @Test(.timeLimit(.minutes(2)))
+  func idleQuitRepliesWithoutWaitingForTheTimeout() async throws {
+    let f = try await Fixture(collection: false, phase: .move)
+    let clock = TestClock()
+    var replies = 0
+    try await withCleanup {
+      #expect(!AppCore.asksBeforeQuitting(exportManager: f.manager, isSystemQuit: false))
+      AppCore.stopExportsForQuit(
+        exportManager: f.manager, timelineStore: f.timeline, collectionStore: f.collections,
+        clock: clock
+      ) { replies += 1 }
+      #expect(await eventually("the quit replied") { replies == 1 })
+    } cleanup: {
+      await f.cleanup()
+    }
+  }
 }

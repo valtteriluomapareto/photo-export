@@ -1309,7 +1309,7 @@ final class ExportManager {
   func cancelAndClear() {
     progressState.beginSourceUpdates()
     defer { progressState.endSourceUpdates() }
-    logger.info("Cancelling current export and clearing queue due to destination change")
+    logger.info("Cancelling current export and clearing queue")
     importCoordinator.clearPreviousBackupMissing()
     teardownActiveWork()
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
@@ -2261,6 +2261,13 @@ final class ExportManager {
 
   func beginProgressUpdates() { progressState.beginSourceUpdates() }
   func endProgressUpdates() { progressState.endSourceUpdates() }
+
+  /// After a cancellation: waits for its record cleanup and for a final commit admitted
+  /// before it to finish recording its file. Quitting waits for this before exiting.
+  func waitForAdmittedFinalCommit() async {
+    await recordStoreRouter.waitForCancellationCleanup()
+    await variantExporter.waitForFinalCommit(onWait: nil)
+  }
 
   /// Internal observation seam for deterministic tests of final-commit admission.
   @ObservationIgnored var finalCommitWaitObserver: (() -> Void)?

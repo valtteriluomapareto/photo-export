@@ -11,7 +11,9 @@ import SwiftUI
 /// type holds the core's remaining `ObservableObject`s as `@StateObject`s and lays out the
 /// scenes.
 struct PhotoExportApp: App {
+  @NSApplicationDelegateAdaptor(PhotoExportAppDelegate.self) private var appDelegate
   private let core: AppCore
+  private let menuBarMode: MenuBarModeController
   #if DEBUG
     private let control: ControlRuntime?
   #endif
@@ -23,11 +25,13 @@ struct PhotoExportApp: App {
     return CGSize(width: 1280, height: 800)
   }
 
+  /// A launch with no window restores none either: a window open at the last quit would
+  /// otherwise come back.
   private var restoration: SceneRestorationBehavior {
     #if DEBUG
       if control != nil { return .disabled }
     #endif
-    return .automatic
+    return menuBarMode.opensWithoutWindow ? .disabled : .automatic
   }
   // AppCore owns the shared graph. These wrappers retain its ObservableObject services;
   // Observation owners are injected directly through photoExportEnvironment(core).
@@ -53,6 +57,13 @@ struct PhotoExportApp: App {
       let core = AppCore(composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
     #endif
     self.core = core
+    menuBarMode = MenuBarModeController(
+      core: core,
+      opensWithoutWindow: MenuBarMode.opensWithoutWindow(
+        defaults: core.composition.defaults, isScreenshotMode: core.composition.isScreenshotMode),
+      activationPolicy: { NSApplication.shared.activationPolicy() },
+      setActivationPolicy: { NSApplication.shared.setActivationPolicy($0) })
+    PhotoExportAppDelegate.menuBarMode = menuBarMode
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
     _autoSyncManager = StateObject(wrappedValue: core.autoSyncManager)
@@ -78,7 +89,8 @@ struct PhotoExportApp: App {
   }
 
   private var menuBarContent: some View {
-    AutoSyncMenuBarContent().photoExportEnvironment(core)
+    AutoSyncMenuBarContent(showWindow: menuBarMode.showWindow)
+      .photoExportEnvironment(core)
   }
 
   private var menuBarLabel: some View {
@@ -92,7 +104,7 @@ struct PhotoExportApp: App {
     // Control) fall back to the bundle's display name from Info.plist,
     // so the app is still identified as "Photo Export" everywhere it
     // matters outside the chrome.
-    WindowGroup("") {
+    WindowGroup("", id: PhotoExportApp.mainWindowID) {
       MainWindowRoot(
         destinationManager: exportDestinationManager, recordStore: core.exportRecordStore
       )
@@ -110,10 +122,12 @@ struct PhotoExportApp: App {
           if control != nil { return }
         #endif
         // PhotoKit is first touched here, after the window has rendered, not in App.init.
-        // Every window runs this; the core starts once.
+        // Every window runs this; the core starts once. A launch with no window starts it
+        // from `MenuBarModeController` instead.
         core.start()
       }
     }
+    .defaultLaunchBehavior(menuBarMode.opensWithoutWindow ? .suppressed : .automatic)
     // Default sized so the sidebar (240) and content grid (520) sit at their
     // ideal widths set in `LibraryRootView`, leaving ~520 for the detail pane.
     // The user can resize either column past these defaults; new windows
@@ -182,6 +196,11 @@ struct PhotoExportApp: App {
     .windowResizability(.contentMinSize)
     .restorationBehavior(restoration)
   }
+}
+
+extension PhotoExportApp {
+  /// The main window group's id, for `openWindow(id:)`.
+  static let mainWindowID = "main"
 }
 
 /// Supplies timeline history readiness as a render-time input to the equatable router.

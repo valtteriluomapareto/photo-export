@@ -72,7 +72,10 @@ import Testing
 
   // MARK: - Startup
 
-  @Test func startAttachesEachServiceOnceInLaunchOrder() async throws {
+  /// The window's `.task` and the windowless launch both start the core the same way, and
+  /// whichever comes second does nothing.
+  @Test(arguments: [false, true])
+  func startAttachesEachServiceOnceInLaunchOrder(windowless: Bool) async throws {
     try await withAppDomainUntouched {
       let source = FakePersistentChangeSource()
       var composition = makeTestComposition(label: "app-core-start")
@@ -110,18 +113,30 @@ import Testing
       #expect(core.lifecycleCoordinator.currentDestination.id == nil)
       #expect(!core.destinationSafetyMonitor.isAttached)
 
-      core.start()
+      let menuBarMode = MenuBarModeController(
+        core: core, opensWithoutWindow: true, activationPolicy: { .regular },
+        setActivationPolicy: { _ in })
+      @MainActor func startWithoutWindow() async {
+        menuBarMode.launchDidFinish()
+        await withCheckedContinuation { continuation in
+          DispatchQueue.main.async { continuation.resume() }
+        }
+      }
+      if windowless { await startWithoutWindow() } else { core.start() }
 
+      // The launch interval is process-wide. While the windowless start waits a main-queue
+      // turn, another test's start can end it, so only the windowed start checks it.
+      let duringLaunch = windowless ? (probes.first?.launchInProgress ?? true) : true
       // The lifecycle coordinator configures the stores before AutoSync attaches; AutoSync
       // subscribes before the change source starts; the safety monitor attaches after both.
       #expect(
         probes == [
           Probe(
             event: "AutoSync subscribed", storesConfigured: true, safetyAttached: false,
-            launchInProgress: true),
+            launchInProgress: duringLaunch),
           Probe(
             event: "change source started", storesConfigured: true, safetyAttached: false,
-            launchInProgress: true),
+            launchInProgress: duringLaunch),
         ])
       #expect(core.destinationSafetyMonitor.isAttached)
       #expect(!AppDiagnostics.isLaunchInProgress)
@@ -129,8 +144,10 @@ import Testing
         FileManager.default.fileExists(
           atPath: composition.recordsRoot.appendingPathComponent(firstId).path))
 
-      // A second window's `.task` starts the core again: nothing re-attaches or re-starts.
+      // A window's `.task` after either start, or the windowless start after a window's,
+      // re-attaches and re-starts nothing.
       core.start()
+      if !windowless { await startWithoutWindow() }
       #expect(probes.count == 2)
       #expect(source.startCount == 1)
 

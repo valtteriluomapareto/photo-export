@@ -119,6 +119,8 @@ RULES = [
     # App lifecycle.
     ("photo-export/App/AppLifecycleCoordinator.swift", ("destination", "autoexport")),
     ("photo-export/App/LoginItemController.swift", ("autoexport",)),
+    ("photo-export/App/MenuBarMode.swift", ("authorization", "autoexport")),
+    ("photo-export/App/PhotoExportAppDelegate.swift", ("authorization", "autoexport", "cancel")),
     ("photo-export/App/SystemLoginItemService.swift", ("autoexport",)),
     # Models.
     ("photo-export/Models/AutoSync*.swift", ("autoexport",)),

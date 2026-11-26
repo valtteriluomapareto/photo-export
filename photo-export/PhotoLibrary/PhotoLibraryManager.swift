@@ -461,6 +461,29 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   @ObservationIgnored
   private var appActivationSubscription: AnyCancellable?
 
+  /// How often `refreshAuthorizationPeriodically()` re-reads Photos access.
+  static let authorizationRefreshInterval: TimeInterval = 60
+
+  /// Re-reads Photos access on the refresh clock every `authorizationRefreshInterval`.
+  /// Running from the menu bar with no window, the app is rarely activated, so
+  /// `observeAppActivation()` alone could leave a grant or revoke unnoticed for hours.
+  /// Idempotent. `AppCore.start()` calls it.
+  func refreshAuthorizationPeriodically() {
+    guard authorizationRefreshTick == nil else { return }
+    scheduleAuthorizationRefresh()
+  }
+
+  private func scheduleAuthorizationRefresh() {
+    authorizationRefreshTick = refreshClock.schedule(after: Self.authorizationRefreshInterval) {
+      [weak self] in
+      self?.refreshAuthorizationStatus()
+      self?.scheduleAuthorizationRefresh()
+    }
+  }
+
+  @ObservationIgnored
+  private var authorizationRefreshTick: AutoSyncCancellable?
+
   /// Re-reads existing permission without prompting. Install fresh-cache barriers
   /// before an authorization subscriber can start work against the newly visible library.
   func refreshAuthorizationStatus() {
@@ -932,6 +955,14 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
       await collectionCountCache.invalidateAll()
     }
     libraryRevision &+= 1
+  }
+
+  /// Frees what only windows use, when the last one closes: decoded thumbnails and cached
+  /// PHAssets. Revisions and library state stay, so a window opened later decodes its
+  /// thumbnails again without a library refresh.
+  func releaseWindowCaches() {
+    decodedThumbnailCache.clear()
+    forgetPHAssetCache()
   }
 
   /// Drops only the PHAsset cache. Unlike `invalidateCache()` it does not

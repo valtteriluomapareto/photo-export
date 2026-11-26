@@ -14,6 +14,9 @@ import SwiftUI
 /// authorized library view. `LibraryRootView` owns the authorized split-view layout
 /// so this view can keep routing separate from library presentation.
 struct ContentView: View {
+  /// Set once first-run setup is done; until then the main window shows onboarding.
+  static let onboardingCompletedDefaultsKey = "hasCompletedOnboarding"
+
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
@@ -33,7 +36,8 @@ struct ContentView: View {
     private let initialLibrarySurface: ScreenshotSurfaceResolver.Surface? = nil
   #endif
 
-  @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+  @AppStorage(ContentView.onboardingCompletedDefaultsKey) private var hasCompletedOnboarding: Bool =
+    false
 
   // Debug-only: launch with `--force-onboarding` to route straight to `OnboardingView`,
   // regardless of Photos authorization or saved onboarding state. Lets you preview and

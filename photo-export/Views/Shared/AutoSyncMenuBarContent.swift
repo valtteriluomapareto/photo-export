@@ -5,15 +5,34 @@ import SwiftUI
 /// navigation and hit testing. Quitting the app stops Auto Export.
 /// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 struct AutoSyncMenuBarContent: View {
+  /// Opens a window from the menu: an app without a Dock icon becomes a regular app first,
+  /// and the window comes to the front. See `MenuBarModeController.showWindow`.
+  let showWindow: (() -> Void) -> Void
+
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   @Environment(\.openSettings) private var openSettings
+  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
     // Read-only status line at the top so the user can see what's happening
     // at a glance before deciding to act.
     Text(autoSyncManager.state.menuBarStatusLabel)
+
+    Divider()
+
+    Button("Open Photo Export") {
+      showWindow {
+        // Runs after the app is unhidden; a hidden app's windows report not visible.
+        if let window = NSApp.windows.first(where: Self.isMainWindow) {
+          if window.isMiniaturized { window.deminiaturize(nil) }
+          window.makeKeyAndOrderFront(nil)
+        } else {
+          openWindow(id: PhotoExportApp.mainWindowID)
+        }
+      }
+    }
 
     Divider()
 
@@ -36,7 +55,7 @@ struct AutoSyncMenuBarContent: View {
     Divider()
 
     Button("Open Settings\u{2026}") {
-      openSettings()
+      showWindow { openSettings() }
     }
     .keyboardShortcut(",", modifiers: [.command])
 
@@ -46,6 +65,12 @@ struct AutoSyncMenuBarContent: View {
       NSApplication.shared.terminate(nil)
     }
     .keyboardShortcut("q", modifiers: [.command])
+  }
+
+  /// SwiftUI names the main group's windows after its id ("main-AppWindow-1").
+  private static func isMainWindow(_ window: NSWindow) -> Bool {
+    window.identifier?.rawValue.hasPrefix(PhotoExportApp.mainWindowID) == true
+      && (window.isVisible || window.isMiniaturized)
   }
 
   /// Menu bar is the click-and-forget surface. Disable Export Now whenever
