@@ -41,8 +41,9 @@ The selected full-size preview follows edits and reverts in Photos without needi
 
 The selected asset’s detail pane shows export history for the scope you are browsing. An album’s history is separate from its Timeline and Favorites copies; after an album rename or move, details refer to the current export folder.
 
-New sibling albums with case-only names, such as `Trip` and `trip`, receive separate export
-folders; Shared Albums follow the same rule. Previously tracked folders keep their paths.
+New albums whose export paths differ only by case receive separate folders, including when
+the case difference is in a parent folder. Shared Albums follow the same rule for album
+names. Previously tracked folders keep their paths.
 For an older mixed backup, export the affected albums to a **new empty destination folder**
 and retain the old backup until the new copies are verified. See [album folder names](/photo-export/features/#album-folder-names).
 

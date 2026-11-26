@@ -198,30 +198,29 @@ enum CollectionBackupPlanner {
       let resolved = try? resolver.placement(
         for: selection, collections: collections, existingPlacements: existingPlacements)
 
-      let parent = resolver.sanitizedFolderPath(descriptor.pathComponents)
+      func parentKey(_ album: PhotoCollectionDescriptor) -> String {
+        index.key(root, album.pathComponents.map(CollectionPathComponentPolicy.sanitizeComponent))
+      }
+      let parent = parentKey(descriptor)
       let leaf = CollectionPathComponentPolicy.sanitizeComponent(descriptor.title)
-      let leafKey = resolver.siblingLeafKey(leaf)
-      // The resolver never gives a suffixed name that is a sibling's own title.
+      let leafKey = resolver.componentKey(leaf)
+      // A natural sibling title reserves its name anywhere in the same directory on this volume.
       let reserved = Set(
         siblings
-          .filter {
-            $0.localIdentifier != id && resolver.sanitizedFolderPath($0.pathComponents) == parent
-          }
+          .filter { $0.localIdentifier != id && parentKey($0) == parent }
           .map {
-            resolver.siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title))
+            resolver.componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title))
           })
-      let parentKey = index.key(
-        root, descriptor.pathComponents.map(CollectionPathComponentPolicy.sanitizeComponent))
 
-      for directory in index.children(ofKey: parentKey) {
+      for directory in index.children(ofKey: parent) {
         guard let name = directory.components.last else { continue }
         let folderLeaf: String
-        switch FolderName(resolver.siblingLeafKey(name), base: leafKey) {
+        switch FolderName(resolver.componentKey(name), base: leafKey) {
         case .other: continue
         case .bare: folderLeaf = leaf
         case .suffixed(let number):
           folderLeaf = "\(leaf)_\(number)"
-          if reserved.contains(resolver.siblingLeafKey(folderLeaf)) { continue }
+          if reserved.contains(resolver.componentKey(folderLeaf)) { continue }
         }
         guard let key = index.key(forRelativePath: directory.relativePath), !owned.contains(key),
           let files = index.files(in: directory),
@@ -415,7 +414,7 @@ enum CollectionBackupPlanner {
       let parentPath =
         "Collections/\(directory.root.rawValue)/" + parentComponents.map { $0 + "/" }.joined()
       let isNamedVideos =
-        directory.components.last.map { resolver.siblingLeafKey($0) == "videos" } ?? false
+        directory.components.last.map { resolver.componentKey($0) == "videos" } ?? false
       let isVideosFolder =
         isNamedVideos && (directory.root == .favorites || !parentComponents.isEmpty)
       let key = index.key(directory.root, directory.components)
@@ -467,7 +466,7 @@ private struct FolderIndex {
     let names =
       caseSensitive
       ? components.map(\.precomposedStringWithCanonicalMapping)
-      : components.map(resolver.siblingLeafKey)
+      : components.map(resolver.componentKey)
     return ([root.rawValue] + names).joined(separator: "/")
   }
 

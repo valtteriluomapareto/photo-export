@@ -25,8 +25,8 @@ import os
 ///   (`Collections/Albums/`) makes cross-kind collisions impossible.
 ///
 /// Sibling-collision rules preserve existing folder claims:
-/// - Two distinct placements that, after sanitization and case folding, share a leaf
-///   under the same parent folder under `Collections/Albums/` are *sibling collisions*.
+/// - Album paths under `Collections/Albums/` collide when every sanitized component
+///   matches case-insensitively.
 /// - First claimant keeps the bare path; new placements get `_2`, `_3`, … suffixes.
 /// - Stale placements from deleted albums count as live claimants so a reinstated album
 ///   doesn't silently steal a path.
@@ -171,11 +171,9 @@ struct ExportPlacementResolver {
     }
 
     // Step 2: build the candidate relative path and check for sibling collisions.
-    let parentPathString = sanitizedFolderPath(descriptor.pathComponents)
     let sanitizedLeaf = CollectionPathComponentPolicy.sanitizeComponent(descriptor.title)
     let leaf = leafWithCollisionSuffix(
       sanitizedLeaf: sanitizedLeaf,
-      parentPathString: parentPathString,
       forDescriptor: descriptor,
       collections: collections,
       existingPlacements: existingPlacements
@@ -302,20 +300,20 @@ struct ExportPlacementResolver {
         return trimmed.isEmpty ? nil : trimmed
       }
 
-    let leafKey = siblingLeafKey(sanitizedLeaf)
-    let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
+    let leafKey = componentKey(sanitizedLeaf)
+    let existingLeafKeys = Set(existingLeaves.map(componentKey))
     // Reserve natural names even before those siblings are persisted. Otherwise
     // Trip/trip could consume the directory intended for a sibling named TRIP_2.
     let reservedLeafKeys = Set(
       collections.filter { $0.kind == .sharedAlbum }
-        .map { siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
+        .map { componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
 
     let siblingCandidates =
       collections
       .filter { $0.kind == .sharedAlbum }
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
-        siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
+        componentKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
           == leafKey
       }
       .filter { other in
@@ -351,7 +349,7 @@ struct ExportPlacementResolver {
     var n = 2
     while true {
       let candidate = "\(sanitizedLeaf)_\(n)"
-      let key = siblingLeafKey(candidate)
+      let key = componentKey(candidate)
       if !existingLeafKeys.contains(key) && !reservedLeafKeys.contains(key) {
         if slot == targetSlot { return candidate }
         slot += 1
@@ -383,21 +381,25 @@ struct ExportPlacementResolver {
   /// same on-disk folder.
   private func leafWithCollisionSuffix(
     sanitizedLeaf: String,
-    parentPathString: String,
     forDescriptor descriptor: PhotoCollectionDescriptor,
     collections: [PhotoCollectionDescriptor],
     existingPlacements: [ExportPlacement]
   ) -> String {
-    // Existing claimants: any existing placement under the same parent folder whose
+    func parentKey(_ album: PhotoCollectionDescriptor) -> [String] {
+      album.pathComponents.map {
+        componentKey(CollectionPathComponentPolicy.sanitizeComponent($0))
+      }
+    }
+    let parent = parentKey(descriptor)
+
+    // Existing claimants: any existing placement under the same case-folded parent whose
     // leaf matches the candidate (with or without an existing suffix). We compare on
     // the *sanitized* leaf component because users see and pick by that.
     let existingLeaves =
       existingPlacements
       .filter { $0.kind == .album }
       .compactMap { existing -> String? in
-        // Strip the leading "Collections/Albums/" and trailing "/", then split.
-        // Compare parent path; if it matches our candidate parent, the last
-        // segment is a sibling leaf.
+        // Match the parent by component before taking the leaf.
         let prefix = "Collections/Albums/"
         guard existing.relativePath.hasPrefix(prefix) else { return nil }
         var trimmed = String(existing.relativePath.dropFirst(prefix.count))
@@ -405,8 +407,7 @@ struct ExportPlacementResolver {
         let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
           .map(String.init)
         guard let leaf = parts.last else { return nil }
-        let parent = parts.dropLast().joined(separator: "/")
-        return parent == parentPathString ? leaf : nil
+        return parts.dropLast().map(componentKey) == parent ? leaf : nil
       }
 
     // New (not-yet-existing) sibling claimants from the collection tree: other albums
@@ -420,20 +421,16 @@ struct ExportPlacementResolver {
     // and the new path-hash hasn't been claimed yet. Without this distinction, two
     // distinct renamed albums could each end up at the bare path because the filter
     // would have dropped them as "covered above".
-    let siblings = albumsInTree(collections).filter {
-      sanitizedFolderPath($0.pathComponents) == parentPathString
-    }
-    let leafKey = siblingLeafKey(sanitizedLeaf)
-    let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
+    let siblings = albumsInTree(collections).filter { parentKey($0) == parent }
+    let leafKey = componentKey(sanitizedLeaf)
+    let existingLeafKeys = Set(existingLeaves.map(componentKey))
     let reservedLeafKeys = Set(
-      siblings.map { siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
+      siblings.map { componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
     let siblingCandidates =
       siblings
       .filter { $0.localIdentifier != descriptor.localIdentifier }
-      .filter { other in
-        sanitizedFolderPath(other.pathComponents) == parentPathString
-          && siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
-            == leafKey
+      .filter {
+        componentKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) == leafKey
       }
       .filter { other in
         // If an existing placement matches `other` at its *current* path-hash, it
@@ -482,7 +479,7 @@ struct ExportPlacementResolver {
       let candidate = "\(sanitizedLeaf)_\(n)"
       // Skip persisted names and natural sibling names; finite reservations always
       // leave a free suffix, without an unchecked upper-bound fallback.
-      let key = siblingLeafKey(candidate)
+      let key = componentKey(candidate)
       if !existingLeafKeys.contains(key) && !reservedLeafKeys.contains(key) {
         if slot == targetSlot { return candidate }
         slot += 1
@@ -491,10 +488,10 @@ struct ExportPlacementResolver {
     }
   }
 
-  /// Conservative comparison for new siblings on common case-insensitive volumes.
+  /// Conservative component comparison for new placements on case-insensitive volumes.
   /// Emitted spelling and identity hashing deliberately keep the original case.
-  func siblingLeafKey(_ sanitizedLeaf: String) -> String {
-    sanitizedLeaf.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+  func componentKey(_ component: String) -> String {
+    component.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
       .precomposedStringWithCanonicalMapping
   }
 
