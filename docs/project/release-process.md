@@ -100,6 +100,8 @@ The same `v*` tag also triggers `release-app-store.yml`, which archives, signs, 
 
 It stops before writing anything if the catalog entry can't be read or is too long, or if that version is already waiting for or past review, since its build can no longer change. Then review the version in App Store Connect and submit it for App Review manually.
 
+Screenshots carry over from the previous version. Regenerate them only when the UI has visibly changed: run `scripts/screenshots/capture.py` on a Retina Mac with the screen unlocked, from a terminal that has Screen Recording permission. Leave the Mac alone while it runs: the capture app takes focus, and a window that loses it is rejected. It writes five 2880×1800 light-mode PNGs to `screenshots/app-store/` (gitignored), each framed by `scripts/screenshots/frame.py` on a gradient with a headline; the headlines live next to the surface keys in `capture.py`, and the multi-select image shows the Mac's accent colour. `capture.py <surface>` recaptures one image and keeps the others. Look them over, then open the version in **Prepare for Submission**, delete the old macOS screenshots and drag in `01` to `05` in order.
+
 An upload from a manual `release-app-store.yml` run with `skip_upload: false` is not prepared automatically. Run **Actions > App Store Connect (prepare version)** from `main` with the version and the build number that run printed. The release notes come from the `v<version>` tag; for an upload from a branch, set `catalog_ref` to that branch. Re-run a failed job after a temporary failure; after merging a fix to the script, use the dispatch instead, since a re-run keeps the code it first ran with.
 
 If you ever need to archive locally (CI down, secret rotation, etc.):

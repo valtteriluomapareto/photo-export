@@ -98,6 +98,8 @@ struct PhotoExportApp: App {
       )
       .recordStoreAlertHost()
       .photoExportEnvironment(core)
+      // Store screenshots are a light set whatever the Mac's appearance.
+      .preferredColorScheme(core.composition.isScreenshotMode ? .light : nil)
       #if DEBUG
         .background {
           if let control { ControlWindowReader(runtime: control) }

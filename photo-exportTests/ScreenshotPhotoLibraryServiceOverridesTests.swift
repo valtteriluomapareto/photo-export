@@ -77,7 +77,48 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     #expect(adjusted == total / 4)
   }
 
+  @Test func everyTimelineMonthShowsDistinctPhotosDatedInThatMonth() async throws {
+    let svc = ScreenshotPhotoLibraryService()
+    let calendar = Calendar(identifier: .gregorian)
+    let now = Date()
+    let currentYear = calendar.component(.year, from: now)
+    #expect(
+      try svc.availableYears().contains(currentYear - 2),
+      "the timeline-multi-select surface highlights the two previous years")
+    for year in try svc.availableYears() {
+      for month in 1...12 {
+        var assets: [AssetDescriptor] = []
+        for try await batch in svc.fetchAssetsProgressive(
+          in: .timeline(year: year, month: month), mediaType: nil, batchSize: 200)
+        {
+          assets += batch
+        }
+        let photos = assets.map { ScreenshotPhotoLibraryService.bundledImageName(for: $0.id) }
+        #expect(Set(photos).count == photos.count, "\(year)-\(month) repeats a photo: \(photos)")
+        for asset in assets {
+          let date = try #require(asset.creationDate)
+          #expect(calendar.component(.year, from: date) == year)
+          #expect(calendar.component(.month, from: date) == month)
+          #expect(date <= now)
+        }
+      }
+    }
+    let current = try await svc.countAssets(
+      in: .timeline(year: currentYear, month: calendar.component(.month, from: now)))
+    #expect(current == 12, "the current month is the grid the timeline surfaces capture")
+  }
+
   // MARK: - Collections
+
+  @Test func albumDescriptorIdsMatchTheShapeFolderTotalsLookUp() async throws {
+    let svc = ScreenshotPhotoLibraryService()
+    func albums(in descriptors: [PhotoCollectionDescriptor]) -> [PhotoCollectionDescriptor] {
+      descriptors.flatMap { $0.kind == .album ? [$0] : albums(in: $0.children) }
+    }
+    for album in albums(in: try await svc.loadCollectionTree()) {
+      #expect(album.id == "album:\(album.localIdentifier ?? "")")
+    }
+  }
 
   @Test func fetchCollectionTreeReturnsCuratedTree() async throws {
     let svc = ScreenshotPhotoLibraryService()

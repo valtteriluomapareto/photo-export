@@ -51,9 +51,14 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   ///   Favorites (synthetic)
   ///   Family             (top-level album, 6 photos)
   ///   Porvoo             (top-level album, 7 photos)
+  ///   Summer             (top-level album, 12 photos)
+  ///   Winter             (top-level album, 4 photos)
   ///   Trips/             (folder)
   ///     London           (7 photos)
   ///     Paris            (7 photos)
+  ///     Tampere          (3 photos)
+  ///
+  /// Album descriptor ids are `album:<localIdentifier>`, the shape folder totals look up.
   ///
   /// The `Trips` folder is intentional — it showcases the folder-export
   /// feature (Cmd-click multi-select, "Export Folder" action) in marketing
@@ -68,16 +73,25 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     let porvoo = PhotoCollectionDescriptor(
       id: "album:porvoo", localIdentifier: "porvoo", title: "Porvoo",
       kind: .album, pathComponents: [], children: [])
+    let summer = PhotoCollectionDescriptor(
+      id: "album:summer", localIdentifier: "summer", title: "Summer",
+      kind: .album, pathComponents: [], children: [])
+    let winter = PhotoCollectionDescriptor(
+      id: "album:winter", localIdentifier: "winter", title: "Winter",
+      kind: .album, pathComponents: [], children: [])
     let tripsLondon = PhotoCollectionDescriptor(
-      id: "album:trips-london", localIdentifier: "london", title: "London",
+      id: "album:london", localIdentifier: "london", title: "London",
       kind: .album, pathComponents: ["Trips"], children: [])
     let tripsParis = PhotoCollectionDescriptor(
-      id: "album:trips-paris", localIdentifier: "paris", title: "Paris",
+      id: "album:paris", localIdentifier: "paris", title: "Paris",
+      kind: .album, pathComponents: ["Trips"], children: [])
+    let tripsTampere = PhotoCollectionDescriptor(
+      id: "album:tampere", localIdentifier: "tampere", title: "Tampere",
       kind: .album, pathComponents: ["Trips"], children: [])
     let trips = PhotoCollectionDescriptor(
       id: "folder:trips", localIdentifier: "trips", title: "Trips",
       kind: .folder, pathComponents: [],
-      children: [tripsLondon, tripsParis])
+      children: [tripsLondon, tripsParis, tripsTampere])
     // Surface an iCloud shared album in marketing captures so the
     // "Shared Albums" sidebar section renders with a populated grid. Reuses
     // family bundled photos via `assetIdsByAlbum["family-stream"]` — narratively
@@ -88,12 +102,12 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     let familyStream = PhotoCollectionDescriptor(
       id: "shared-album:family-stream", localIdentifier: "family-stream",
       title: "Family stream", kind: .sharedAlbum, pathComponents: [], children: [])
-    return [favorites, family, porvoo, trips, familyStream]
+    return [favorites, family, porvoo, summer, winter, trips, familyStream]
   }()
 
   /// Each album surfaces this many synthetic assets in the grid. The bundled
   /// photos under `photo-export/Resources/screenshots/` are reused via a modulo
-  /// wrap in `bundledImageName(for:)` so the same 27 files populate 4 × 30
+  /// wrap in `bundledImageName(for:)` so the 46 files fill every album's 30
   /// tiles — a sparse 6-tile grid felt empty in marketing captures.
   ///
   /// 30 was picked so each album view scrolls (proves the grid is real, not a
@@ -110,6 +124,9 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     "porvoo": (1...assetsPerAlbum).map { "porvoo-\($0)" },
     "london": (1...assetsPerAlbum).map { "london-\($0)" },
     "paris": (1...assetsPerAlbum).map { "paris-\($0)" },
+    "summer": (1...assetsPerAlbum).map { "summer-\($0)" },
+    "winter": (1...assetsPerAlbum).map { "winter-\($0)" },
+    "tampere": (1...assetsPerAlbum).map { "tampere-\($0)" },
     // Shared album reuses the `family-N` ids so it shows the same bundled
     // photos. Narratively this is a relative who's sharing their stream of
     // family photos; visually it gives the screenshot a populated grid without
@@ -128,46 +145,73 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
     "porvoo": 7,
     "london": 7,
     "paris": 7,
+    "summer": 12,
+    "winter": 4,
+    "tampere": 3,
   ]
 
-  /// Favorites surfaces ~12 highlights mixed across the four albums so the
-  /// Favorites grid looks plausibly curated (not just one photo per album).
-  /// Three per album, taken from the first three indices so the bundled
-  /// photos that show up here are the maintainer's chosen "hero" shots.
+  /// Favorites surfaces 12 highlights mixed across the albums, interleaved so neighbouring
+  /// tiles come from different albums. Low indices are each album's chosen "hero" shots.
   private static let favoriteAssetIds: [String] = [
-    "family-1", "family-2", "family-3",
-    "porvoo-1", "porvoo-2", "porvoo-3",
-    "london-1", "london-2", "london-3",
-    "paris-1", "paris-2", "paris-3",
+    "summer-4", "family-1", "winter-1", "porvoo-1",
+    "london-1", "summer-1", "paris-1", "tampere-1",
+    "winter-2", "summer-3", "family-2", "porvoo-2",
   ]
 
-  /// Timeline assets bucketed by year/month. Reuses the same asset ids as the
-  /// albums so a user clicking through both surfaces sees consistent thumbnails.
-  /// Dates anchored to the current calendar year so the timeline tree's
-  /// `availableYears` line up with reality.
-  ///
-  /// Album iteration order is sorted by album key so the timeline distribution
-  /// is stable across launches — `Dictionary.values` is unordered, and an
-  /// unordered traversal here would make "which photo lands in May 2026"
-  /// non-deterministic across capture runs.
-  private static let timelineAssetsByMonth: [String: [String]] = {
-    let calendar = Calendar(identifier: .gregorian)
-    let now = Date()
-    var byKey: [String: [String]] = [:]
-    let allIds = assetIdsByAlbum.keys.sorted().flatMap { assetIdsByAlbum[$0] ?? [] }
-    for (idx, id) in allIds.enumerated() {
-      // Spread across the last 18 months so the timeline year tree shows
-      // multiple year and month entries. With ~120 ids and 18 months, every
-      // month gets ~7 photos — a populated grid at every selection.
-      let monthsBack = idx % 18
-      if let date = calendar.date(byAdding: .month, value: -monthsBack, to: now) {
-        let year = calendar.component(.year, from: date)
-        let month = calendar.component(.month, from: date)
-        byKey["\(year)-\(month)", default: []].append(id)
+  /// Months the timeline spans, counting the current one. Thirty reaches two years back, which
+  /// the `timeline-multi-select` surface highlights.
+  private static let timelineMonths = 30
+  /// Photos in the current month: the grid the timeline surfaces show.
+  private static let currentMonthPhotos = 12
+
+  /// Each timeline id's month (0 is the current month, counting back) and its position in it.
+  /// The albums are interleaved so a run of consecutive ids comes from different albums, and
+  /// every month holds distinct photos. Family stream repeats the Family ids, so it stays out.
+  /// Each month's first photo fills the detail pane; this order opens the current month on the
+  /// aurora and gives the store captures different main photos.
+  private static let timelinePlacement: [String: (monthsBack: Int, position: Int)] = {
+    let albums = ["winter", "summer", "family", "porvoo", "london", "tampere", "paris"]
+    let interleaved = (0..<assetsPerAlbum).flatMap { index in
+      albums.compactMap { assetIdsByAlbum[$0]?[index] }
+    }
+    let olderMonths = timelineMonths - 1
+    let perOlderMonth = (interleaved.count - currentMonthPhotos + olderMonths - 1) / olderMonths
+    var placement: [String: (monthsBack: Int, position: Int)] = [:]
+    for (offset, id) in interleaved.enumerated() {
+      if offset < currentMonthPhotos {
+        placement[id] = (0, offset)
+      } else {
+        let older = offset - currentMonthPhotos
+        placement[id] = (1 + older / perOlderMonth, older % perOlderMonth)
       }
     }
-    return byKey
+    return placement
   }()
+
+  /// Timeline ids keyed by `"<year>-<month>"`, in placement order.
+  private static let timelineAssetsByMonth: [String: [String]] = {
+    let calendar = Calendar(identifier: .gregorian)
+    var byKey: [String: [(position: Int, id: String)]] = [:]
+    for (id, place) in timelinePlacement {
+      let date = creationDate(for: id)
+      let key = "\(calendar.component(.year, from: date))-\(calendar.component(.month, from: date))"
+      byKey[key, default: []].append((place.position, id))
+    }
+    return byKey.mapValues { $0.sorted { $0.position < $1.position }.map(\.id) }
+  }()
+
+  /// A timeline id's date: two days apart within its month, never later than now. Ids outside
+  /// the timeline get now.
+  private static func creationDate(for id: String) -> Date {
+    let calendar = Calendar(identifier: .gregorian)
+    let now = Date()
+    guard let place = timelinePlacement[id],
+      let month = calendar.date(byAdding: .month, value: -place.monthsBack, to: now),
+      let start = calendar.dateInterval(of: .month, for: month)?.start,
+      let date = calendar.date(byAdding: .hour, value: place.position * 48 + 10, to: start)
+    else { return now }
+    return min(date, now)
+  }
 
   /// Curated timeline ids for a month, or for every month of the year when `month` is nil.
   private static func timelineIds(year: Int, month: Int?) -> [String] {
@@ -369,7 +413,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   /// The asset id is wrapped via `bundledImageName(for:)` so a `family-23`
   /// asset id resolves to the bundled `family-5.jpeg` file (because there
   /// are only 6 bundled family photos and 23 % 6 == 5, then +1 for 1-based
-  /// indexing). This lets 27 bundled photos populate ~120 grid tiles without
+  /// indexing). This lets 46 bundled photos populate ~240 grid tiles without
   /// the user noticing repeats unless they look hard.
   private func image(for assetId: String, size: CGSize) -> NSImage? {
     let resourceName = Self.bundledImageName(for: assetId) ?? assetId
@@ -400,7 +444,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   /// in `bundledPhotoCountByAlbum` — in which case the caller falls back to
   /// looking up the literal asset id (so a future custom id can still resolve
   /// to a bundled file named after it directly).
-  private static func bundledImageName(for assetId: String) -> String? {
+  static func bundledImageName(for assetId: String) -> String? {
     guard let dashIdx = assetId.lastIndex(of: "-") else { return nil }
     let album = String(assetId[..<dashIdx])
     let indexStr = String(assetId[assetId.index(after: dashIdx)...])
@@ -451,21 +495,15 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, Thumbn
   // MARK: - Descriptor factory
 
   private static func makeDescriptor(id: String) -> AssetDescriptor {
-    // Anchor each asset's creation date to a deterministic offset from "now" so
-    // the timeline tree groups them into multiple months without being affected
-    // by which day the screenshot run happens.
-    let hash = abs(id.hashValue)
-    let daysAgo = hash % 540  // ~18 months
-    let creationDate = Calendar(identifier: .gregorian).date(
-      byAdding: .day, value: -daysAgo, to: Date())
-    // Mark ~1/4 of assets as edited so the "edited photo" indicators surface.
-    let hasAdjustments = (hash % 4) == 0
+    // Mark ~1/4 of assets as edited so the "edited photo" indicators surface. Summing the
+    // bytes keeps it stable across launches, unlike the per-process `hashValue`.
+    let hasAdjustments = id.utf8.reduce(0) { $0 + Int($1) } % 4 == 0
     // The synthetic library's bundled images are JPEG / JPG; mark the UTI
     // accordingly so the HEIC→JPEG conversion feature doesn't
     // incorrectly synthesize JPEG edits for screenshot-mode assets.
     return AssetDescriptor(
       id: id,
-      creationDate: creationDate,
+      creationDate: creationDate(for: id),
       mediaType: .image,
       pixelWidth: 4032,
       pixelHeight: 3024,

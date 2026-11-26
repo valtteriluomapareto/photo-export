@@ -104,4 +104,4 @@ fi
 savings_pct=$((total_after * 100 / total_before))
 printf "Converted %d file(s). Total: %d KB → %d KB (%d%% of original).\n" \
   "$converted" $((total_before / 1024)) $((total_after / 1024)) "$savings_pct"
-echo "Rebuild + re-run scripts/screenshots/capture.sh to verify the JPEGs render."
+echo "Rebuild + re-run scripts/screenshots/capture.py to verify the JPEGs render."

@@ -69,6 +69,13 @@ struct ScreenshotSurfaceResolverTests {
     #expect(result?.selection == .album(collectionId: "family"))
   }
 
+  @Test func collectionsSummerAlbumKey() {
+    let result = ScreenshotSurfaceResolver.resolve(
+      from: ["app", "--screenshot-surface=collections-album-summer"])
+    #expect(result?.section == .collections)
+    #expect(result?.selection == .album(collectionId: "summer"))
+  }
+
   @Test func collectionsPorvooAlbumKey() {
     let result = ScreenshotSurfaceResolver.resolve(
       from: ["app", "--screenshot-surface=collections-album-porvoo"])
@@ -106,7 +113,7 @@ struct ScreenshotSurfaceResolverTests {
 
   // MARK: - Multi-select surfaces (issue #46)
 
-  /// Timeline multi-select demo: focused current month + the two prior years.
+  /// Timeline multi-select demo: focused previous month + the two prior years.
   /// Tests pin (a) the exact focus + extra set so the marketing capture is
   /// reproducible across runs, and (b) that the buckets dedup count yields
   /// "Export 3 Items" in the toolbar (year–month overlap protection).
@@ -116,12 +123,17 @@ struct ScreenshotSurfaceResolverTests {
     let result = ScreenshotSurfaceResolver.resolve(
       from: ["app", "--screenshot-surface=timeline-multi-select"], now: date)
     #expect(result?.section == .timeline)
-    #expect(result?.selection == .timelineMonth(year: 2026, month: 5))
+    #expect(result?.selection == .timelineMonth(year: 2026, month: 4))
     #expect(
       result?.additionalSelections == [
         .timelineYear(year: 2025),
         .timelineYear(year: 2024),
       ])
+    let january = Calendar(identifier: .gregorian).date(
+      from: DateComponents(year: 2026, month: 1, day: 16))!
+    #expect(
+      ScreenshotSurfaceResolver.resolve(key: "timeline-multi-select", now: january)?.selection
+        == .timelineMonth(year: 2026, month: 1))
   }
 
   /// Collections multi-select demo: focused Family album + Favorites + Porvoo
@@ -146,7 +158,7 @@ struct ScreenshotSurfaceResolverTests {
   @Test func singleSelectSurfacesHaveNoAdditionalSelections() {
     let keys = [
       "timeline", "collections-favorites", "collections-album-family",
-      "collections-album-porvoo", "collections-folder-trips",
+      "collections-album-summer", "collections-album-porvoo", "collections-folder-trips",
       "collections-album-london", "collections-album-paris",
       "collections-shared-album-family-stream",
     ]
