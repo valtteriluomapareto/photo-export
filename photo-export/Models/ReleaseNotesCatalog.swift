@@ -19,6 +19,61 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.7.0",
+      summary:
+        "Smoother browsing while exports run, no \" (1)\" copies of identical files "
+        + "already in your backup, and clearer guidance when the backup folder or "
+        + "Photos access needs attention.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Stay responsive during exports",
+          body:
+            "Thumbnails load in the background, and scrolling, sidebar counts and "
+            + "progress stay smooth while an export runs. Opening a large backup no "
+            + "longer freezes the window while its export history loads, and macOS no "
+            + "longer slows exports down while Photo Export is in the background. The "
+            + "library window now fits screens as small as 1024×768."
+        ),
+        ReleaseNote.Bullet(
+          title: "Skip files that are already in the backup",
+          body:
+            "If the exact same file is already in your backup folder, Photo Export "
+            + "marks it as backed up instead of saving a second copy with \" (1)\" in "
+            + "its name. Live Photos exported with their video, and \"_orig\" originals, "
+            + "aren't covered yet; use Import Existing Backup for those. As before, it "
+            + "never overwrites a file that's already there."
+        ),
+        ReleaseNote.Bullet(
+          title: "Reconnect your backup folder",
+          body:
+            "If Photo Export can't reach your previous backup folder, it asks whether "
+            + "the folder you picked is the same one. Choosing Same Folder now checks "
+            + "your export history against that folder: anything missing from it is "
+            + "exported again, and if the folder doesn't hold your previous backup, "
+            + "Photo Export says so before changing anything. Import Existing Backup "
+            + "now also recognizes Favorites, album and shared album folders."
+        ),
+        ReleaseNote.Bullet(
+          title: "Stop cleanly when the backup folder has a problem",
+          body:
+            "Exports now also stop and explain what to do when a drive or network "
+            + "share disconnects or the folder becomes read-only, instead of reporting "
+            + "an error for every photo. Photos that weren't saved because the folder "
+            + "couldn't be reached are tried again on the next Auto Export run, and "
+            + "Auto Export no longer restarts every 30 seconds after such a stop."
+        ),
+        ReleaseNote.Bullet(
+          title: "Auto Export waits instead of failing",
+          body:
+            "Without access to your Photos library, Auto Export shows as blocked and "
+            + "remembers what still needs exporting until access is back. An Auto "
+            + "Export run postponed by an import or a manual export now runs when "
+            + "that finishes."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.6",
       summary:
         "More reliable export history, clearer recovery from interrupted backups, "
