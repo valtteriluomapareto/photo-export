@@ -15,7 +15,7 @@ import SwiftUI
 /// so this view can keep routing separate from library presentation.
 struct ContentView: View {
   /// Set once first-run setup is done; until then the main window shows onboarding.
-  static let onboardingCompletedDefaultsKey = "hasCompletedOnboarding"
+  nonisolated static let onboardingCompletedDefaultsKey = "hasCompletedOnboarding"
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
