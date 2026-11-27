@@ -21,13 +21,13 @@
 	},
 	"dependencies": {
 		"@astrojs/starlight": "^0.43.1",
-		"astro": "~7.4.12",
+		"astro": "~7.4.13",
 		"sharp": "^0.35.5"
 	},
 	"devDependencies": {
 		"@astrojs/check": "^0.9.12",
 		"linkinator": "8.1.0",
-		"oxlint": "^1.94.0",
+		"oxlint": "^1.95.0",
 		"prettier": "^3.10.1",
 		"prettier-plugin-astro": "^1.1.2",
 		"typescript": "^5.9.3"
