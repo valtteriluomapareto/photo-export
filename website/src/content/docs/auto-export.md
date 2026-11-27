@@ -5,7 +5,7 @@ description: Keep an external drive automatically in sync with your Apple Photos
 
 Auto Export is the **set-it-and-forget-it** mode of Photo Export. Once you turn it on and pick what to back up, Photo Export adds new photos to your destination as they appear in Apple Photos — you don't have to remember to click **Export**.
 
-Auto Export runs while Photo Export is open. Turn on **Open Photo Export at login** and the app starts with your Mac, a menu bar icon gives you status at a glance, and Auto Export watches your library from the moment you sit down. Everything still happens locally through Apple's official Photos API — no cloud service, no separate background process, no account to sign in to.
+Auto Export runs while Photo Export is open. Turn on **Open Photo Export at login** and the app starts with your Mac, a menu bar icon gives you status at a glance, and Auto Export watches your library from the moment you sit down. Turn on **Open in the menu bar** too and it does so with no window and no Dock icon. Everything still happens locally through Apple's official Photos API — no cloud service, no separate background process, no account to sign in to.
 
 ## Turn it on
 
@@ -18,6 +18,7 @@ Open **Photo Export → Settings…** (Cmd+,) and switch to the **Auto Export** 
    - **Albums** — every user album you've created in Photos.
    - **Shared Albums** — every iCloud shared album. Note: iCloud only provides downscaled JPEGs for shared photos, so the exported files are reduced quality and **Include originals** has no effect on them. See [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity).
 3. (Optional) **Open Photo Export at login** — toggle on if you want the app to start automatically when you log in. Without this, Auto Export only runs when you've opened the app yourself.
+4. (Optional) **Open in the menu bar** — toggle on if you want Photo Export to open with no window or Dock icon and live in the menu bar. See [Run from the menu bar](#run-from-the-menu-bar).
 
 That's it. Once a destination is selected and at least one category is on, Photo Export starts watching your library.
 
@@ -120,11 +121,23 @@ The first time you enable this, macOS may post a system notification confirming 
 
 If you're running Photo Export from a non-standard location (e.g. directly from a Downloads folder or from Xcode's build output), the toggle's footer may read _"Move Photo Export into your Applications folder to enable launch at login."_ macOS's launch-at-login service only registers apps installed in `/Applications` — move the app there and the toggle works.
 
+## Run from the menu bar
+
+Turn on **Open in the menu bar** (in **Settings → Auto Export → Startup**, off by default) and Photo Export opens in the menu bar with no window or Dock icon. Auto Export keeps working, and the menu bar icon shows its status. Choose **Open Photo Export** from the menu bar icon to bring the window back; closing it hides the Dock icon again and frees the memory the window's thumbnails used. The first launch after installing still opens a window so you can finish setup. Combine it with **Open Photo Export at login** for a quiet start with your Mac.
+
+## Quitting
+
+Quitting Photo Export stops everything — there's no helper process left running.
+
+- **During an export you started**, Photo Export asks _"Stop the export and quit?"_ first. Files already exported stay where they are.
+- **During an Auto Export run**, it stops without asking; the rest is exported the next time Photo Export runs.
+- A file that is already being saved finishes saving first, which takes a few seconds at most.
+
 ## What Auto Export doesn't do
 
 To keep the feature predictable, Photo Export is intentional about what's _not_ included:
 
-- **It doesn't run when the app is fully quit.** This is intentional — Photo Export is a regular Mac app, not a background service. Use **Open at login** if you want it always running.
+- **It doesn't run when the app is fully quit.** This is intentional — Photo Export is a regular Mac app, not a background service. Use **Open at login** and **Open in the menu bar** if you want it always running.
 - **It doesn't delete or move files** at the destination — not when you remove a photo from Favorites, not when an asset is deleted from your Photos library, not when you change which categories are selected.
 - **It doesn't connect to iCloud directly.** Photo Export reads through Apple's Photos framework, which talks to iCloud Photos on your behalf if you've enabled it in System Settings.
 - **It doesn't surface per-album controls yet.** The **Albums** category covers every user-created album. Per-album include/exclude can land later if there's demand.

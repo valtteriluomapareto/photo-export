@@ -629,6 +629,55 @@ struct AutoSyncManagerTests {
     }
   }
 
+  /// Quitting stops the automatic run and its fan-out like turning Auto Export off, and
+  /// schedules nothing more, but keeps the saved setting so the next launch resumes.
+  @Test(.timeLimit(.minutes(2)))
+  func stopForQuitStopsTheRunAndKeepsTheSavedSetting() async throws {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let gate = AsyncCheckpoint()
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { $0 == 1 ? gate : nil }
+      builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      builder.destination.subject.send(safeDestination())
+      builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
+      manager.attach(to: builder.environment)
+      builder.clock.advance(by: 10)
+      let parked = await gate.waitForEnter(count: 1)
+      try #require(parked)
+      let fanOut = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(fanOut)
+
+      manager.stopForQuit()
+      #expect(builder.exportRunner.cancelAutoSyncRunCalls == 1)
+      #expect(builder.userDefaults.bool(forKey: AutoSyncManager.enabledDefaultsKey))
+
+      // The stopped run's late result is not recorded, so no summary of it outlives the
+      // quit, and neither the remaining scope nor a follow-up run starts.
+      let summariesBefore = builder.runSummaryStore.saveCount
+      await gate.release()
+      let ended = await finished(fanOut)
+      try #require(ended)
+      manager.runNow()
+      manager.setEnabled(true)
+      builder.clock.advance(by: 3600)
+      #expect(builder.exportRunner.receivedContexts.count == 1)
+      #expect(builder.runSummaryStore.saveCount == summariesBefore)
+
+      // The saved setting survives, so the next launch runs Auto Export again.
+      let relaunched = AutoSyncManager()
+      relaunched.attach(to: builder.environment)
+      builder.clock.advance(by: 10)
+      #expect(await observe { builder.exportRunner.receivedContexts.count > 1 })
+      if let current = relaunched.activeRunFanOutTask { fanOuts.append(current) }
+    } cleanup: {
+      await gate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

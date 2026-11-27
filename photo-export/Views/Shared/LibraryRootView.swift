@@ -73,7 +73,8 @@ struct LibraryRootView: View {
   @State private var assetSelection: AssetSelectionModel
 
   /// Mirrors `ContentView`'s onboarding gate. The new home for it after the refactor.
-  @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+  @AppStorage(ContentView.onboardingCompletedDefaultsKey) private var hasCompletedOnboarding: Bool =
+    false
   @Environment(\.isScreenshotMode) private var isScreenshotMode
 
   // Import sheet

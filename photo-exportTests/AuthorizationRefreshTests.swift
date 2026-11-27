@@ -127,6 +127,31 @@ import Testing
       #expect(f.service.requestAuthorizationCalls == 0)
     }
 
+    /// With no window open the app is rarely activated, so access is also re-read on a
+    /// timer: a revoke and a later grant arrive with no activation notification.
+    @Test func periodicRefreshFollowsAccessChangesWithoutActivation() {
+      let clock = TestClock()
+      let service = FakePhotoLibraryService()
+      service.authorizationStatus = .authorized
+      let library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
+      let interval = PhotoLibraryManager.authorizationRefreshInterval
+      library.refreshAuthorizationPeriodically()
+      library.refreshAuthorizationPeriodically()
+
+      service.authorizationStatus = .denied
+      clock.advance(by: interval - 1)
+      #expect(library.authorizationStatus == .authorized && library.isAuthorized)
+      clock.advance(by: 1)
+      #expect(library.authorizationStatus == .denied && !library.isAuthorized)
+
+      service.authorizationStatus = .authorized
+      let reads = service.authorizationStatusReads
+      clock.advance(by: interval)
+      #expect(library.authorizationStatus == .authorized && library.isAuthorized)
+      // One timer, however often it was started.
+      #expect(service.authorizationStatusReads == reads + 1)
+    }
+
     @Test func initialNotDeterminedRequestsOnceAndActivationDoesNotRequestAgain() async throws {
       let f = Fixture(status: .notDetermined)
       defer { f.close() }

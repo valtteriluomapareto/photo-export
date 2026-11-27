@@ -68,7 +68,7 @@
           composition.autoSyncDestinationsRoot, composition.photoChangeTokenFileURL, defaultsFile,
         ].allSatisfy(contains),
         composition.defaults.persistentDomain(forName: defaultsDomain)?[
-          "hasCompletedOnboarding"] as? Bool == true
+          ContentView.onboardingCompletedDefaultsKey] as? Bool == true
       else { throw ControlLaunch.Invalid("Control composition failed isolation checks.") }
     }
 
@@ -101,7 +101,7 @@
         throw ControlLaunch.Invalid("Could not open the run preferences.")
       }
       let service = try FixturePhotoLibraryService()
-      defaults.set(true, forKey: "hasCompletedOnboarding")
+      defaults.set(true, forKey: ContentView.onboardingCompletedDefaultsKey)
       defaults.set(
         ExportVersionSelection.edited.rawValue, forKey: ExportManager.versionSelectionDefaultsKey)
       defaults.set(surface.settingsTab?.rawValue, forKey: SettingsTab.storageKey)

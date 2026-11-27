@@ -365,6 +365,18 @@ final class AutoSyncManager: ObservableObject {
     }
   }
 
+  /// The app is quitting: stop the automatic run and its fan-out, as turning Auto Export
+  /// off does, and handle no further event in this process, so nothing starts another run
+  /// while the quit waits for an admitted final commit. The saved setting and the pending
+  /// work stay, so the next launch resumes.
+  func stopForQuit() {
+    isStoppedForQuit = true
+    cancelActiveFanOut()
+    environment?.exportRunner.cancelAutoSyncRun()
+  }
+
+  private var isStoppedForQuit = false
+
   // MARK: - Dispatch
 
   /// Pure-reducer dispatch with serialized in-flight handling. External callers and
@@ -386,6 +398,7 @@ final class AutoSyncManager: ObservableObject {
   }
 
   private func process(_ event: AutoSyncEvent) {
+    guard !isStoppedForQuit else { return }
     guard let environment else {
       log.error(
         "dispatch called before attach — dropping event \(String(describing: event), privacy: .public)"

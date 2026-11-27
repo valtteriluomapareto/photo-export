@@ -17,6 +17,7 @@ struct AutoExportSettingsView: View {
   // that opened them before the sheet shows its result and Done button.
   @State private var isShowingMigrationRecoverySheet = false
   @State private var isShowingSafetyConfirm = false
+  @AppStorage(MenuBarMode.defaultsKey) private var runsInMenuBar = false
 
   var body: some View {
     Form {
@@ -107,6 +108,16 @@ struct AutoExportSettingsView: View {
 
       Section("Startup") {
         LoginItemSettingsControls()
+        Toggle(isOn: $runsInMenuBar) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Open in the menu bar")
+            Text(
+              "Photo Export opens in the menu bar with no window or Dock icon. Choose Open Photo Export from the menu bar icon to show the window."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          }
+        }
       }
     }
     .onAppear { loginItemController.refresh() }

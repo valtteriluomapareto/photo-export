@@ -7,8 +7,9 @@ import os
 /// The app's object graph, built from an `AppComposition`, and its startup sequence.
 ///
 /// `PhotoExportApp.init` builds one eagerly and hands its objects to the scenes through
-/// `photoExportEnvironment(_:)`; the main window's `.task` calls `start()`. Building touches no PhotoKit API: the first PhotoKit
-/// call is in `start()`, after the first window has rendered.
+/// `photoExportEnvironment(_:)`; the main window's `.task` calls `start()`, or, for a launch
+/// with no window, `MenuBarModeController` once launch has finished. Building touches no
+/// PhotoKit API: the first PhotoKit call is in `start()`.
 @MainActor
 final class AppCore {
   let composition: AppComposition
@@ -40,11 +41,11 @@ final class AppCore {
     // the maintainer's real backup folder name never shows in a marketing capture.
     let edm = Self.makeDestinationManager(for: composition)
     if composition.isScreenshotMode {
-      // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without this it would
+      // ContentView gates on `ContentView.onboardingCompletedDefaultsKey`; without this it would
       // show OnboardingView and the capture script would never reach the marketing surfaces.
       // Under the capture script this lands in its own bundle id's domain, which the script
       // clears before each launch. A plain `--screenshot-mode` launch keeps the value.
-      defaults.set(true, forKey: "hasCompletedOnboarding")
+      defaults.set(true, forKey: ContentView.onboardingCompletedDefaultsKey)
     }
     // With an override (the curated screenshot library, or a test fake) the manager forwards
     // every `PhotoLibraryService` method to it; without one it runs its PhotoKit code.
@@ -189,10 +190,11 @@ final class AppCore {
     #endif
   }
 
-  /// Runs the startup sequence once. Every window's `.task` calls this; later calls do
-  /// nothing, so a second window doesn't register the Photos observer again or repeat the
-  /// startup catch-up. A Photos grant after a deferred start still arrives through the
-  /// change adapter's authorization subscription.
+  /// Runs the startup sequence once. Every window's `.task` calls this, and a launch with no
+  /// window calls it from `MenuBarModeController`; later calls do nothing, so a second window
+  /// doesn't register the Photos observer again or repeat the startup catch-up. A Photos
+  /// grant after a deferred start still arrives through the change adapter's authorization
+  /// subscription.
   func start() {
     guard !hasStarted else { return }
     hasStarted = true
@@ -200,6 +202,7 @@ final class AppCore {
     // macOS 15.7+ the synchronous singleton init has been observed to hang launch. A
     // no-op under tests and with a Photos service override.
     photoLibraryManager.start()
+    photoLibraryManager.refreshAuthorizationPeriodically()
     // Configures the record stores for the current destination and follows its changes.
     lifecycleCoordinator.attach(
       initial: DestinationIdentitySnapshot(identity: exportDestinationManager.identity),
@@ -219,6 +222,68 @@ final class AppCore {
     destinationSafetyMonitor.attach()
     prepareScreenshotWindow()
     AppDiagnostics.endLaunch()
+  }
+
+  // MARK: - Quit
+
+  /// How long a quit waits for an admitted final commit and the history flush.
+  static let quitTimeout: TimeInterval = 5
+
+  /// A quit asks "Stop the export and quit?" during an export the user started. An Auto
+  /// Export run stops quietly, and so does every export when the system logs out, restarts
+  /// or shuts down.
+  static func asksBeforeQuitting(exportManager: ExportManager, isSystemQuit: Bool) -> Bool {
+    !isSystemQuit && exportManager.hasActiveExportWork
+      && exportManager.activeRunContext?.source != .autoSync
+  }
+
+  /// The answer to `applicationShouldTerminate`: when the quit asks and `confirm` declines,
+  /// cancel and leave everything running; otherwise `stop` (which replies later).
+  static func terminateReply(
+    exportManager: ExportManager, isSystemQuit: Bool, confirm: () -> Bool, stop: () -> Void
+  ) -> NSApplication.TerminateReply {
+    if asksBeforeQuitting(exportManager: exportManager, isSystemQuit: isSystemQuit),
+      !confirm()
+    {
+      return .terminateCancel
+    }
+    stop()
+    return .terminateLater
+  }
+
+  /// Stops Auto Export, then every export (see `stopExportsForQuit`), and calls `reply` once
+  /// when the app can exit. Auto Export's saved setting and pending work stay, so the next
+  /// launch resumes.
+  func stopForQuit(reply: @escaping @MainActor () -> Void) {
+    autoSyncManager.stopForQuit()
+    Self.stopExportsForQuit(
+      exportManager: exportManager, timelineStore: exportRecordStore,
+      collectionStore: collectionExportRecordStore, clock: composition.clock, reply: reply)
+  }
+
+  /// Cancels any export, lets a final commit that was already admitted finish recording its
+  /// file, flushes both histories, then calls `reply` once. The wait is bounded by
+  /// `quitTimeout` on `clock`.
+  static func stopExportsForQuit(
+    exportManager: ExportManager, timelineStore: ExportRecordStore,
+    collectionStore: CollectionExportRecordStore, clock: any AutoSyncClock,
+    reply: @escaping @MainActor () -> Void
+  ) {
+    if exportManager.hasActiveExportWork { exportManager.cancelAndClear() }
+    var replied = false
+    let finish = {
+      guard !replied else { return }
+      replied = true
+      reply()
+    }
+    let timeout = clock.schedule(after: quitTimeout) { finish() }
+    Task {
+      await exportManager.waitForAdmittedFinalCommit()
+      try? await timelineStore.flush()
+      try? await collectionStore.flush()
+      timeout.cancel()
+      finish()
+    }
   }
 
   /// In screenshot mode, once the main window is on screen: resize it to the requested size

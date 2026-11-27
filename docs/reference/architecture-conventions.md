@@ -52,7 +52,15 @@ Every scene root receives the same objects, screenshot values and default
 `@AppStorage` suite through `photoExportEnvironment(_:)` in `AppCore.swift`. Add a
 new environment dependency there and update the hosted composition tests.
 
-The main window's `.task` calls `AppCore.start()` once for the whole core. Startup
+The main window's `.task` calls `AppCore.start()` once for the whole core. With **Open in
+the menu bar** on, a launch opens no window and
+[`MenuBarModeController`](../../photo-export/App/MenuBarMode.swift) calls it one main-queue
+turn after `applicationDidFinishLaunching` instead, so no PhotoKit call runs during launch;
+it also switches the activation policy as windows open and close. With the setting on or
+off, it frees the window caches when the last window closes. [`PhotoExportAppDelegate`](../../photo-export/App/PhotoExportAppDelegate.swift)
+feeds it window events and answers quit requests: a quit during a manual export asks first,
+then `AppCore.stopForQuit` stops AutoSync, cancels any export, lets an admitted final commit
+finish, flushes both histories and replies within 5 seconds. Startup
 begins Photos observation after rendering, attaches the lifecycle coordinator to
 configure destination history, attaches AutoSync before starting its change source,
 and attaches destination safety monitoring. Additional windows do not repeat the
@@ -199,7 +207,8 @@ The role map names representative owners, not every type. Follow the source
 links for the current implementation and complete file inventory.
 
 - **[`App/`](../../photo-export/App/):** entry point, `AppCore` / `AppComposition`,
-  lifecycle coordination, login items, diagnostics and What's New state.
+  lifecycle coordination, the app delegate and menu-bar mode, login items, diagnostics and
+  What's New state.
 - **[`PhotoLibrary/`](../../photo-export/PhotoLibrary/):** `PhotoLibraryManager` owns
   authorization, asset queries and image loading; `CollectionCountCache` shares
   concurrent count fetches; `PhotoLibraryPersistentChangeAdapter` exposes
@@ -744,13 +753,15 @@ mid-scope; its scan reports the missing access, the run ends `.failed`, and goin
 `.blocked` schedules nothing. Access returning during a run that then stops on the
 destination is held like any other trigger during it.
 
-macOS posts no notification when access changes, so access is refreshed at three points:
+macOS posts no notification when access changes, so access is refreshed at four points:
 before each fired debounce (the only path to a run), before each scope of the AutoSync
-fan-out (stopping the fan-out if access is gone), and app-wide on
-`NSApplication.didBecomeActiveNotification`. `refreshAuthorization()` publishes
+fan-out (stopping the fan-out if access is gone), app-wide on
+`NSApplication.didBecomeActiveNotification`, and every 60 seconds on the composition clock
+once `AppCore.start()` has run (`refreshAuthorizationPeriodically`), since an app with no
+window is rarely activated. `refreshAuthorization()` publishes
 synchronously through the authorization bridge before storage, so the reducer is blocked
 before the event that would start the run; the sink must use the value it receives. A grant made without bringing the app
-forward waits for the next activation or launch.
+forward is seen within a minute.
 
 Access returning is handled like a failed change fetch: every selected scope gets
 `pendingFullReconciliation`, the dirty state is saved, and `.photosChanged` is triggered
